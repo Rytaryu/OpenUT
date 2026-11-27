@@ -21,6 +21,6 @@
 | OpenUT テスター | 起動用の PR への `WAKE role:test` | Solfege と同じ設定 | `roles/test.md` | 未設定 |
 | OpenUT 設計レビュー | 起動用の PR への `WAKE role:design-review` | GPT-6.2 Astra・マックス | `roles/design-review.md` | 未設定 |
 
-## GitHub Actions（AI を使わない受け渡し）
+## GitHub Actions
 
-未移植。Solfege の `.github/`（handoff、handoff-tick、owner-reply、ci、`scripts/verify.sh`）を、Python のプロジェクトに合わせて移す。`docs/project/STATUS.md` の「次にやること」の 1 番。
+Solfege の受け渡しの仕組みは写さない（D-8）。PR ごとの検査と、GitHub の自動マージを使う。形は `docs/project/STATUS.md` の「次にやること」の 1 で決める。起動用の PR を使うかどうかも、そこで決める。
