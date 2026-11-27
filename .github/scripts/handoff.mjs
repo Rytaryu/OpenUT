@@ -3,8 +3,7 @@
 // (docs/project/roles/README.md, sections 6 and 7). No AI is involved.
 //
 //   1. Merge every open PR whose latest review is an APPROVE of its head commit
-//      by the reviewer that owns that kind of PR, once CI (ci.yml) has passed
-//      on that commit.
+//      by the reviewer, once CI (ci.yml) has passed on that commit.
 //   2. Close the Issues that the merged PRs complete ("Closes #N").
 //   3. Release backlog Issues whose start conditions are now met.
 //
@@ -17,21 +16,16 @@
 // check-after-approval: this repository is public, so CI runs on every PR (D-8).
 
 export const SIGN = '— 受け渡しの仕組み（GitHub Actions。README の 6・7 章）';
-export const RELEASE_ROLES = ['role:impl', 'role:test', 'role:design', 'role:design-review'];
+export const RELEASE_ROLES = ['role:impl', 'role:design', 'role:ux'];
 export const MAX_OPEN_IMPL_PRS = 3;
 export const MAX_RELEASES_PER_ROLE = 2;
 export const CLOSE_LOOKBACK_DAYS = 7;
-const CLAUDE = 'claude';
-const CHATGPT = 'chatgpt-codex-connector';
+// Every PR is reviewed by one role, the reviewer, which works through this app (D-18).
+export const REVIEWER_APP = 'chatgpt-codex-connector';
 
 const under = (files, dir) => files.length > 0 && files.every((f) => f.startsWith(dir));
 const appOf = (comment) => comment.performed_via_github_app?.slug ?? null;
 const firstLine = (text) => (text ?? '').replace(/\r/g, '').split('\n')[0].trim();
-
-/** Design documents are reviewed by the design reviewer; everything else by the implementation reviewer. */
-export function requiredReviewerApp(files) {
-  return under(files, 'docs/design/') ? CHATGPT : CLAUDE;
-}
 
 export function mergeMethod(files) {
   return under(files, 'docs/') ? 'squash' : 'merge';
@@ -44,7 +38,6 @@ const PM_OWNED = /^(docs\/|\.github\/|[^/]+\.md$|LICENSE$)/;
 
 /** The role that fixes this PR when it cannot be merged. */
 export function authorRole(files) {
-  if (files.length > 0 && files.every((f) => f.startsWith('docs/test/') || f.startsWith('tests/'))) return 'role:test';
   if (under(files, 'docs/design/ui/')) return 'role:ux';
   if (under(files, 'docs/design/')) return 'role:design';
   if (files.length > 0 && files.every((f) => PM_OWNED.test(f))) return 'role:pm';
@@ -53,15 +46,15 @@ export function authorRole(files) {
 
 /**
  * The latest review that counts: a comment starting with "REVIEW:" written on
- * the owner's account, either by the owner (no app) or through the app of the
- * reviewer that owns this kind of PR. Reviews through the other app are ignored:
- * an implementation PR needs the Claude side, a design PR the ChatGPT side.
- * Roles on the same side cannot be told apart here.
+ * the owner's account, either by the owner (no app) or through the reviewer's
+ * app. Comments through any other app are ignored, so the roles on the Claude
+ * side (PM, design, UI/UX) cannot approve. The implementer works through the
+ * same app as the reviewer and cannot be told apart here: not reviewing one's
+ * own work is a rule the roles keep.
  */
-export function latestReview(comments, files, owner) {
-  const reviewer = requiredReviewerApp(files);
+export function latestReview(comments, owner) {
   const reviews = comments.filter(
-    (c) => c.user?.login === owner && /^REVIEW:/.test(firstLine(c.body)) && [null, reviewer].includes(appOf(c)),
+    (c) => c.user?.login === owner && /^REVIEW:/.test(firstLine(c.body)) && [null, REVIEWER_APP].includes(appOf(c)),
   );
   return reviews.at(-1) ?? null;
 }
@@ -297,7 +290,7 @@ export async function run({
 
       // This repository is public. A PR from another repository is never merged here.
       if (pr.head.repo?.full_name !== repo) { log(`#${n}: from another repository: left for the owner`); continue; }
-      if (!isApprovalOf(latestReview(comments, paths, owner), sha)) { log(`#${n}: no approval of ${sha.slice(0, 7)}`); continue; }
+      if (!isApprovalOf(latestReview(comments, owner), sha)) { log(`#${n}: no approval of ${sha.slice(0, 7)}`); continue; }
       if (isHeld(pr.body, comments)) { log(`#${n}: held by マージの条件`); continue; }
       if (pr.base.ref !== main) { log(`#${n}: base is ${pr.base.ref} (stacked): wait`); continue; }
       if (noted('merge-failed')) { log(`#${n}: merge already failed for this commit`); continue; }

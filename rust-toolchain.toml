@@ -1,0 +1,6 @@
+# The toolchain every role and CI use, so that rustfmt and clippy agree.
+# Raise it in a PR of its own.
+[toolchain]
+channel = "1.100.0"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

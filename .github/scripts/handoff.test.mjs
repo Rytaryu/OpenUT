@@ -10,7 +10,6 @@ import {
   latestReview,
   mergeMethod,
   parseBacklog,
-  requiredReviewerApp,
   run,
   touchedPaths,
 } from './handoff.mjs';
@@ -23,58 +22,49 @@ const viaClaude = { slug: 'claude' };
 const viaChatgpt = { slug: 'chatgpt-codex-connector' };
 const comment = (body, app = null, login = OWNER) => ({ body, user: { login }, performed_via_github_app: app });
 
-test('reviewer, merge method and author role follow the changed paths', () => {
-  assert.equal(requiredReviewerApp(['docs/design/overview.md']), 'chatgpt-codex-connector');
-  assert.equal(requiredReviewerApp(['docs/design/ui/a.html', 'src/openut/a.py']), 'claude');
-  assert.equal(requiredReviewerApp([]), 'claude');
-  assert.equal(mergeMethod(['docs/design/a.md', 'docs/test/b.md']), 'squash');
-  assert.equal(mergeMethod(['docs/a.md', 'src/openut/a.py']), 'merge');
+test('merge method and author role follow the changed paths', () => {
+  assert.equal(mergeMethod(['docs/design/a.md', 'docs/research/b.md']), 'squash');
+  assert.equal(mergeMethod(['docs/a.md', 'src/lib.rs']), 'merge');
   assert.equal(authorRole(['docs/design/ui/x.css']), 'role:ux');
   assert.equal(authorRole(['docs/design/ui/x.css', 'docs/design/a.md']), 'role:design');
-  assert.equal(authorRole(['src/openut/a.py']), 'role:impl');
-  assert.equal(authorRole(['src/openut/a.py', 'tests/test_a.py']), 'role:impl');
-  assert.equal(authorRole(['pyproject.toml']), 'role:impl');
+  assert.equal(authorRole(['src/lib.rs']), 'role:impl');
+  assert.equal(authorRole(['src/lib.rs', 'tests/replay.rs']), 'role:impl');
+  assert.equal(authorRole(['tests/replay.rs']), 'role:impl');
+  assert.equal(authorRole(['Cargo.toml', 'Cargo.lock']), 'role:impl');
   assert.equal(authorRole([]), 'role:impl');
-  // Tests and test plans alone belong to the tester.
-  assert.equal(authorRole(['tests/test_replay.py', 'docs/test/plan.md']), 'role:test');
   // The process documents, the research notes and the hand-off belong to the PM.
   assert.equal(authorRole(['README.md', 'AGENTS.md', 'docs/research/findings.md']), 'role:pm');
   assert.equal(authorRole(['.github/workflows/ci.yml', '.github/scripts/handoff.mjs']), 'role:pm');
-  assert.equal(authorRole(['README.md', 'src/openut/a.py']), 'role:impl');
+  assert.equal(authorRole(['README.md', 'src/lib.rs']), 'role:impl');
   assert.equal(authorRole(['docs/design/a.md', 'docs/project/STATUS.md']), 'role:pm');
   // A file moved out of src/ into docs/design/ is still an implementation change.
-  const moved = touchedPaths([{ filename: 'docs/design/a.md', previous_filename: 'src/openut/a.py' }]);
-  assert.equal(requiredReviewerApp(moved), 'claude');
+  const moved = touchedPaths([{ filename: 'docs/design/a.md', previous_filename: 'src/lib.rs' }]);
   assert.equal(authorRole(moved), 'role:impl');
   // Only PRs of the implementer count toward the cap on open implementation PRs.
-  assert.equal(isImplementationPr(['docs/project/STATUS.md', 'docs/test/plan.md']), false);
+  assert.equal(isImplementationPr(['docs/project/STATUS.md', 'docs/design/a.md']), false);
   assert.equal(isImplementationPr(['.github/workflows/ci.yml']), false);
-  assert.equal(isImplementationPr(['src/openut/a.py', 'docs/a.md']), true);
+  assert.equal(isImplementationPr(['src/lib.rs', 'docs/a.md']), true);
 });
 
-test('only the owning reviewer (or the owner) can approve, and only the head commit', () => {
-  const src = ['src/openut/a.py'];
+test('only the reviewer (or the owner) can approve, and only the head commit', () => {
   const approve = `REVIEW: APPROVE\n\n対象: \`${SHA.slice(0, 7)}\``;
-  // The implementer (ChatGPT) cannot approve an implementation PR.
-  assert.equal(latestReview([comment(approve, viaChatgpt)], src, OWNER), null);
-  assert.ok(isApprovalOf(latestReview([comment(approve, viaClaude)], src, OWNER), SHA));
-  assert.ok(isApprovalOf(latestReview([comment(approve)], src, OWNER), SHA));
+  // The Claude side (PM, design, UI/UX) cannot approve anything.
+  assert.equal(latestReview([comment(approve, viaClaude)], OWNER), null);
+  assert.ok(isApprovalOf(latestReview([comment(approve, viaChatgpt)], OWNER), SHA));
+  assert.ok(isApprovalOf(latestReview([comment(approve)], OWNER), SHA));
   // Someone else's account never counts (the repository is public).
-  assert.equal(latestReview([comment(approve, null, 'stranger')], src, OWNER), null);
-  assert.equal(latestReview([comment(approve, viaClaude, 'stranger')], src, OWNER), null);
+  assert.equal(latestReview([comment(approve, null, 'stranger')], OWNER), null);
+  assert.equal(latestReview([comment(approve, viaChatgpt, 'stranger')], OWNER), null);
   // A later REQUEST_CHANGES wins; an approval of an older commit does not count.
-  const later = [comment(approve, viaClaude), comment('REVIEW: REQUEST_CHANGES\n対象: abcdef1', viaClaude)];
-  assert.equal(isApprovalOf(latestReview(later, src, OWNER), SHA), false);
-  assert.equal(isApprovalOf(comment('REVIEW: APPROVE\n対象: `1111111`', viaClaude), SHA), false);
+  const later = [comment(approve, viaChatgpt), comment('REVIEW: REQUEST_CHANGES\n対象: abcdef1', viaChatgpt)];
+  assert.equal(isApprovalOf(latestReview(later, OWNER), SHA), false);
+  assert.equal(isApprovalOf(comment('REVIEW: APPROVE\n対象: `1111111`', viaChatgpt), SHA), false);
   // Only the first SHA on the 対象 line counts; SHAs elsewhere do not.
-  assert.equal(isApprovalOf(comment(`REVIEW: APPROVE\n対象: 1111111\n前回（${SHA.slice(0, 7)}）の [必須] は直った`, viaClaude), SHA), false);
-  assert.equal(isApprovalOf(comment(`REVIEW: APPROVE\n\n${SHA.slice(0, 7)} を見た`, viaClaude), SHA), false);
-  assert.ok(isApprovalOf(comment(`REVIEW: APPROVE\r\n対象： ${SHA}`, viaClaude), SHA));
+  assert.equal(isApprovalOf(comment(`REVIEW: APPROVE\n対象: 1111111\n前回（${SHA.slice(0, 7)}）の [必須] は直った`, viaChatgpt), SHA), false);
+  assert.equal(isApprovalOf(comment(`REVIEW: APPROVE\n\n${SHA.slice(0, 7)} を見た`, viaChatgpt), SHA), false);
+  assert.ok(isApprovalOf(comment(`REVIEW: APPROVE\r\n対象： ${SHA}`, viaChatgpt), SHA));
   // "REVIEW:" must start the comment; a quoted mention is not a review.
-  assert.equal(latestReview([comment(`上の REVIEW: APPROVE は ${SHA}`, viaClaude)], src, OWNER), null);
-  // Design PRs are approved by the design reviewer (ChatGPT), not by Claude.
-  assert.equal(latestReview([comment(approve, viaClaude)], ['docs/design/a.md'], OWNER), null);
-  assert.ok(latestReview([comment(approve, viaChatgpt)], ['docs/design/a.md'], OWNER));
+  assert.equal(latestReview([comment(`上の REVIEW: APPROVE は ${SHA}`, viaChatgpt)], OWNER), null);
 });
 
 test('a マージの条件 line holds the merge until it is confirmed', () => {
@@ -105,8 +95,8 @@ test('the newest CI run on a commit decides', () => {
 
 test('backlog headers', () => {
   assert.deepEqual(parseBacklog('担当: role:impl\n着手の条件: なし（#43 は閉じた）\n\n本文'), { role: 'role:impl', conditions: [] });
-  assert.deepEqual(parseBacklog('担当: role:test\r\n着手の条件: #53 が閉じている\r\n'), {
-    role: 'role:test',
+  assert.deepEqual(parseBacklog('担当: role:design\r\n着手の条件: #53 が閉じている\r\n'), {
+    role: 'role:design',
     conditions: [{ number: 53, kind: 'closed' }],
   });
   assert.deepEqual(parseBacklog('担当: role:impl\n着手の条件: #44 が閉じている、#14 がマージ済み').conditions, [
@@ -115,7 +105,9 @@ test('backlog headers', () => {
   ]);
   assert.equal(parseBacklog('担当: role:impl\n着手の条件: オーナーが了承したら'), null);
   assert.equal(parseBacklog('担当: role:pm\n着手の条件: なし'), null);
-  assert.equal(parseBacklog('担当: role:ux\n着手の条件: なし'), null);
+  assert.deepEqual(parseBacklog('担当: role:ux\n着手の条件: なし'), { role: 'role:ux', conditions: [] });
+  assert.equal(parseBacklog('担当: role:review\n着手の条件: なし'), null);
+  assert.equal(parseBacklog('担当: role:test\n着手の条件: なし'), null);
   assert.equal(parseBacklog('着手の条件: なし'), null);
 });
 
@@ -247,11 +239,11 @@ function fakeGitHub({ pulls = [], issues = [], paused = false, mainConclusion = 
 const approveBy = (app, sha) => comment(`REVIEW: APPROVE\n\n対象: \`${sha.slice(0, 7)}\``, app);
 const pull = (number, extra = {}) => ({
   number, state: 'open', draft: false, merged: false, mergeable: true, body: 'Closes #1000', labels: ['role:pm'],
-  sha: `${number}`.repeat(8).slice(0, 8), head: `feat/${number}`, base: 'main', files: ['src/openut/a.py'], comments: [], ...extra,
+  sha: `${number}`.repeat(8).slice(0, 8), head: `feat/${number}`, base: 'main', files: ['src/lib.rs'], comments: [], ...extra,
 });
 const approved = (number, extra = {}) => {
   const p = pull(number, extra);
-  p.comments.push(approveBy(requiredReviewerApp(p.files) === 'claude' ? viaClaude : viaChatgpt, p.sha));
+  p.comments.push(approveBy(viaChatgpt, p.sha));
   return p;
 };
 const issue = (number, body, labels = ['backlog'], state = 'open', extra = {}) => ({ number, state, title: `Issue ${number}`, body, labels, comments: [], ...extra });
@@ -268,7 +260,7 @@ test('merges an approved PR whose CI passed, then the PR stacked on it, and rele
     pulls: [lower, upper],
     issues: [
       issue(52, '担当: role:impl\n着手の条件: #46 がマージ済み、#49 がマージ済み'),
-      issue(54, '担当: role:test\n着手の条件: #53 が閉じている'),
+      issue(54, '担当: role:design\n着手の条件: #53 が閉じている'),
       issue(53, 'M1', ['role:impl']),
     ],
   });
@@ -283,7 +275,7 @@ test('merges an approved PR whose CI passed, then the PR stacked on it, and rele
   assert.equal(world.state.dispatched, 1);
 });
 
-test('documents are squashed; a design PR needs the ChatGPT side', async () => {
+test('documents are squashed; the Claude side cannot approve', async () => {
   const design = approved(7, { files: ['docs/design/overview.md'] });
   const wrongSide = pull(8, { files: ['docs/design/stage1.md'] });
   wrongSide.comments.push(approveBy(viaClaude, wrongSide.sha));
@@ -294,9 +286,9 @@ test('documents are squashed; a design PR needs the ChatGPT side', async () => {
 });
 
 test('does not merge without approval of the head, before CI finishes, while held, a draft, a fork, or when paused', async () => {
-  const stale = pull(11, { comments: [approveBy(viaClaude, 'ffffffff')] });
+  const stale = pull(11, { comments: [approveBy(viaChatgpt, 'ffffffff')] });
   const otherSide = pull(12);
-  otherSide.comments.push(approveBy(viaChatgpt, otherSide.sha));
+  otherSide.comments.push(approveBy(viaClaude, otherSide.sha));
   const running = approved(13, { ci: 'pending' });
   const noRun = approved(14, { ci: 'none' });
   const cancelled = approved(15, { ci: 'cancelled' });
@@ -323,14 +315,14 @@ test('does not merge without approval of the head, before CI finishes, while hel
 
 test('a failed CI sends the PR back to its author once', async () => {
   const red = approved(3, { ci: 'failure', labels: [] });
-  const tests = approved(4, { ci: 'failure', files: ['tests/test_replay.py'], labels: [] });
-  const world = fakeGitHub({ pulls: [red, tests] });
+  const design = approved(4, { ci: 'failure', files: ['docs/design/a.md'], labels: [] });
+  const world = fakeGitHub({ pulls: [red, design] });
   await sweep(world);
   await sweep(world);
   assert.deepEqual([red.merged, red.labels], [false, ['role:impl']]);
-  assert.deepEqual([tests.merged, tests.labels], [false, ['role:test']]);
+  assert.deepEqual([design.merged, design.labels], [false, ['role:design']]);
   assert.equal(red.comments.filter((c) => /CI が通っていません/.test(c.body)).length, 1);
-  assert.deepEqual(world.state.wakes, ['1: WAKE role:impl #3', '1: WAKE role:test #4']);
+  assert.deepEqual(world.state.wakes, ['1: WAKE role:impl #3', '1: WAKE role:design #4']);
 });
 
 test('a conflict goes back to the author once; a refused merge goes to the PM once, without a wake', async () => {
@@ -380,14 +372,14 @@ test('a merge closes the Issues the PR completes, and releases the backlog that 
     issues: [
       issue(61, '実装の依頼', ['role:impl']),
       issue(62, '別の依頼', ['role:impl']),
-      issue(63, '担当: role:test\n着手の条件: #61 が閉じている'),
+      issue(63, '担当: role:ux\n着手の条件: #61 が閉じている'),
     ],
   });
   await sweep(world);
   assert.deepEqual([world.find(61).state, world.find(61).labels], ['closed', []]);
   assert.equal(world.find(62).state, 'open');
-  assert.deepEqual(world.find(63).labels, ['role:test']);
-  assert.deepEqual(world.state.wakes, ['1: WAKE role:test #63']);
+  assert.deepEqual(world.find(63).labels, ['role:ux']);
+  assert.deepEqual(world.state.wakes, ['1: WAKE role:ux #63']);
 });
 
 test('Issues of PRs merged earlier are closed by a later sweep, unless they were opened again', async () => {
@@ -413,8 +405,8 @@ test('backlog release is capped by open implementation PRs and per role, and ski
       issue(85, '担当: role:design\n着手の条件: なし'),
       issue(86, '担当: role:design\n着手の条件: なし'),
       issue(87, '担当: role:design\n着手の条件: なし'),
-      issue(88, '担当: role:test\n着手の条件: オーナーの返事のあと'),
-      issue(89, '担当: role:test\n着手の条件: なし', ['backlog'], 'open', { author: 'stranger' }),
+      issue(88, '担当: role:ux\n着手の条件: オーナーの返事のあと'),
+      issue(89, '担当: role:ux\n着手の条件: なし', ['backlog'], 'open', { author: 'stranger' }),
     ],
   });
   await sweep(world);

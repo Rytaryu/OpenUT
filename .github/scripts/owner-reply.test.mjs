@@ -130,7 +130,7 @@ function harness(
     [source]: issue(body, labels),
     [wakePr]: issue('Wake comments only', ['wake']),
     14: issue('UX work', ['backlog']),
-    41: issue('Unrelated review', ['role:design-review', 'enhancement']),
+    41: issue('Unrelated review', ['role:review', 'enhancement']),
   };
   if (!omitTarget)
     issues[55] = issue(
@@ -198,7 +198,7 @@ function assertCompletionFlagLast(state) {
 
 for (const [role, target] of [
   ['role:foo', 55],
-  ['role:impl-reveiw', 41],
+  ['role:reveiw', 41],
 ]) {
   test(`unknown role ${role} falls back on the source without changing #${target}`, (t) => {
     const fixture = harness(t, { body: `返事の行き先: ${role} #${target}` });
@@ -231,17 +231,17 @@ for (const body of ['返事の行き先: #55', 'No destination line', null]) {
 
 test('routes an allowed role to a different target and wakes it before clearing needs-human', (t) => {
   const fixture = harness(t, {
-    body: '返事の行き先: role:impl-review #55',
+    body: '返事の行き先: role:review #55',
     labels: ['question', 'needs-human'],
   });
   succeeded(fixture.run());
   const state = fixture.read();
-  assert.deepEqual(labels(state, 55), ['enhancement', 'role:impl-review']);
+  assert.deepEqual(labels(state, 55), ['enhancement', 'role:review']);
   assert.deepEqual(labels(state, source), ['question']);
   assert.equal(state.issues[55].comments.length, 1);
   assert.match(state.issues[55].comments[0], /オーナーが #27 に返事しました/);
   assert.deepEqual(state.issues[wakePr].comments, [
-    'WAKE role:impl-review #55',
+    'WAKE role:review #55',
   ]);
   assertCompletionFlagLast(state);
 });
@@ -276,7 +276,7 @@ for (const locale of ['C', 'C.UTF-8']) {
 for (const options of [{ labels: ['question'] }, { paused: true }]) {
   test(`does not mutate state when ${options.paused ? 'PAUSED exists' : 'needs-human is absent'}`, (t) => {
     const fixture = harness(t, {
-      body: '返事の行き先: role:impl-review #55',
+      body: '返事の行き先: role:review #55',
       ...options,
     });
     const before = fixture.read().issues;
@@ -290,7 +290,7 @@ for (const options of [{ labels: ['question'] }, { paused: true }]) {
 for (const options of [{ targetState: 'closed' }, { omitTarget: true }]) {
   test(`falls back on the source when the target is ${options.omitTarget ? 'missing' : 'closed'}`, (t) => {
     const fixture = harness(t, {
-      body: '返事の行き先: role:impl-review #55',
+      body: '返事の行き先: role:review #55',
       ...options,
     });
     const before = fixture.read().issues[55];
@@ -331,7 +331,7 @@ for (const [name, path, status, query] of [
 ]) {
   test(`aborts without mutations on ${name}, retaining a retryable source`, (t) => {
     const fixture = harness(t, {
-      body: '返事の行き先: role:impl-review #55',
+      body: '返事の行き先: role:review #55',
       failures: [{ method: 'GET', path, remaining: 1, status, query }],
     });
     const before = fixture.read().issues;
@@ -344,10 +344,10 @@ for (const [name, path, status, query] of [
     assert.equal(first.failures[0].remaining, 0);
     succeeded(fixture.run());
     const state = fixture.read();
-    assert.deepEqual(labels(state, 55), ['enhancement', 'role:impl-review']);
+    assert.deepEqual(labels(state, 55), ['enhancement', 'role:review']);
     assert.deepEqual(labels(state, source), ['question']);
     assert.deepEqual(state.issues[wakePr].comments, [
-      'WAKE role:impl-review #55',
+      'WAKE role:review #55',
     ]);
     assertCompletionFlagLast(state);
   });
@@ -366,7 +366,7 @@ for (const [name, method, path] of [
 ]) {
   test(`retains needs-human after one 502 at ${name}, then succeeds on retry`, (t) => {
     const fixture = harness(t, {
-      body: '返事の行き先: role:impl-review #55',
+      body: '返事の行き先: role:review #55',
       failures: [{ method, path, remaining: 1 }],
     });
     const failed = fixture.run();
@@ -386,11 +386,11 @@ for (const [name, method, path] of [
     );
     succeeded(fixture.run());
     const state = fixture.read();
-    assert.deepEqual(labels(state, 55), ['enhancement', 'role:impl-review']);
+    assert.deepEqual(labels(state, 55), ['enhancement', 'role:review']);
     assert.deepEqual(labels(state, source), ['question']);
     assert.ok(state.issues[wakePr].comments.length >= 1);
     for (const comment of state.issues[wakePr].comments)
-      assert.equal(comment, 'WAKE role:impl-review #55');
+      assert.equal(comment, 'WAKE role:review #55');
     assert.ok(state.issues[source].comments.length >= 1);
     assert.ok(state.issues[55].comments.length >= 1);
     assertCompletionFlagLast(state);

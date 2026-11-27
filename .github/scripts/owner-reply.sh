@@ -8,7 +8,7 @@
 #      WAKE_TOKEN (optional, a token of the owner used only for the wake comment).
 set -euo pipefail
 : "${REPO:?}" "${ISSUE:?}" "${WAKE_PR:?}"
-ALLOWED=" role:impl role:impl-review role:design role:design-review role:ux role:test role:pm "
+ALLOWED=" role:impl role:review role:design role:ux role:pm "
 SIGN="— 受け渡しの仕組み（GitHub Actions。README の 8 章）"
 
 uri() { jq -rn --arg s "$1" '$s|@uri'; }

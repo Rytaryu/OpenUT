@@ -1,0 +1,17 @@
+[package]
+name = "openut"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.100"
+description = "Unofficial runtime and tools for VIVE Ultimate Tracker on Windows + SteamVR"
+license = "MIT"
+repository = "https://github.com/Rytaryu/OpenUT"
+publish = false
+
+[dependencies]
+
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
