@@ -10,7 +10,7 @@ An unofficial companion and replacement runtime for VIVE Ultimate Trackers on Wi
 
 ## 作るもの
 
-VIVE Hub の代わりに、VIVE Ultimate Tracker を SteamVR で使うための PC 側のソフトウェアです。日々の利用、ペアリング、部屋の地図の作成を受け持ちます。ファームウェアは作りません。ファームウェアとドライバーの更新には、VIVE Hub を使います。
+VIVE Hub の代わりに、VIVE Ultimate Tracker を SteamVR で使うための PC 側のソフトウェアです。Rust で作ります。日々の利用、ペアリング、部屋の地図の作成を受け持ちます。ファームウェアは作りません。ファームウェアとドライバーの更新には、VIVE Hub を使います。
 
 | 段階 | 作るもの |
 |---|---|
