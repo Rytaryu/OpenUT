@@ -1,0 +1,47 @@
+name: owner-reply
+# Hands the owner's reply on a needs-human Issue/PR to the role named in its
+# "返事の行き先:" line (docs/project/roles/README.md, section 8).
+# The owner's own comments are the only ones not posted through a GitHub App;
+# every agent (Claude, ChatGPT) comments through one.
+on:
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      issue:
+        description: needs-human の Issue・PR の番号
+        required: true
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  route:
+    # Set on the job, not on the workflow: a run skipped by the `if` below (a
+    # comment by an agent) must not take the place of a waiting reply.
+    concurrency:
+      group: owner-reply-${{ github.event.issue.number || inputs.issue }}
+      cancel-in-progress: false
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.comment.performed_via_github_app == null &&
+       github.event.comment.user.login == github.repository_owner &&
+       contains(github.event.issue.labels.*.name, 'needs-human'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          sparse-checkout: .github/scripts
+      - name: Route the owner's reply
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WAKE_TOKEN: ${{ secrets.WAKE_TOKEN }}
+          REPO: ${{ github.repository }}
+          ISSUE: ${{ github.event.issue.number || inputs.issue }}
+          COMMENT_URL: ${{ github.event.comment.html_url }}
+          WAKE_PR: '1'
+        run: .github/scripts/owner-reply.sh
