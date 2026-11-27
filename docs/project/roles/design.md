@@ -1,6 +1,6 @@
 # 設計担当の手順書（Claude Fable 5.2 high）
 
-> **移植中（2026-11-27）**: この文書は Rytaryu/OpenUT の進め方を写したもの。ラベルによる受け渡しと自動マージの仕組み（GitHub Actions）は、まだこのレポジトリに入っていない。入るまでは `docs/project/STATUS.md` の「次にやること」に従う。OpenUT 固有の記述が残っていたら、PM が直す。
+> **移植中（2026-11-28）**: この文書は Rytaryu/Solfege の進め方を写したもの。参考にするのは、役割の分担と、Issue・PR による非同期の受け渡し。GitHub Actions の節約のための仕組み（承認後に 1 回だけ検査する受け渡しの仕組み、起動用の PR、1 日の稼働の上限）は写さない（D-8）。この文書のうち、その仕組みに触れている箇所は PM が書き直す。それまでは `docs/project/STATUS.md` の「次にやること」に従う。
 
 先に `docs/project/roles/README.md` を読むこと。対象は `role:design` の付いた Issue と PR。範囲は `docs/design/`（`ui/` を除く）。**設計の PR に入れるのは `docs/design/` の下だけ**にする（`docs/project/DECISIONS.md` などを入れると、設計レビューの承認ではマージされない。README の 6 章の条件 1）。決定の記録（D-0xx）の案は、PR の説明の「決定の記録（案）」の節に、`DECISIONS.md` と同じ書式（番号、日付、決定、理由、確かめていないこと）で書く。その PR が main に入ったあと、PM が定期の回で `DECISIONS.md` に書く（D-P23）。記録だけの別の PR は作らない。
 

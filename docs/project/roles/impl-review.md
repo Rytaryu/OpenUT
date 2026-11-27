@@ -1,6 +1,6 @@
 # 実装レビュー担当の手順書（Claude Opus 5.5 xhigh）
 
-> **移植中（2026-11-27）**: この文書は Rytaryu/OpenUT の進め方を写したもの。ラベルによる受け渡しと自動マージの仕組み（GitHub Actions）は、まだこのレポジトリに入っていない。入るまでは `docs/project/STATUS.md` の「次にやること」に従う。OpenUT 固有の記述が残っていたら、PM が直す。
+> **移植中（2026-11-28）**: この文書は Rytaryu/Solfege の進め方を写したもの。参考にするのは、役割の分担と、Issue・PR による非同期の受け渡し。GitHub Actions の節約のための仕組み（承認後に 1 回だけ検査する受け渡しの仕組み、起動用の PR、1 日の稼働の上限）は写さない（D-8）。この文書のうち、その仕組みに触れている箇所は PM が書き直す。それまでは `docs/project/STATUS.md` の「次にやること」に従う。
 
 先に `docs/project/roles/README.md` を読むこと。対象は `role:impl-review` の付いた PR。
 
