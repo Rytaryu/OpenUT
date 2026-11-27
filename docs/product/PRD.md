@@ -1,6 +1,6 @@
 # 要件（PRD）
 
-PM が所有する。変えたいときは Issue か PR で PM に戻す。最終更新: 2026-11-28（OpenUT の位置付けの決定 D-9〜D-14 を反映）。
+PM が所有する。変えたいときは Issue か PR で PM に戻す。最終更新: 2026-11-28（OpenUT の位置付けの決定 D-9〜D-14 と、Rust で作る決定 D-17 を反映）。
 
 ## 1. 解く問題
 
@@ -26,6 +26,7 @@ VIVE Ultimate Tracker 3 台と VIVE Wireless Dongle を、Meta Quest 3 と Steam
 - 目標は、**OpenUT を入れて起動すれば使える**こと。日々の利用で VIVE Hub を必要としない（D-11）。
 - ファームウェアとドライバーの更新だけは、VIVE Hub のものをそのまま使う（D-11）。
 - 不調のときのログを集めて、匿名化して送れる（D-12）。
+- Windows のアプリとして、Rust で作る（D-17）。
 
 ## 3. 使う人
 
