@@ -1,12 +1,13 @@
 //! Transform read-only tracker reports into the local SteamVR bridge stream.
 
-use std::{fmt, num::NonZeroU32};
+use std::{fmt, num::NonZeroU32, time::Duration};
 
 use openut_bridge::{DeviceEntry, Packet, Payload, Pose as BridgePose, TrackingState};
 use openut_dongle::decode::{Decoder, DongleEvent, PoseSample};
 use openut_dongle::record::{RawReport, TrackerLabel};
 use openut_dongle::tracker::{Link, TrackerTable, Transition};
-use openut_space::{AxisMap, BodyRotation, HeldPose, Pose, PoseHold, Quat, Vec3};
+use openut_space::calib::TimedSample;
+use openut_space::{AxisMap, BodyRotation, Calibration, HeldPose, Pose, PoseHold, Quat, Vec3};
 
 const DEVICE_LIST_INTERVAL_US: u64 = 1_000_000;
 const DONGLE_SLOTS: u8 = 5;
@@ -75,7 +76,7 @@ pub struct Pipeline {
     seq: u32,
     decoder: Decoder,
     table: TrackerTable,
-    axis_map: AxisMap,
+    mapping: (AxisMap, Calibration),
     body_rotation: BodyRotation,
     devices: Vec<Device>,
     last_list_tick_us: u64,
@@ -96,7 +97,7 @@ impl Pipeline {
             seq: 0,
             decoder: Decoder::default(),
             table,
-            axis_map,
+            mapping: (axis_map, Calibration::IDENTITY),
             body_rotation,
             devices: Vec::new(),
             last_list_tick_us: start_us,
@@ -105,8 +106,22 @@ impl Pipeline {
     }
 
     pub fn report(&mut self, report: &RawReport, sending_us: u64) -> Vec<Packet> {
+        self.report_with_sample(report, sending_us).0
+    }
+
+    /// Replaces both parts of the transform before the next pose is sent.
+    pub fn set_calibration(&mut self, axis_map: AxisMap, calibration: Calibration) {
+        self.mapping = (axis_map, calibration);
+    }
+
+    /// Decodes once for the outgoing pose and an optional raw calibration sample.
+    pub fn report_with_sample(
+        &mut self,
+        report: &RawReport,
+        sending_us: u64,
+    ) -> (Vec<Packet>, Option<(u32, TimedSample)>) {
         let event = self.decoder.decode(&report.bytes);
-        self.apply_event(report.mono_us, sending_us, &event)
+        self.apply_event_with_sample(report.mono_us, sending_us, &event)
     }
 
     /// Accepts an event already decoded by `openut_dongle::replay`.
@@ -116,23 +131,46 @@ impl Pipeline {
         sending_us: u64,
         event: &DongleEvent,
     ) -> Vec<Packet> {
+        self.apply_event_with_sample(received_us, sending_us, event)
+            .0
+    }
+
+    /// Returns a sample only for a valid tracked pose accepted for a known slot.
+    pub fn apply_event_with_sample(
+        &mut self,
+        received_us: u64,
+        sending_us: u64,
+        event: &DongleEvent,
+    ) -> (Vec<Packet>, Option<(u32, TimedSample)>) {
         let changes = self.table.apply(received_us, event);
         self.reset_unpaired(&changes);
         let previously_known = self.devices.len();
-        let pose = match event {
+        let (pose, sample) = match event {
             DongleEvent::Pose { tracker, sample } => {
-                self.pose(*tracker, sample, sending_us.saturating_sub(received_us))
+                let (pose, raw) = self
+                    .pose(*tracker, sample, sending_us.saturating_sub(received_us))
+                    .unzip();
+                let sample = raw.flatten().map(|pose| {
+                    (
+                        u32::from(tracker.0),
+                        TimedSample {
+                            at: Duration::from_micros(received_us),
+                            pose,
+                        },
+                    )
+                });
+                (pose, sample)
             }
             DongleEvent::Malformed { .. } => {
                 self.stats.malformed_reports = self.stats.malformed_reports.saturating_add(1);
-                None
+                (None, None)
             }
-            _ => None,
+            _ => (None, None),
         };
 
         let list = self.device_list(self.devices.len() != previously_known);
         let pose = pose.map(|pose| self.packet(Payload::Pose(pose)));
-        list.into_iter().chain(pose).collect()
+        (list.into_iter().chain(pose).collect(), sample)
     }
 
     /// A redacted record can still identify an incoming tracker report.
@@ -185,7 +223,7 @@ impl Pipeline {
         tracker: TrackerLabel,
         sample: &PoseSample,
         age_us: u64,
-    ) -> Option<BridgePose> {
+    ) -> Option<(BridgePose, Option<Pose>)> {
         if sample.slot >= DONGLE_SLOTS {
             self.stats.unknown_slot_poses = self.stats.unknown_slot_poses.saturating_add(1);
             return None;
@@ -200,13 +238,26 @@ impl Pipeline {
             velocity: [0.0; 3],
             angular_velocity: [0.0; 3],
         };
+        let mut calibration_sample = None;
         if matches!(sample.tracking_status, 2..=4) {
-            if let Some(converted) = convert(sample, self.axis_map, self.body_rotation) {
+            if let Some(raw) = raw_pose(sample) {
+                if sample.tracking_status == 2 {
+                    calibration_sample = Some(raw);
+                }
+                // Held positions stay in dongle coordinates so a changed
+                // calibration also applies to the next rotation-only pose.
                 let held = self.devices[usize::from(device)]
                     .hold
-                    .apply(sample.tracking_status, converted);
+                    .apply(sample.tracking_status, raw);
                 match held {
                     HeldPose::Tracked(value) | HeldPose::RotationOnly(value) => {
+                        let (map, calibration) = self.mapping;
+                        let value = calibration.apply(Pose {
+                            position: map.apply_position(value.position),
+                            rotation: self
+                                .body_rotation
+                                .apply_rotation(map.apply_rotation(value.rotation)),
+                        });
                         pose.state = if matches!(held, HeldPose::Tracked(_)) {
                             TrackingState::Tracked
                         } else {
@@ -231,7 +282,7 @@ impl Pipeline {
             }
         }
         self.stats.poses = self.stats.poses.saturating_add(1);
-        Some(pose)
+        Some((pose, calibration_sample))
     }
 
     fn device(&mut self, tracker: TrackerLabel, slot: u8) -> Option<u8> {
@@ -302,7 +353,7 @@ impl Pipeline {
     }
 }
 
-fn convert(sample: &PoseSample, map: AxisMap, body: BodyRotation) -> Option<Pose> {
+fn raw_pose(sample: &PoseSample) -> Option<Pose> {
     let [w, x, y, z] = sample.rotation_wxyz.map(f64::from);
     let rotation = Quat::new(w, x, y, z).normalized()?;
     let position = if sample.tracking_status == 2 {
@@ -310,13 +361,10 @@ fn convert(sample: &PoseSample, map: AxisMap, body: BodyRotation) -> Option<Pose
         if ![x, y, z].into_iter().all(f64::is_finite) {
             return None;
         }
-        map.apply_position(Vec3::new(x, y, z))
+        Vec3::new(x, y, z)
     } else {
         // A rotation-only report uses the last tracked position instead.
         Vec3::ZERO
     };
-    Some(Pose {
-        position,
-        rotation: body.apply_rotation(map.apply_rotation(rotation)),
-    })
+    Some(Pose { position, rotation })
 }

@@ -69,6 +69,15 @@ pub enum CalibrationError {
     TimedOut,
 }
 
+/// Number of sufficiently distinct rotation axes observed for a single tracker.
+#[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
+pub enum RotationProgress {
+    #[default]
+    None,
+    OneAxis,
+    Ready,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CalibrationResult {
     /// Replaces the configured axis map and is applied directly to raw dongle poses.

@@ -2,6 +2,8 @@
 
 use std::path::PathBuf;
 
+#[cfg(windows)]
+mod calibration;
 #[cfg(any(windows, test))]
 mod capture;
 pub mod pipeline;
@@ -40,6 +42,7 @@ mod windows {
     use openut_dongle::run::{Clock, Stamp};
     use openut_dongle::source_windows::DeviceList;
 
+    use super::calibration::CalibrationRuntime;
     use super::capture::{CaptureItem, capture};
     use super::pipeline::Pipeline;
     use crate::bridge_out::BridgeOut;
@@ -104,12 +107,17 @@ mod windows {
                 ));
                 let mut pipeline =
                     Pipeline::new(session_id(), 0, config.axis_map, config.body_rotation);
+                let mut calibration = CalibrationRuntime::start(runtime_clock.0, config, log);
+                calibration.apply_to(&mut pipeline);
                 let mut progress = Progress::default();
                 let mut console = io::stdout().lock();
                 loop {
                     if stop.load(Ordering::Relaxed) {
                         break Ok(());
                     }
+                    calibration
+                        .poll(&mut pipeline, &mut console, log)
+                        .map_err(|_| "状態をコンソールに書き込めませんでした。".to_owned())?;
                     let item = match stream.recv_timeout(IDLE_POLL) {
                         Ok(item) => item,
                         Err(RecvTimeoutError::Timeout) => continue,
@@ -120,7 +128,11 @@ mod windows {
                     }
                     let (at, packets) = match item {
                         CaptureItem::Report(report) => {
-                            let packets = pipeline.report(&report, runtime_clock.mono_us());
+                            let (packets, sample) =
+                                pipeline.report_with_sample(&report, runtime_clock.mono_us());
+                            if let Some((tracker, sample)) = sample {
+                                calibration.add_tracker(tracker, sample);
+                            }
                             (report.mono_us, packets)
                         }
                         CaptureItem::Idle(at) => (at.mono_us, pipeline.advance_to(at.mono_us)),
@@ -208,7 +220,7 @@ mod windows {
         NonZeroU32::new(hash as u32).unwrap_or(NonZeroU32::MIN)
     }
 
-    struct AppLog(Option<File>);
+    pub(super) struct AppLog(Option<File>);
 
     impl AppLog {
         fn open() -> Self {
@@ -229,7 +241,7 @@ mod windows {
             Self(file)
         }
 
-        fn write(&mut self, args: std::fmt::Arguments<'_>) {
+        pub(super) fn write(&mut self, args: std::fmt::Arguments<'_>) {
             if let Some(file) = &mut self.0 {
                 let _ = writeln!(file, "{} UTC {args}", wall_time());
             }

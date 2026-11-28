@@ -6,7 +6,7 @@ use openut_dongle::decode::{DongleEvent, PoseSample};
 use openut_dongle::record::{RawReport, Record, RecordReader, TrackerLabel};
 use openut_dongle::replay::Replay;
 use openut_dongle::tracker::Link;
-use openut_space::{AxisMap, BodyRotation};
+use openut_space::{AxisMap, BodyRotation, Calibration, Vec3};
 
 const FIRST_RECORDING: &str = include_str!("fixtures/dongle/m2-1-record.jsonl");
 const THREE_TRACKERS: &str = include_str!("fixtures/dongle/m2-3-three-trackers.jsonl");
@@ -176,6 +176,31 @@ fn last_pose(packets: &[Packet]) -> &Pose {
         panic!("last packet should be the pose");
     };
     pose
+}
+
+#[test]
+fn recalibration_reprojects_held_raw_positions_without_collecting_rotation_only() {
+    let mut pipeline = pipeline();
+    let orientation = [1.0, 0.0, 0.0, 0.0];
+    let tracker = pose('A', 1, 2, [1.0, 2.0, 3.0], orientation);
+    let (packets, sample) = pipeline.apply_event_with_sample(1, 1, &tracker);
+    assert_eq!(sample.unwrap().1.pose.position, Vec3::new(1.0, 2.0, 3.0));
+    assert_eq!(last_pose(&packets).position, [1.0, 2.0, 3.0]);
+
+    pipeline.set_calibration(
+        "+x+z-y".parse().unwrap(),
+        Calibration::new(0.0, Vec3::new(2.0, 3.0, 4.0), 1.0),
+    );
+    let loss = pose('A', 1, 3, [f32::NAN; 3], orientation);
+    let (packets, sample) = pipeline.apply_event_with_sample(2, 2, &loss);
+    assert!(sample.is_none());
+    assert_eq!(last_pose(&packets).state, TrackingState::RotationOnly);
+    assert_eq!(last_pose(&packets).position, [3.0, 6.0, 2.0]);
+
+    let invalid = pose('A', 1, 2, [1.0, f32::INFINITY, 3.0], orientation);
+    let (packets, sample) = pipeline.apply_event_with_sample(3, 3, &invalid);
+    assert!(sample.is_none());
+    assert_eq!(last_pose(&packets).state, TrackingState::Invalid);
 }
 
 #[test]
