@@ -84,7 +84,13 @@ impl<R: BufRead> Replay<R> {
                     }
                     _ => {}
                 }
-                let transitions = self.table.apply(mono_us, &event);
+                let transitions = if matches!(event, DongleEvent::Malformed { .. })
+                    && let Some(label) = self.decoder.tracker_data_label(&report.bytes)
+                {
+                    self.table.receive_omitted(mono_us, label)
+                } else {
+                    self.table.apply(mono_us, &event)
+                };
                 (Some(report.wall_ms), Some(event), None, transitions)
             }
             Record::Tick { wall_ms, .. } | Record::Note { wall_ms, .. } => {

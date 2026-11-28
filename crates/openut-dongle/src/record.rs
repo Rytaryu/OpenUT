@@ -130,13 +130,20 @@ fn is_zero(value: &u64) -> bool {
     *value == 0
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OmittedReason {
     NotAllowed,
     CheckFailed,
     TextForm,
     Malformed,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct OmissionCount {
+    pub report_type: u8,
+    pub reason: OmittedReason,
+    pub count: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -241,6 +248,27 @@ impl<W: Write> RecordWriter<W> {
 
     pub fn write_record(&mut self, record: &Record) -> io::Result<()> {
         write_line(&mut self.output, record)
+    }
+
+    pub(crate) fn write_export_footer(
+        &mut self,
+        footer: &Record,
+        omitted: &[OmissionCount],
+    ) -> io::Result<()> {
+        #[derive(Serialize)]
+        struct ExportFooter<'a> {
+            #[serde(flatten)]
+            footer: &'a Record,
+            omitted: &'a [OmissionCount],
+        }
+
+        if !matches!(footer, Record::Footer { .. }) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "expected footer",
+            ));
+        }
+        write_line(&mut self.output, &ExportFooter { footer, omitted })
     }
 
     pub fn flush(&mut self) -> io::Result<()> {

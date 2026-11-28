@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 use crate::record::TrackerLabel;
 
-mod addr;
+pub(crate) mod addr;
 mod pose;
 mod rf_status;
 mod text;
@@ -13,13 +13,13 @@ pub use pose::PoseSample;
 pub use rf_status::SlotStatus;
 pub use text::{DeviceInfoField, Redactable, TrackerMessage};
 
-const PAIRING: u8 = 0x18;
+pub(crate) const PAIRING: u8 = 0x18;
 const SLOT_COMMAND_REPLY: u8 = 0x1d;
 const RF_STATUS: u8 = 0x1e;
-const TRACKER_DATA: u8 = 0x28;
+pub(crate) const TRACKER_DATA: u8 = 0x28;
 const UNCLASSIFIED_REPORT: u8 = 0x29;
-const TRACKER_TEXT: u16 = 0x0101;
-const TRACKER_POSE: u16 = 0x0110;
+pub(crate) const TRACKER_TEXT: u16 = 0x0101;
+pub(crate) const TRACKER_POSE: u16 = 0x0110;
 const LABELS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
 #[derive(Clone, Debug, PartialEq)]
@@ -99,6 +99,15 @@ impl Decoder {
             .find_map(|(id, &label)| (label == tracker).then_some(id.slot_hint()))
     }
 
+    /// A tracker data header can identify a receipt even if its payload is unusable.
+    pub(crate) fn tracker_data_label(&mut self, bytes: &[u8]) -> Option<TrackerLabel> {
+        let header = normalize(bytes).get(..12)?;
+        if header[0] != TRACKER_DATA {
+            return None;
+        }
+        self.tracker_label(header).ok()
+    }
+
     fn pairing(&mut self, report: &[u8]) -> Result<DongleEvent, &'static str> {
         let report = declared_report(report)?;
         if !(12..=64).contains(&report.len()) {
@@ -139,7 +148,7 @@ impl Decoder {
         }
     }
 
-    fn tracker_label(&mut self, report: &[u8]) -> Result<TrackerLabel, &'static str> {
+    pub(crate) fn tracker_label(&mut self, report: &[u8]) -> Result<TrackerLabel, &'static str> {
         let address = addr::report_address(report).ok_or("short tracker address")?;
         let id = addr::TrackerId::from_address(address);
         let exported = self
@@ -171,7 +180,7 @@ impl Decoder {
     }
 }
 
-fn normalize(bytes: &[u8]) -> &[u8] {
+pub(crate) fn normalize(bytes: &[u8]) -> &[u8] {
     if matches!(
         bytes,
         [
@@ -186,7 +195,7 @@ fn normalize(bytes: &[u8]) -> &[u8] {
     }
 }
 
-fn declared_report(report: &[u8]) -> Result<&[u8], &'static str> {
+pub(crate) fn declared_report(report: &[u8]) -> Result<&[u8], &'static str> {
     let len = report.get(1).copied().ok_or("missing report length")?;
     report.get(..usize::from(len)).ok_or("short report")
 }
