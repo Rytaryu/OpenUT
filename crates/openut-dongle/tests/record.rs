@@ -80,6 +80,7 @@ fn reads_synthetic_fixture_and_round_trips_records() {
         },
         Record::Footer {
             mono_us: 1_000_500,
+            wall_ms: None,
             reports: 1,
             malformed: 0,
             estimated_lost: 0,
@@ -99,6 +100,28 @@ fn reads_synthetic_fixture_and_round_trips_records() {
     let mut reader = RecordReader::new(Cursor::new(written)).expect("read written header");
     assert_eq!(reader.header(), &header());
     assert_eq!(read_rows(&mut reader), expected);
+}
+
+#[test]
+fn preserves_footer_wall_time_on_round_trip() {
+    let first_line = FIXTURE.lines().next().expect("fixture header");
+    let footer = r#"{"type":"footer","mono_us":250,"wall_ms":123456,"reports":1,"malformed":0,"estimated_lost":0,"reason":"duration"}"#;
+    let bytes = [first_line, footer].join("\n");
+    let mut reader = RecordReader::new(Cursor::new(bytes)).expect("read header");
+    let rows = read_rows(&mut reader);
+    assert!(matches!(
+        rows.as_slice(),
+        [Record::Footer {
+            mono_us: 250,
+            wall_ms: Some(123_456),
+            ..
+        }]
+    ));
+    assert_eq!(reader.stats().malformed, 0);
+    assert_eq!(
+        json_rows(&write(reader.header(), &rows))[1],
+        serde_json::from_str::<Value>(footer).expect("footer fixture is valid JSON")
+    );
 }
 
 #[test]
@@ -143,6 +166,21 @@ fn skips_broken_rows_and_an_interrupted_final_row() {
     assert_eq!(reader.stats().unknown, 0);
     assert!(reader.read_record().expect("read after EOF").is_none());
     assert_eq!(reader.stats().malformed, 4);
+}
+
+#[test]
+fn counts_array_row_as_malformed_and_reads_the_next_object() {
+    let first_line = FIXTURE.lines().next().expect("fixture header");
+    let bytes = [
+        first_line,
+        r#"["tick",5,9]"#,
+        r#"{"type":"tick","mono_us":7,"wall_ms":10}"#,
+    ]
+    .join("\n");
+    let mut reader = RecordReader::new(Cursor::new(bytes)).expect("read header");
+    assert_eq!(read_rows(&mut reader), [tick(7, 10)]);
+    assert_eq!(reader.stats().malformed, 1);
+    assert_eq!(reader.stats().unknown, 0);
 }
 
 #[test]

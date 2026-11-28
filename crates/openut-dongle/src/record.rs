@@ -92,6 +92,9 @@ pub enum Record {
     },
     Footer {
         mono_us: u64,
+        /// UTC millisecond timestamp of the last stream item, when available.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        wall_ms: Option<i64>,
         reports: u64,
         malformed: u64,
         estimated_lost: u64,

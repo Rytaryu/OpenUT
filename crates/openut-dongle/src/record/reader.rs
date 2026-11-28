@@ -93,7 +93,7 @@ impl<R: BufRead> RecordReader<R> {
             if self.input.read_until(b'\n', &mut self.line)? == 0 && self.line.is_empty() {
                 return Ok(None);
             }
-            let line = std::str::from_utf8(&self.line).ok();
+            let line = object_line(&self.line);
             let record = line.and_then(|line| serde_json::from_str::<Record>(line).ok());
             let unknown = record.is_none() && line.is_some_and(unknown_row);
             // Retain partial input when a fallible read needs to be retried.
@@ -121,6 +121,12 @@ impl<R: BufRead> RecordReader<R> {
     }
 }
 
+fn object_line(bytes: &[u8]) -> Option<&str> {
+    std::str::from_utf8(bytes)
+        .ok()
+        .filter(|line| line.trim_start().starts_with('{'))
+}
+
 fn parse_header(bytes: &[u8]) -> Result<Header, ReadError> {
     #[derive(Deserialize)]
     struct Envelope {
@@ -130,10 +136,7 @@ fn parse_header(bytes: &[u8]) -> Result<Header, ReadError> {
         version: u64,
     }
 
-    let line = std::str::from_utf8(bytes).map_err(|_| ReadError::InvalidHeader)?;
-    if !line.trim_start().starts_with('{') {
-        return Err(ReadError::InvalidHeader);
-    }
+    let line = object_line(bytes).ok_or(ReadError::InvalidHeader)?;
     let envelope: Envelope = serde_json::from_str(line).map_err(|_| ReadError::InvalidHeader)?;
     if envelope.kind != "header" || envelope.format != FORMAT {
         return Err(ReadError::InvalidHeader);
@@ -151,11 +154,10 @@ fn unknown_row(line: &str) -> bool {
         kind: String,
     }
 
-    line.trim_start().starts_with('{')
-        && serde_json::from_str::<Tag>(line).is_ok_and(|tag| {
-            !matches!(
-                tag.kind.as_str(),
-                "header" | "in" | "tick" | "note" | "omitted" | "footer"
-            )
-        })
+    serde_json::from_str::<Tag>(line).is_ok_and(|tag| {
+        !matches!(
+            tag.kind.as_str(),
+            "header" | "in" | "tick" | "note" | "omitted" | "footer"
+        )
+    })
 }
