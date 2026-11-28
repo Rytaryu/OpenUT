@@ -1,0 +1,7 @@
+check_rules = ["R1"]
+
+[[detection]]
+rule = "R1"
+tracker = 1
+after = "2026-11-28 12:00:25.600"
+before = "2026-11-28 12:00:25.601"

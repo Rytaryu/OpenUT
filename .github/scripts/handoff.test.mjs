@@ -4,6 +4,7 @@ import {
   authorRole,
   ciState,
   closingIssues,
+  createClient,
   isApprovalOf,
   isHeld,
   isImplementationPr,
@@ -739,4 +740,85 @@ test('taking a cut-short notice up again does not move a label the role has move
   world = fakeGitHub({ pulls: [r] });
   await sweep(world);
   assert.deepEqual([r.labels, world.state.wakes], [['role:impl'], ['1: WAKE role:impl #312']]);
+});
+
+test('a locked wake PR is never opened: the job\'s account is refused, the owner\'s token writes', async () => {
+  // A stand-in for the API: a locked conversation takes comments only from the owner's token.
+  const server = () => {
+    const state = { locked: true, comments: [], calls: [] };
+    const reply = (status, data) => ({ ok: status < 300, status, text: async () => (data ? JSON.stringify(data) : '') });
+    const fetchImpl = async (url, { method, headers, body }) => {
+      const path = url.replace('https://api.github.com/repos/o/r', '');
+      const token = headers.authorization.replace('Bearer ', '');
+      state.calls.push(`${method} ${path} ${token}`);
+      if (path === '/issues/1/lock') {
+        state.locked = method === 'PUT';
+        return reply(204);
+      }
+      if (state.locked && token !== 'owner') return reply(403, { message: 'Unable to create comment because issue is locked.' });
+      state.comments.push(JSON.parse(body).body);
+      return reply(201, { id: 1 });
+    };
+    return { state, fetchImpl };
+  };
+  let s = server();
+  await assert.rejects(createClient({ repo: 'o/r', token: 'job', fetchImpl: s.fetchImpl }).wake(1, 'WAKE role:impl #9'), /403.*locked/);
+  assert.deepEqual([s.state.calls, s.state.comments, s.state.locked], [['POST /issues/1/comments job'], [], true]);
+  s = server();
+  await createClient({ repo: 'o/r', token: 'job', wakeToken: 'owner', fetchImpl: s.fetchImpl }).wake(1, 'WAKE role:review #3');
+  assert.deepEqual([s.state.calls, s.state.comments, s.state.locked], [['POST /issues/1/comments owner'], ['WAKE role:review #3'], true]);
+});
+
+test('wakes that cannot be posted do not stop the sweep; the owner and the PM are told once, and the run fails', async () => {
+  const red = approved(400, { ci: 'failure', labels: [] });
+  const good = approved(401);
+  const world = fakeGitHub({
+    pulls: [red, good],
+    issues: [issue(402, '担当: role:impl\n着手の条件: なし'), issue(403, '担当: role:design\n着手の条件: なし')],
+  });
+  world.state.failWakes = 99; // every wake is refused (a locked wake PR, no WAKE_TOKEN)
+  await assert.rejects(sweep(world), /3 wake comment\(s\) could not be posted/);
+  // Everything that needs no wake was done, and the labels were given.
+  assert.equal(good.merged, true);
+  assert.deepEqual(red.labels, ['role:impl']);
+  assert.deepEqual(world.find(402).labels, ['backlog', 'role:impl']);
+  assert.deepEqual(world.find(403).labels, ['backlog', 'role:design']);
+  assert.deepEqual(world.state.wakes, []);
+  const told = () => world.state.issues.filter((i) => i.title === '受け渡しの仕組みが、起動の合図を書けません');
+  assert.equal(told().length, 1);
+  assert.deepEqual(told()[0].labels, ['needs-human']);
+  for (const line of ['WAKE role:impl #400', 'WAKE role:impl #402', 'WAKE role:design #403']) assert.ok(told()[0].body.includes(line), line);
+  // Still refused: no second Issue, and nothing is given twice.
+  await assert.rejects(sweep(world), /could not be posted/);
+  assert.equal(told().length, 1);
+  assert.equal(world.find(402).events.filter((e) => e.event === 'labeled').length, 1);
+  // A new hand-off is refused too: it is added to the same Issue, once.
+  world.state.issues.push(issue(404, '担当: role:ux\n着手の条件: なし'));
+  await assert.rejects(sweep(world), /could not be posted/);
+  await assert.rejects(sweep(world), /could not be posted/);
+  assert.equal(told().length, 1);
+  assert.deepEqual(world.find(404).labels, ['backlog', 'role:ux']);
+  const added = told()[0].comments.filter((c) => c.body.includes('`WAKE role:ux #404`'));
+  assert.equal(added.length, 1);
+  assert.equal(told()[0].comments.some((c) => c.body.includes('`WAKE role:impl #402`')), false);
+  // The fake refuses with a 502, not with the lock: no setting is asked for.
+  assert.ok(!told()[0].body.includes('WAKE_TOKEN') && told()[0].body.includes('設定を変える必要はありません'));
+  assert.ok(!added[0].body.includes('WAKE_TOKEN'));
+  // Once wakes can be posted, the unfinished hand-offs are completed.
+  world.state.failWakes = 0;
+  await sweep(world);
+  assert.deepEqual(world.state.wakes.sort(), ['1: WAKE role:design #403', '1: WAKE role:impl #400', '1: WAKE role:impl #402', '1: WAKE role:ux #404']);
+  assert.deepEqual([world.find(402).labels, world.find(403).labels, world.find(404).labels], [['role:impl'], ['role:design'], ['role:ux']]);
+  assert.equal(red.comments.filter((c) => /CI が通っていません/.test(c.body)).length, 1);
+});
+
+test('a wake refused by the lock asks for WAKE_TOKEN', async () => {
+  const world = fakeGitHub({ issues: [issue(410, '担当: role:impl\n着手の条件: なし')] });
+  world.gh.wake = async () => {
+    throw new Error('POST /issues/1/comments -> 403 {"message":"Unable to create comment because issue is locked."}');
+  };
+  await assert.rejects(sweep(world), /could not be posted/);
+  const told = world.state.issues.find((i) => i.title === '受け渡しの仕組みが、起動の合図を書けません');
+  assert.ok(told.body.includes('WAKE_TOKEN') && told.body.includes('`WAKE role:impl #410`'));
+  assert.ok(told.body.includes('ロックを外すことはありません'));
 });
