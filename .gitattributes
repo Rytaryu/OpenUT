@@ -1,0 +1,2 @@
+# Third-party skills for the agents (see .claude/skills/README.md); keep them out of the language statistics.
+.claude/skills/** linguist-vendored
