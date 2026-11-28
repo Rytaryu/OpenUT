@@ -1,6 +1,6 @@
 # 実装計画
 
-設計担当が書き、実装担当はこの順に PR を出す。最終更新: 2026-11-28（初版へのレビューの指摘の反映。M1。Issue #5、PR #12）。M2 より先の項目は、その段階の設計で足す。
+設計担当が書き、実装担当はこの順に PR を出す。最終更新: 2026-11-28（ログの書式のメモに合わせた追補。Issue #18）。M2 より先の項目は、その段階の設計で足す。
 
 ## 0. 決まり
 
@@ -10,7 +10,8 @@
 - すべての PR で `bash .github/scripts/verify.sh` を通す。Linux の CI でも通るよう、Windows だけの部品は `#[cfg(windows)]` と `[target.'cfg(windows)'.dependencies]` で分ける。判定（入出力なし）の部品は、Linux でもビルドとテストができること。
 - 設計の節の番号（`m1-watcher.md` の「4.2」など）は、PR の説明とコードのコメントで参照してよい。設計と違う実装にしたら、PR の「未解決・判断を仰ぎたい点」に書く。
 - 実機に命令を送るコードは、M1 には入れない（`m1-watcher.md` の 11 章）。
-- ログの書式のメモ（Issue #7）が main に入ったら、設計の追補（4.4 の表と 4.8）が出る。それより前に作った M1-3 の語句と、合成のケース（M1-2）は、追補に合わせて直す（後続の修正の一覧。3 章）。
+- ログの書式のメモ（`docs/research/hub-log-format.md`。以下「メモ」）と見本（`docs/research/hub-log-samples.md`）に合わせた追補（Issue #18）で、`m1-watcher.md` の 4〜10 章を直した。すでに main に入った M1-1・M1-2 を直す項目は、3 章の F-1〜F-3。M1-3 より先の項目は、この版の設計で作る。
+- テストの入力には、見本の行（個人の情報は置き換え済み）をそのまま使ってよい。実物のログの断片は入れない（匿名化の道具〔L-1〕を通したものだけ。PRD の L-2）。
 
 ## 1. クレートとワークスペースの構成
 
@@ -100,7 +101,7 @@ openut-hublog = { path = "crates/openut-hublog" }
   2. `time`: 2026-11-27 22:53:10.123、ずれ +9 → UTC の 2026-11-27 13:53:10.123 の通し時刻と一致する（期待値はテストの中で別の方法〔例: 日数を手で数えた定数〕で用意する）。うるう日（2028-02-29）、年の境目、負のずれ（-5）、分のあるずれ（+5:30）。1970〜2100 年の毎月 1 日について、日付 → 通し日数 → 日付が元に戻る。
   3. `decode`: (a) UTF-16LE・BOM・CRLF の 3 行が 3 行になる。(b) 同じバイト列を 1 バイトずつ渡しても、(a) と同じ結果になる。(c) U+1F600 のサロゲートの対が、渡す区切りの途中で切れても 1 文字になる。(d) 対にならないサロゲートが U+FFFD になり、次の行も読める。(e) UTF-8（BOM あり・なし）、BOM のない UTF-16LE を見分ける。(f) 終わりのない最後の行は、`finish()` まで出ない。(g) 64 KiB を超える行が切られ、`long_lines` が増える。(h) 固定の種の擬似乱数で作ったバイト列（1 万通り）で `panic` しない（依存を足さず、テストの中の簡単な擬似乱数でよい）。
   4. `header`: (a) `[2026-11-27 22:53:10.123 +9 0x1a2b INFO SomeFunc] [12] Add new tracker: (1)` の各部分が読める（例の値は合成）。(b) 秒の小数が 1〜6 桁。(c) ずれ `+9`、`+09`、`-5`、`+5:30`。(d) スレッドの括弧がない行。(e) 関数名に空白がある行。(f) 空の行、`[` だけ、日付が 2026-13-40 の行、先頭が `[` でない行が `NoHeader`。(g) 擬似乱数の文字列で `panic` しない。
-- **順序**: 最初。PR #2 が main に入ってから（Issue #9 の着手の条件）。
+- **順序**: 最初。PR #2 が main に入ってから（Issue #9 の着手の条件）。main に入った（PR #15）。追補による直しは 3 章の F-1・F-2。
 
 ### M1-2 再生テストの枠組みと、要件とテストの対応の表（Issue #10）
 
@@ -116,23 +117,26 @@ openut-hublog = { path = "crates/openut-hublog" }
   2. 比較の単体テスト: 期待と実際が一致する／期待が見つからない／余分な検出／`tracker` が違う／`after`・`before` の境目（`after` ちょうどは一致、`before` ちょうどは一致しない）／`check_rules` にない規則の検出は失敗にしない／`[summary]` の値の一致と不一致。
   3. 3 つの合成のケースが、解読と先頭の解析を通る（`NoHeader` が 0）。`synthetic-utf16` と、元にしたケースの行の数が同じ。
   4. `tests/README.md` の表が、W-1〜W-9 と受け入れの基準の 3 つのすべてを扱っている。
-- **順序**: M1-1 のあと（M1-1 のブランチに積んでよい）。
+- **順序**: M1-1 のあと（M1-1 のブランチに積んでよい）。main に入った（PR #16）。追補による直しは 3 章の F-3。
 
 ### M1-3 行の種類と、出来事への変換
 
 - **範囲**: `crates/openut-core/src/{tracker.rs,event.rs}`、`crates/openut-hublog/src/{record.rs,map.rs}`。
-- **中身**: `TrackerKey`、`Serial`（3.2）、`Timed`、`Event` と付随の型（3.4）。`record`: 本文から `Classified` を作る（4.4 の表）。`map`: `Entry` と `Classified` から `Timed` を作る。読めなかった行の区別（`other`、`unparsed`）と数（4.7）。
+- **中身**: `TrackerKey`、`Serial`（`m1-watcher.md` の 3.2）、`Timed`、`Event` と付随の型（3.4。`Status`、`PowerOffNotice`、`ServerStopped`、`DongleRemoved`、`usb`、番号なしの `PcCommand` を含む）。`record`: `Entry` から種類と値を読む（4.4 の 3 つの表。サーバーの表、命令の表、ドライバーの表）。本文の先頭の形で比べ、`Camera frame rate:` だけは関数名も見る。状態の行（`DeviceStatusToVHServer`）の `key: value` の読み取り。`map`: `Entry` と種類から `Timed` を作る。ファイルの種類（サーバーかドライバーか）を引数で受け、ドライバーのファイルでは予告の行だけを出来事にする。読めなかった行の区別（`other`、`unparsed`、`driver.lines`）と数（4.7）。
 - **受け入れ条件とテスト**:
-  1. 4.4 の表の行ごとに、合成の本文 → 期待の `Classified` と `Event` のテスト。番号の 3 つの形（`(N)`、`(index: N)`、`Tracker (N)`）。語句の前後に別の文字があっても判定できる。
-  2. 値の対応: `map state: 2` → `Synced`、`map status: 6` → `ReuseOk`、`Pose data - status: 2/3/4` → `Ok/Lost/RecentlyLost`、ほかの値 → `Other(v)`。`is connected to host: 0/1` → `connected`。
-  3. 語句はあるが番号や値が読めない（`Remove tracker (x)`、`map state:` で終わる、桁あふれ）→ `unparsed` として数え、出来事を出さない。表にない本文 → `other`。
-  4. 擬似乱数の本文で `panic` しない。
-- **順序**: M1-1 のあと。
+  1. 4.4 のサーバーの表の行ごとに、**見本（`hub-log-samples.md`）の行**を入力にして、期待の種類と `Event` になるテスト（見本にない形〔`switch to CLIENT mode.`、`Query wifi from tracker N` など〕は、見本の 4 章の「形だけの見本」の行を使う）。命令の表の行ごとに、`PcCommand` の `kind` と番号（`Pair tracker, isPair: 0, device index:-2` → 番号なし）。ドライバーの表（見本の 5 章の予告の行 → `PowerOffNotice(2)`。`Wait for HID data got timeout.\n` → 出来事なし、`driver.lines` だけ）。
+  2. 番号のない 2 つの行（`Got host wifi info.`、`Wifi info is not yet available.`）が、`None` の出来事になる。`Remove tracker (2), connection type: 1, power state:11 `（末尾の空白つき）と `connection type: 2` の `usb`。`GetDeviceInfoAndResponse` の行から `SerialKnown(2, "00XX000000001")`。`sn: ()` は出来事にしない。`sn: (` のない `Response - cmd type:` の行は `other`。
+  3. 状態の行: 見本の 3 つの状態の行から、`connected`、`host`、`map_ready`（`map state: 2` か `map status: 6`）。負の値（`map ID: -1`、`map status: -1`）が読める。`device index` などが欠けた行は `unparsed`。
+  4. 値の対応: 姿勢の行の `status: 2/3/4` → `Ok/Lost/RecentlyLost`、0 と 47 などの値 → `Other(v)`。`is connected to host: 0/1` → `connected`、2 → `unparsed`。
+  5. 間違えやすい行が種類にならない: `(SteamVR: -1)(0)(tracking status: 0) Position (-nan, -nan, -nan) includes NAN.` → `other`。`OETServer::ParseConfig` の `Camera frame rate: 50` → `other`。`This OET has latest firmware` → `other`。`Wake up dongle.` と `Wake up dongle: (2).` の区別。
+  6. 形の先頭は合うが番号や値が読めない（`Remove tracker (x), ...`、桁あふれ、`Pose data - status: ` で終わる）→ `unparsed` として数え、出来事を出さない。表にない本文 → `other`。
+  7. 擬似乱数の本文で `panic` しない。
+- **順序**: M1-1 のあと、かつ、この追補（Issue #18 の PR）が main に入ったあと。3 章の F-1・F-2 のあと（同じ PR に入れてもよい）。
 
 ### M1-4 追記の読み取り（ファイルの追跡）
 
 - **範囲**: `crates/openut-hublog/src/tail.rs`、`src/source_fs.rs`。
-- **中身**: `LogSource` トレイト（一覧と、位置を指定した読み取り）。`Tailer`: いまのファイルの選び方、追記、0 時の切り替わり（日が飛んだかどうか）、世代、作り直しの見分け方（縮んだ、先頭の 4 KiB が変わった、消えた）、起動と再構築のときの読む順（前の日のファイル、いまのファイル）、追いつきの始まりと終わり、切り替わったあとの書き足しの数（4.1、4.2、4.5）。`Tailer` は、バイト列（ファイル名と世代つき）と、「再構築する（理由）」「追いつきが終わった」「次のファイルに移った（日が飛んだか）」「切り替わったあとの書き足し」「ログが見つからない」を順に返す（エンジンを呼ぶのは M1-9 の見張りのループ）。見張りの時刻（4.6 の d と L）を計算する `Watermark`。`source_fs`: `std::fs` による `LogSource`（読み取り専用で開き、読んだら閉じる）。
+- **中身**: `LogSource` トレイト（一覧と、位置を指定した読み取り）。`Tailer`: ファイルの種類（`ViveTrackerServer_`、`ViveTrackerDriver_`）ごとに 1 つ。いまのファイルの選び方、追記、0 時の切り替わり（日が飛んだかどうか）、世代、作り直しの見分け方（縮んだ、先頭の 4 KiB が変わった、消えた）、起動と再構築のときの読む順（前の日のファイル、いまのファイル）、追いつきの始まりと終わり、切り替わったあとの書き足しの数（4.1、4.2、4.5）。`Tailer` は、バイト列（ファイル名と世代つき）と、「再構築する（理由）」「追いつきが終わった」「次のファイルに移った（日が飛んだか）」「切り替わったあとの書き足し」「ログが見つからない」を順に返す（エンジンを呼ぶのは M1-9 の見張りのループ）。見張りの時刻（4.6 の d と L。サーバーのファイルだけで測る）を計算する `Watermark`。2 つの `Tailer` の記録の列を、それぞれの中の順を保ったまま時刻の順に合わせる関数（4.6。同じ時刻ならサーバーを先）。名前の末尾に `_N` の付いたファイルを見つけたことを返す（4.1。アプリのログに 1 回だけ残すのは M1-9）。どちらかのいまのファイルの作り直しで、両方を読み直す（4.1）。`source_fs`: `std::fs` による `LogSource`（読み取り専用で開き、読んだら閉じる）。
 - **受け入れ条件とテスト**（`Tailer` と `Watermark` は、メモリ上の偽の `LogSource` と偽の時刻で確かめる）:
   1. 何回かに分けて追記されたファイルから、すべての行が順に 1 回ずつ出る。区切りが奇数バイトでも同じ。
   2. 起動時に中身があるファイル: 先頭から読み、終わりに着いたときに「追いつきが終わった」が 1 回出る。
@@ -141,11 +145,13 @@ openut-hublog = { path = "crates/openut-hublog" }
   4a. 再構築のあとのバイト列には新しい世代の番号が付き、前の世代の解読の途中の状態（持ち越したバイト、終わりのない行）が新しい世代に混ざらない。
   4b. 起動時: いまのファイルの 1 日前の日付のファイルがあれば、それを先に読み、そのあといまのファイルを読む。2 日前のファイルは読まない。1 日前のファイルがなければ、いまのファイルだけ。
   4c. 0 時の切り替わりで、新しいファイルの日付が次の日なら「次のファイルに移った（日は飛んでいない）」、2 日以上先なら「（日が飛んだ）」が出る。
-  5. 名前の判定: `viveTrackerServer_20261127.TXT` は対象、`ViveTrackerServer_2026112.txt`、`other.txt` は対象外。
+  5. 名前の判定: `viveTrackerServer_20261127.TXT` と `ViveTrackerDriver_20261127.txt` は対象（種類つき）、`ViveTrackerServer_2026112.txt`、`ViveTrackerDongle_20261127.txt`、`other.txt` は対象外。`ViveTrackerServer_20261127_1.txt` は対象外で、見つけたことが返る。
+  5a. ドライバー: サーバーのいまのファイルが 11/28 に移っても、ドライバーのファイルが 11/27 のまま伸び続けていれば、11/27 のドライバーのファイルを読み続け、11/28 のドライバーのファイルが現れたら移る（メモの 2.5。ドライバーの切り替わりは遅い）。ドライバーのファイルがなくても、サーバーのファイルの読み取りは止まらない。ドライバーのファイルの作り直しで、サーバーとドライバーの両方を読み直す。
+  5b. 合わせる関数: 時刻が交互の 2 つの列、同じ時刻の記録（サーバーが先）、片方が空、片方の列の中で時刻が戻る記録（その列の中の順を保つ）。
   6. 1 回に読むのは 4 MiB まで。
   7. `Watermark`: d が直近 5 分の最小値になる（5 分に測ったものがなければ最後の値）。追いつきで読んだ分は d に使わない。見張りの時刻 = max(最後の行の時刻, 今 − d − L)。d がなければ最後の行の時刻。行がまだなければ値がない。
   8. `source_fs`: 一時ディレクトリ（`std::env::temp_dir()` の下に、テストごとに別の名前で作る）に UTF-16LE のファイルを書き、追記し、読める。読み取り専用の属性を付けたファイルも読める。
-- **順序**: M1-1 のあと。
+- **順序**: M1-1 のあと。3 章の F-1 のあと（記録の切り方が変わるため）。
 
 ### M1-5 状態（トラッカーと PC の Wi-Fi 情報）
 
@@ -155,28 +161,33 @@ openut-hublog = { path = "crates/openut-hublog" }
   1. 5.1 の表の行ごとに 1 つ以上のテスト（前の状態 → 出来事 → 次の状態とほかに変えること）。
   2. 5.2 の表の行ごとに 1 つ以上のテスト。2 度目の `HostAssigned` で `Held` から `Missing` になる。
   3. `TrackerAdded` なしで出てきた番号が、推し量った状態と `inferred = true` で足される。
-  4. 番号のない出来事: 当てはまるトラッカーが 1 台なら、その台に付く。2 台なら状態が変わらず、数が増える。
+  4. 番号のない出来事（5.1）: `WifiRequestUnanswered` で、候補（接続か Wi-Fi 待ちで、ホストでない台）が 1 台ならその台が Wi-Fi 待ちになる。2 台・0 台なら状態が変わらず、数も増えない。`HostWifiObtained` で、最後に `HostAssigned` された番号の `Held` になる。`HostAssigned` を見ていないときは、状態の行の `is host: 1` の番号になる（5.2）。
   5. 同じ状態への遷移で `since` が変わらない。順序の合わない出来事が数えられる。
   6. 1 台だけ、5 台の場合も、同じ遷移になる（台数を決めていない。W-9）。
+  7. **重なり**（5.1）: `TrackerRemoved` が 3 ms おいて 2 回 → 1 回目だけで未接続になり、2 回目は数えない。`TrackerAdded` が 1 秒以内に 2 回 → 2 回目は何もしない（ホストの役割などが消えない）。1 秒と 1 ms あとの 2 回目 → つなぎ直しとして接続になり、順序の合わない出来事が 1 増える。`HostAssigned` の 2 回目は吸収されず、`Held` から `Missing` になる。
+  8. 状態の行（`Status`）: 地図同期中の台に `connected` かつ `map_ready` → 位置取り直し中。追跡中の台に同じ行が何回来ても、状態も数も変わらない。つながっている台に `connected: 0` → 状態は変わらず、順序の合わない出来事が 1 増える。見ていない番号に `connected: 1` → `inferred` で足される。`connected: 0` → 足されない。
+  9. `SerialKnown`: 番号にシリアル番号が付き、`TrackerRemoved`・`DongleRemoved`・`ServerStarted`・`ServerStopped` で外れる。同じシリアル番号がほかの番号に来たら、前の番号から外れる。
+  10. `DongleRemoved`、`ServerStopped` で全台が未接続になる。`ServerStopped` で PC の Wi-Fi 情報が `Unknown`。接続の直後の `Pose(Lost)` と `Pose(Other)` は、状態を変えず、順序の合わない出来事にも数えない。
 - **順序**: M1-3 のあと。
 
 ### M1-6 検出の規則とエンジン
 
-- **範囲**: `crates/openut-core/src/{rules.rs（または rules/ の下）,engine.rs}`、`crates/openut-hublog/src/replay.rs`（エンジンをつなぐ）、`tests/replay.rs`（合成のケースの `#[ignore]` を外し、足したケースの関数を足す）、`tests/replay/*/expect.toml`、`tests/replay/synthetic-r1-gap-then-fault/`。
-- **中身**: R1〜R5（6.2）、エピソード、`Detection`（3.6）、`EngineConfig`（6 章のしきい値の既定値と上書き。`rules.r1.gap_s`、`rules.r3.clients`、`rules.r4.server_s` を含む）、`Engine`（3.7。同じ時刻の入力と期限の順、`rebuild`）。この項目では `Notice` を作らない（M1-7）。合成のケース `synthetic-r1-gap-then-fault`（`m1-watcher.md` の 10.1）を足す。
-  - **既定は PM の判断の前の形**: `rules.r3.clients = false`（R3 はホストだけ）、`rules.r5.enabled = false`（R5 は切る）。判断のあとは既定の値を変えるだけで済むようにする（3 章）。
+- **範囲**: `crates/openut-core/src/{rules.rs（または rules/ の下）,engine.rs}`、`crates/openut-hublog/src/replay.rs`（エンジンをつなぐ。ドライバーのファイルを受け、時刻の順に合わせる）、`tests/replay.rs`（合成のケースの `#[ignore]` を外し、足したケースの関数を足す。ケースのディレクトリから `ViveTrackerDriver_*.txt` も読む）、`tests/replay/*/expect.toml`、`tests/replay/synthetic-r1-gap-then-fault/`、`tests/replay/synthetic-r4-power-off/`。
+- **中身**: R1〜R5（6.2）、エピソード、`Detection`（3.6）、`EngineConfig`（6 章のしきい値の既定値と上書き。`rules.r1.gap_s`、`rules.r3.clients`、`rules.r4.server_s`、`rules.r4.exclude_power_off`、`rules.r4.notice_before_s`、`rules.r4.notice_wait_s`、`state.dup_ms` を含む）、`Engine`（3.7。同じ時刻の入力と期限の順、`rebuild`。`PowerOffNotice` は元の時刻のまま覚える）。この項目では `Notice` を作らない（M1-7）。合成のケース `synthetic-r1-gap-then-fault` と `synthetic-r4-power-off`（`m1-watcher.md` の 10.1）を、見本の形の行で足す。
+  - **既定は PM の判断の前の形**: `rules.r3.clients = false`（R3 はホストだけ）、`rules.r5.enabled = false`（R5 は切る）、`rules.r4.exclude_power_off = true`（予告のあった切断を除く。オーナーの確かめの前の仮）。判断のあとは既定の値を変えるだけで済むようにする（3 章）。
 - **受け入れ条件とテスト**:
   1. 規則ごとに: `Raised` の `at` が、条件を満たした時刻（期限の規則〔R2〜R5、R1 の `Escalated` と `Ended`〕では期限の時刻）になる。回数の規則は、回数が 1 少ない、時間が 1 ms 足りないと出ない。`Escalated`（R1）、`Resolved`、`Ended` が 6.2 の条件で出る。
   2. **期限ちょうど**（6.1、3.7）: R2 で `ClientLink` からちょうど `r2.wait_s` の時刻に地図を受け取ると出ない。1 ms 遅れると、`at` が期限の時刻の `Raised` が出る。R3（ホストが期限ちょうどに追跡中になる）、R5（期限ちょうどに追跡中に戻る）、R1 の `Escalated`（期限ちょうどに直る）と `Ended`（最後の問い合わせからちょうど `r1.quiet_s` の時刻に次の問い合わせ）でも同じ。
   3. R1: エピソードのあいだに `HostAssigned` が来ても、2 回目の `Raised` が出ない。`Held` のあいだは、断られた問い合わせが何回あっても出ない。案内するトラッカーが、最後に `HostAssigned` された番号になる。**列**（6.2 の R1 の例の表の 4 行をそれぞれテストにする）: 2 回のあと 61 秒空いて 1 回では出ない。`r1.gap_s` ちょうどの空きは同じ列、1 ms 超えると新しい列。0.55 秒おきに 60 秒続くと 1 回だけ出る。`Ended` のあとの 1 回では出ず、続けば新しいエピソードになる。`HostAssigned`、`HostWifiObtained`、`WifiAssigned`、`ServerStarted`、全台の未接続で、列が捨てられる。
-  4. R4: 直前 12 秒の命令、つながっていた時間が 30 秒未満、前後 2 秒のほかの切断、前後 5 秒の `ServerStarted` のそれぞれで出ない。境目: 切断のちょうど 12 秒前の命令、ちょうど 2 秒あとのほかの切断、**ちょうど 5 秒あとの `ServerStarted`** で出ない。5 秒と 1 ms あとの `ServerStarted` では出る。`Raised` の `at` が切断から 5 秒あと。
+  4. R4: 直前 12 秒の命令（番号なしの `PcCommand` を含む）、つながっていた時間が 30 秒未満、前後 2 秒のほかの切断、前後 5 秒の `ServerStarted`・`ServerStopped`・`DongleRemoved`、予告（`PowerOffNotice`）、`usb` の切断のそれぞれで出ない。境目: 切断のちょうど 12 秒前の命令、ちょうど 2 秒あとのほかの切断、**ちょうど 5 秒あとの `ServerStarted`**、切断のちょうど 15 秒前とちょうど 10 秒あとの予告で出ない。5 秒と 1 ms あとの `ServerStarted`、15 秒と 1 ms 前の予告では出る。`Raised` の `at` が切断から 10 秒あと。予告が切断より後の行として、時刻が戻って届いても（元の時刻が窓の中なら）出ない。`rules.r4.exclude_power_off = false` で、予告があっても出る。切断の行が 3 ms おいて 2 回あっても、R4 は 1 回だけ。シリアル番号が分かっている台の `Resolved` が、別の番号での同じシリアル番号の `SerialKnown` で出る。
   5. R3 と R5 が、`tracked_since_connect` で分かれる（同じ喪失で両方は出ない）。R3 のホストの始まりが `HostAssigned` の時刻。**既定**（`rules.r3.clients = false`）では、クライアントの位置合わせが終わらなくても R3 が出ず、ホストでなくなったら待ちをやめる。`rules.r3.clients = true` でクライアントにも出る。`inferred` のトラッカーには出ない。
   6. `EngineConfig` で、しきい値を変えると結果が変わる。**既定**（`rules.r5.enabled = false`）で R5 が出ない。`true` で出る。
   7. エンジン: 期限が近い順に判定される。同じ期限は規則の順、トラッカーの番号の順。時刻が戻る出来事が、いまの時刻として扱われ、数えられる。
   8. **見張りと再生で同じ**: 同じ入力の列を、(a) `apply` だけで流したときと、(b) 500 ms ごとの `advance_to` を挟み、さらに期限とちょうど同じ時刻の `advance_to` も挟んで流したときで、`Detection` の列（規則、トラッカー、段階、`at`）が同じ。2 と 4 の境目のケースを含める。
   9. `rebuild`: 状態、エピソード、期限、いまの時刻が捨てられ、新しく作ったエンジンと同じ結果になる（同じ入力を流して比べる）。
-  10. 再生テスト: `synthetic-r1-second-host-command` で R1 がちょうど 1 回、`synthetic-normal-start` で検出なし、`synthetic-utf16` で元のケースと同じ結果、`synthetic-r1-gap-then-fault` で R1 がちょうど 1 回（不具合のあとの時刻）。
-- **順序**: M1-2 と M1-5 のあと。
+  10. 再生テスト: `synthetic-r1-second-host-command` で R1 がちょうど 1 回、`synthetic-normal-start` で検出なし、`synthetic-utf16` で元のケースと同じ結果、`synthetic-r1-gap-then-fault` で R1 がちょうど 1 回（不具合のあとの時刻）、`synthetic-r4-power-off` で R4 がちょうど 1 回（予告のない台）。
+  11. 再生で、サーバーとドライバーのファイルが時刻の順に合わせて流れる（ドライバーのファイルを外すと、`synthetic-r4-power-off` の R4 が 2 回になる）。
+- **順序**: M1-2 と M1-5 のあと。3 章の F-3 のあと（合成のケースが見本の形になっていること）。
 
 ### M1-7 案内の配信の決まりと文言
 
@@ -195,14 +206,16 @@ openut-hublog = { path = "crates/openut-hublog" }
 ### M1-8 日ごとの集計
 
 - **範囲**: `crates/openut-core/src/summary.rs`、`crates/openut-core/src/engine.rs`（集計をつなぐ）、`crates/openut-core/Cargo.toml`（`serde` を機能 `serde` の任意の依存に、`serde_json` をテストだけの依存に）、`tests/replay/*/expect.toml`（`[summary]`）、`tests/replay/synthetic-midnight/`、`tests/replay/synthetic-midnight-no-prev/`、`tests/replay.rs`（2 つのケースの関数）。
-- **中身**: 8 章の値と、8.1 の日の区切りと数え方（行の時刻の 0 時で分ける、行と行のあいだを前の状態で数える、`summary.gap_s` を超える空きは `unobserved_s`、最後に読んだ行の時刻まで、日を閉じる時、`observed_until`）。JSON の形は、`serde` の機能を付けたときに 8 章の形で書き出せるようにする（書き出しのファイルの I/O は M1-9）。
+- **中身**: 8 章の値と、8.1 の日の区切りと数え方（行の時刻の 0 時で分ける、行と行のあいだを前の状態で数える、`summary.gap_s` を超える空きは `unobserved_s`、最後に読んだ行の時刻まで、日を閉じる時、`observed_until`）。トラッカーの行はシリアル番号ごと（1 回の接続の分を、その接続で分かったシリアル番号の行に足す。分からなければ番号ごとの行）、`slots`、`power_offs`、`source` の `meta`・`bad_offset`・`driver`。JSON の形は、`serde` の機能を付けたときに 8 章の形で書き出せるようにする（書き出しのファイルの I/O は M1-9）。
 - **受け入れ条件とテスト**:
   1. 合成の出来事の列で、`connected_s`、`in_use_s`、`tracking_s`、`tracking_ratio`、`first_pose_s`、`losses`、`long_losses`、`host_starts`、`faults`、`detections` が手で計算した値になる。
   2. **日の区切り**: 0 時をまたぐ状態が、0:00:00.000 で 2 つの日に分かれる（新しいファイルの最初の行の時刻ではない）。前の日のファイルにある 0 時より後の時刻の行は、新しい日に数える。前の日は、次の日の 0 時以上の時刻の行を適用したときに `final = true` になり、それより前は `false`。行が 1 行もない日の集計は作らない。
   2a. **8.1 の例の表**の 4 つの行が、表の値になる（連続して流す、起動し直しを模して新しいエンジンに 2 つのファイルを追いつきとして流す、2 つのファイルの再生、11/28 だけ）。表のあとの「空きが `summary.gap_s` を超える場合」の値（11/28 の 00:12:00 と 00:21:00 の行を除いたとき。前の日のファイルがある・ない、の両方）と、最初の行が 00:10:00 のときの `unobserved_s` も確かめる。
   2b. **数えない時間**: `summary.gap_s` ちょうどの空きは状態に数え、1 ms 超えると `unobserved_s` に入る。最後の行のあと `advance_to` で時刻を進めても（`flush_s` と同じ）、時間の値が増えない。`flush_s` のあいだに出た検出は `detections` に数えられる。
   2c. **再構築**: 途中まで流したエンジンで `rebuild` し、同じファイルをもう一度流すと、集計が 1 回だけ流したときと同じ（回数が二重にならない）。
-  3. `in_use_s` が 0 のとき `tracking_ratio` が `null`。
+  3. `in_use_s` が 0 のとき `tracking_ratio` が `null`。**この境界は、JSON の出力のテストで確かめる**（`expect.toml` には `null` の表記を足さない。Issue #20 の PM の判断）。
+  3a. **シリアル番号の行**: 同じシリアル番号のトラッカーが、番号 2 でつながって切れ、番号 4 でつなぎ直す → 1 つの行に両方の接続の時間と回数が入り、`slots` が `[2, 4]`。`SerialKnown` が接続から 8 ms あとに来ても、その 8 ms もその行に入る。シリアル番号が来ない接続は、番号ごとの行（`serial: null`）に入る。
+  3b. 古い日のファイルの最後の、次の日の時刻の記録（メモの 2.5）で前の日が閉じ、その記録は次の日に数えられる。
   4. 4.7 の数が `source` に入る。
   5. JSON に書き出したものが 8 章の形（キーの名前と入れ子）になる（文字列で比べるテスト）。
   6. 再生テスト: 合成のケースの `expect.toml` に `[summary]` を書き、一致する。`synthetic-midnight` と `synthetic-midnight-no-prev` が 8.1 の表の値になる。
@@ -212,15 +225,17 @@ openut-hublog = { path = "crates/openut-hublog" }
 
 - **範囲**: `src/{main.rs,cli.rs,config.rs,paths.rs,discover.rs,watcher.rs,summary_io.rs}`、`src/notify/{mod.rs,console.rs}`、`Cargo.toml`（`serde_json` を足す）。
 - **中身**:
-  - 設定（9.1）の読み込みと書き直し、保存場所（9.3）、フォルダーを探す（9.2。既知の候補はまだ空でよい）。
-  - 見張りのループ（2 章、4.6）: `LogSource` と時計と眠りを引数で受ける形にして、テストでは偽物を渡す。500 ms ごとの追記の読み取り、`advance_to(見張りの時刻)`、出力の振り分け、60 秒ごとの集計の書き出し（追いつきのあいだは書かない）、見張り役の状態（7.4 の表）。`Tailer`（M1-4）が返す「再構築する」で、閉じていない日の集計を `YYYY-MM-DD.before-rebuild-N.json` に書いてから `Engine::rebuild` と `set_catching_up(true)`、「追いつきが終わった」で `set_catching_up(false)`、「次のファイルに移った（日が飛んだ）」で集計を書いてから `rebuild`（4.1、4.5）。閉じた日の集計は、`final: true` のファイルがすでにあれば書き直さない（4.5、9.3）。
+  - 設定（9.1。トラッカーの名前のキーはシリアル番号）の読み込みと書き直し、保存場所（9.3）、フォルダーを探す（9.2。既知の候補 `%ProgramData%\HTC\ViveSoftware\ViveUltimateTracker\Log`）。
+  - 見張りのループ（2 章、4.6）: `LogSource` と時計と眠りを引数で受ける形にして、テストでは偽物を渡す。500 ms ごとの追記の読み取り（サーバー、ドライバーの順に読み、その回の記録を時刻の順に合わせる）、`advance_to(見張りの時刻)`、読んだまとまりごとの遅れ（壁時計 − 最後の行の時刻）をアプリのログに残す（L を決めるため。4.6）、`_N` のファイルを見つけたらアプリのログに 1 回だけ残す、出力の振り分け、60 秒ごとの集計の書き出し（追いつきのあいだは書かない）、見張り役の状態（7.4 の表）。`Tailer`（M1-4）が返す「再構築する」で、閉じていない日の集計を `YYYY-MM-DD.before-rebuild-N.json` に書いてから `Engine::rebuild` と `set_catching_up(true)`、「追いつきが終わった」で `set_catching_up(false)`、「次のファイルに移った（日が飛んだ）」で集計を書いてから `rebuild`（4.1、4.5）。閉じた日の集計は、`final: true` のファイルがすでにあれば書き直さない（4.5、9.3）。
   - `NoticeSink` トレイトと、コンソールの出口（`push` の案内を 1 行で出す）。
   - コマンド: `openut watch [--log-dir D] [--config F] [--data-dir D]`（画面なしの見張り。Linux でも動く）、`openut replay <ケースのディレクトリかファイル>... [--expect F] [--set 名前=値]... [--format text|toml]`（不一致なら終了コード 1）、`openut summarize <ファイル>... [--out D]`、`openut --version`。引数がないときは、Windows では M1-11 の常駐（それまでは使い方を表示）、ほかでは使い方を表示。
 - **受け入れ条件とテスト**:
   1. 設定: ファイルがない → 既定値。9.1 の例が読める。形が違う → 既定値と理由（止まらない）。名前の変更を書き直して、読み直すと同じ値。
-  2. フォルダーを探す: `log_dir` が優先される。`ViveTrackerServer_*.txt` がないフォルダーは使わない。
+  2. フォルダーを探す: `log_dir` が優先される。`ViveTrackerServer_*.txt` がないフォルダーは使わない。`ProgramData` の環境変数を偽の値にして、既知の候補が見つかる。環境変数がなければ、候補を飛ばして「ログが見つからない」になる（止まらない）。
   3. 見張りのループ（偽の `LogSource` と時計）: 伸びていく合成のログで、R1 の案内がコンソールの出口に 1 回だけ出る。追いつきのあいだに終わった検出は出ない。ログが静かなあいだも、見張りの時刻で R2 の期限が判定される（L を待ってから）。
   3a. **動き続けた・起動し直した・再生した、で同じ**: 8.1 の例の 2 つのファイルを、(a) 11/27 の途中から伸ばしながら 0 時をまたいで見張る、(b) 00:40 に見張りのループを作り直して（起動し直しを模して）読み直す、(c) 同じファイルを再生する、の 3 つで、11/28 の集計と検出が同じ。(b) で、11/27 の `final: true` のファイルが書き直されない。
+  3c. **ドライバーが遅れて届く**（4.6）: `synthetic-r4-power-off` のファイルを、ドライバーのファイルだけ 3 秒遅れて伸ばしても、R4 の結果が再生と同じ。`r4.notice_wait_s` より遅れたときは違いうることと、`driver.time_regressions` が増えることを確かめる。
+  3d. **ログの形が想定と違う**（7.4）: 表の種類の行が 1 つもない 2,001 件の記録で、見張り役の状態がそれになる。
   3b. **作り直し**: 見張りの途中（R1 の案内を push したあと、R1 が続いているところ）で、いまのファイルを (a) 先頭が同じで行を足したものに置き換える（追記と同じに扱われ、再構築しない）、(b) 先頭の違う中身（前の世代の行の一部を含む）に置き換える、(c) 切り詰めて新しい行だけにする、(d) 消す（1 日前のファイルが残っている）。どれでも、その日の回数が二重にならず（その時点のフォルダーで起動し直して読んだのと同じ集計）、続いている R1 の案内がもう一度出ない。(b)〜(d) で、作り直しの前の集計が `before-rebuild-1.json` に残る。
   4. 集計の書き出し: 一時ディレクトリに `YYYY-MM-DD.json` ができ、書き出しの途中のファイルが残らない（一時ファイルの名前を変える形）。
   5. `openut replay`: 合成のケースで終了コード 0、期待を 1 つ消した `expect.toml` で終了コード 1。`--set rules.r1.count=1000` で R1 が出なくなる。`--set rules.r5.enabled=true` で R5 が数えられる。`--format toml` の出力を `expect.toml` として読み直せる。
@@ -264,8 +279,8 @@ openut-hublog = { path = "crates/openut-hublog" }
 
 ### M1-13 受け入れの基準のテスト（実物のログ）
 
-- **範囲**: `tests/replay/hub-2026-11-22-27/expect.toml`、`tests/replay.rs`（テスト関数を足す）。ログそのものは PM が入れる（L-2）。
-- **中身**: 10.4。しきい値を 6.1 の決め方で決め、R1 がちょうど 4 回、受け入れの基準の時刻に出ることを確かめる。決めた値と、ほかの規則の検出の数を PR の説明に書く（設計の表を直すかは PM が決める）。
+- **範囲**: `tests/replay/hub-<日付の範囲>/expect.toml`（名前は `m1-watcher.md` の 10.1）、`tests/replay.rs`（テスト関数を足す）。ログそのもの（サーバーとドライバーのファイル）は PM が入れる（L-2）。
+- **中身**: 10.4。しきい値を 6.1 の決め方で決め、R1 がちょうど 4 回、受け入れの基準の時刻に出ることを確かめる。決めた値と、ほかの規則の検出の数、`summary.gap_s` を変えたときの `unobserved_s`（8.1）、`power_offs` と R4 の数、5.1 の「順序の合わない出来事」の数（U-5 の確かめ）を PR の説明に書く（設計の表を直すかは PM が決める）。
 - **受け入れ条件とテスト**: 再生テストで R1 がちょうど 4 回（2026-11-26 01:43、2026-11-27 22:53・22:56・22:59）。
 - **順序**: M1-6 のあと、かつ PM が匿名化した実物のログを `tests/replay/hub-2026-11-22-27/` に入れたあと（PM が依頼を出す）。
 
@@ -275,8 +290,11 @@ openut-hublog = { path = "crates/openut-hublog" }
 
 | 番号 | きっかけ | ファイル | 直すこと | 確認の条件 |
 |---|---|---|---|---|
-| （なし） | | | | |
+| F-1 | #18（記録の終わりは CRLF。本文の中に LF。`m1-watcher.md` の 4.2） | `crates/openut-hublog/src/decode.rs` | ファイルごとの改行の型（最初の `\n` の直前が `\r` なら CRLF の型、でなければ LF の型）。CRLF の型では `\r\n` だけで記録を切り、`\r` の付かない `\n` と、`\n` の続かない `\r` を本文に残す。LF の型は今と同じ。決めた型を返す関数（匿名化の道具が使う）。64 KiB の切りは、本文の中の LF を含めて数える | (a) UTF-16LE・BOM・CRLF で、`[...] Wait for HID data got timeout.\n` + CRLF が 1 件になり、本文の末尾が `\n`。(b) `Save map creation time: Wed Nov 25 21:00:00 2026\n.` + CRLF が 1 件。(c) LF だけの UTF-8 は今と同じに切れる。(d) `\r` と `\n` のあいだ、本文の中の `\n` と次の `\r\n` のあいだで読み取りが切れても、1 バイトずつ渡しても、同じ結果。(e) 先頭が `# Log begin at ...` + CRLF のファイルが CRLF の型になる。(f) 今のテスト（擬似乱数を含む）が通る（変える場合は理由を PR に書く） |
+| F-2 | #18（行の先頭の形。`#` の行。4.3） | `crates/openut-hublog/src/header.rs` | `ParsedLine::Meta`（`#` で始まる行）。`Entry::offset_known` と、ずれが読めない・ないときに 0 で続ける決まり（4.3 の 3） | (a) 見本の行が読める: 関数名が空（`INFO ] [13328] ==================== Log Start ====================`）、本文が空（`ERROR BiCollector::GetPcSerialNumber] [3976] `）、`::` が 2 つ・`~` の入った関数名、本文が `[2] OET OVERSPEED!` で始まる行、本文の先頭の空白 2 つ（ドングルの行）、末尾の空白が残る。(b) `# Log begin at 2026-11-28 00:00:53.613`、`# WriteTimeInterval=5000`、`# Log rotate by date at 2026-11-27 00:01:03.40` が `Meta`。(c) ずれが `+5.5` → 0・`offset_known = false`。ずれの語がない `[2026-11-27 22:53:10.123 0xF88 INFO f] [1] x` → 0・`false`、`level` が `INFO`。今の `NoHeader` のテストのうち、ずれだけがおかしい行（`... 9]`、`+5:60`）は `Entry`（`offset_known = false`）に変える |
+| F-3 | #18（合成のケースの語句を見本に合わせる。10.1） | `crates/openut-hublog/src/replay.rs`、`tests/replay.rs`、`tests/replay/synthetic-*/`、`tests/README.md` | `ReplayCounts` に `meta` を足す（`Meta` を `no_header` に数えない）。3 つの合成のケースの行を、見本（`hub-log-samples.md`）の形に書き直す（10.1 の決まり。`# Log begin at` の見出し、関数名とレベル、`Tracker (N) - switch to HOST mode.`、番号のない `Wifi info is not yet available.`（`WARN`）と `Got host wifi info.`、`Query wifi from tracker N`、状態の行、`(SteamVR: S)(N)[K]Pose status is changed: ...`、`GetDeviceInfoAndResponse` の行）。`synthetic-utf16` は書き直した `synthetic-normal-start` を UTF-16LE・BOM・CRLF で保存し直す。各ケースの `README.md` と `expect.toml`（時刻を変えたら）。`tests/README.md` の W-1 と W-4 の行に、ドライバーのファイルと見本の行のテストを書き足す | 3 つのケースで `no_header` が 0、`meta` が見出しの行の数。`synthetic-utf16` と `synthetic-normal-start` の記録の数が同じ。`synthetic-r1-second-host-command` の `expect.toml` の R1 の時刻とトラッカー（ホストの番号）が、書き直した行と合う（README に計算を書く）。`verify.sh` が通る |
 
-ログの書式のメモ（#7）のあとの追補で、M1-3 の語句（`crates/openut-hublog/src/record.rs`）と、合成のケース（`tests/replay/synthetic-*`）の行を直す項目が、ここに足される見込み。
+- 順序: F-1 と F-2 は、どちらからでもよい（同じ PR でもよい）。F-3 は F-2 のあと（`Meta` を数えるため）。M1-3 は F-1・F-2 のあと、M1-6 は F-3 のあと（2 章の各項目の「順序」）。
+- 匿名化の道具（#8）は、F-1 の前に作ると、本文の中の LF で記録が割れたまま書き戻す（行の形が変わる）。#8 の PR が F-1 より先に入る場合は、F-1 のあとに、道具の出力で記録の数と形が変わらないことを確かめるテストを足す（PM が #8 か F-1 の Issue に書く）。
 
-**PM の判断を待っている既定**（`m1-watcher.md` の 14 章）: R3 をクライアントにも当てるか（`rules.r3.clients`）、R5 を足すか（`rules.r5.enabled`）。M1 の実装は、判断の前の既定（どちらも `false`）で作る。PM が認めたら、設計担当が追補でこの表に「`crates/openut-core/src/rules` の `EngineConfig` の既定を `true` にし、既定の値を確かめるテストを直す」という行を足す。
+**判断を待っている既定**（`m1-watcher.md` の 14 章）: R3 をクライアントにも当てるか（`rules.r3.clients`。PM）、R5 を足すか（`rules.r5.enabled`。PM）、電源オフの予告のあった切断を R4 から除くか（`rules.r4.exclude_power_off`。オーナーの試しのあと PM）。M1 の実装は、判断の前の既定（`r3.clients` と `r5.enabled` は `false`、`r4.exclude_power_off` は `true`）で作る。決まったら、設計担当が追補でこの表に「`crates/openut-core/src/rules` の `EngineConfig` の既定を変え、既定の値を確かめるテストを直す」という行を足す。
