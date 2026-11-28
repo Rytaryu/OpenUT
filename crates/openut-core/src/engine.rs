@@ -120,6 +120,7 @@ pub struct Engine {
     last_server_row: Option<LogTime>,
     offset: UtcOffset,
     detections: Vec<Detection>,
+    detection_offsets: Vec<UtcOffset>,
     notices: NoticeScheduler,
     summaries: Summaries,
     closed_days: Vec<Summary>,
@@ -145,6 +146,7 @@ impl Engine {
             last_server_row: None,
             offset: UtcOffset(0),
             detections: Vec::new(),
+            detection_offsets: Vec::new(),
             summaries: Summaries::default(),
             closed_days: Vec::new(),
             stats: EngineStats::default(),
@@ -320,6 +322,7 @@ impl Engine {
         self.closed_days.clear();
         self.offset = UtcOffset(0);
         self.detections.clear();
+        self.detection_offsets.clear();
         self.notices.rebuild();
         self.stats = EngineStats {
             pushes: self.stats.pushes,
@@ -328,6 +331,7 @@ impl Engine {
     }
 
     pub fn drain(&mut self) -> Vec<Output> {
+        self.detection_offsets.clear();
         let notices = self.notices.drain();
         let pushes = notices.iter().filter(|notice| notice.push).count() as u64;
         self.stats.pushes = self.stats.pushes.saturating_add(pushes);
@@ -344,6 +348,11 @@ impl Engine {
             .collect()
     }
 
+    /// The log offsets of pending detections, in the order returned by `drain`.
+    pub fn pending_detection_offsets(&self) -> &[UtcOffset] {
+        &self.detection_offsets
+    }
+
     pub fn live_notices(&self) -> Vec<Notice> {
         self.notices.live()
     }
@@ -354,6 +363,16 @@ impl Engine {
             day.pushes = self.stats.pushes;
         }
         days
+    }
+
+    /// Closes overdue daily summaries without moving rule or observation time.
+    pub fn close_idle_summaries(&mut self, wall: LogTime) {
+        if let Some(before) = wall.0.checked_sub(1) {
+            self.closed_days.extend(
+                self.summaries
+                    .close_days(LogTime(before), self.cfg.summary.finalize_delay_s),
+            );
+        }
     }
 
     /// Freezes pending prior days at end of input without advancing time.
@@ -413,6 +432,7 @@ impl Engine {
 
     fn record_detections(&mut self, first: usize) {
         for detection in &self.detections[first..] {
+            self.detection_offsets.push(self.offset);
             self.summaries.detection(detection, self.offset);
             self.notices.advance_to(detection.at);
             let snapshot = self.state.snapshot(detection.at);

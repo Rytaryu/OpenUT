@@ -1,18 +1,26 @@
 //! Read-only filesystem input for the Hub log tailer.
 
-use std::fs::{self, OpenOptions};
+use std::fs::{self, File, OpenOptions};
 use std::io::{self, ErrorKind, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 use openut_hublog::tail::{LogFile, LogSource};
 
 pub struct FsLogSource {
-    root: PathBuf,
+    root: Option<PathBuf>,
 }
 
 impl FsLogSource {
     pub fn new(root: impl Into<PathBuf>) -> Self {
-        Self { root: root.into() }
+        Self::from_optional(Some(root.into()))
+    }
+
+    pub(crate) fn from_optional(root: Option<PathBuf>) -> Self {
+        Self { root }
+    }
+
+    pub(crate) fn has_root(&self) -> bool {
+        self.root.is_some()
     }
 }
 
@@ -20,7 +28,10 @@ impl LogSource for FsLogSource {
     type Error = io::Error;
 
     fn list(&self) -> io::Result<Vec<LogFile>> {
-        let entries = match fs::read_dir(&self.root) {
+        let Some(root) = &self.root else {
+            return Ok(Vec::new());
+        };
+        let entries = match fs::read_dir(root) {
             Ok(entries) => entries,
             Err(error) if error.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
             Err(error) => return Err(error),
@@ -31,9 +42,19 @@ impl LogSource for FsLogSource {
             let Ok(name) = entry.file_name().into_string() else {
                 continue;
             };
-            let metadata = match entry.metadata() {
+            if openut_hublog::tail::parse_log_name(&name).is_none() {
+                continue;
+            }
+            match entry.file_type() {
+                Ok(kind) if !kind.is_file() => continue,
+                Err(error) if error.kind() == ErrorKind::NotFound => continue,
+                Err(error) => return Err(error),
+                Ok(_) => {}
+            }
+            // Observe length through a read-only handle so rotation or a rename
+            // cannot combine one file's name with another handle's byte count.
+            let metadata = match File::open(entry.path()).and_then(|file| file.metadata()) {
                 Ok(metadata) => metadata,
-                // The Hub can remove or rotate a file while listing the folder.
                 Err(error) if error.kind() == ErrorKind::NotFound => continue,
                 Err(error) => return Err(error),
             };
@@ -54,7 +75,10 @@ impl LogSource for FsLogSource {
                 "a log name must be a single filename",
             ));
         }
-        let path = self.root.join(name);
+        let Some(root) = &self.root else {
+            return Ok(None);
+        };
+        let path = root.join(name);
         match fs::symlink_metadata(&path) {
             Ok(metadata) if metadata.is_file() => {}
             Ok(_) => return Ok(None),

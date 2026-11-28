@@ -12,6 +12,8 @@ use openut::{
 use openut_anonymize::{Batch, anonymize};
 use openut_hublog::decode::decode_utf16le_text;
 
+mod watcher;
+
 const MAP_NAME: &str = "openut-anonymize-map.tsv";
 const USAGE: &str = "openut anonymize --out-dir DIR --map-dir DIR [--pc-name NAME] LOG...";
 const RUN_USAGE: &str = "openut run [--config FILE]";
@@ -20,6 +22,9 @@ const DRIVER_USAGE: &str = "openut driver register | openut driver unregister";
 pub(crate) fn dispatch(mut args: impl Iterator<Item = OsString>) -> Result<(), String> {
     match args.next().as_deref().and_then(std::ffi::OsStr::to_str) {
         Some("anonymize") => run_anonymize(args),
+        Some("watch") => watcher::watch(args),
+        Some("replay") => watcher::replay(args),
+        Some("summarize") => watcher::summarize(args),
         Some("run") => match args.next().as_deref() {
             None => run::run(None),
             Some(flag) if (flag == "--help" || flag == "-h") && args.next().is_none() => {
@@ -60,10 +65,13 @@ pub(crate) fn dispatch(mut args: impl Iterator<Item = OsString>) -> Result<(), S
             println!("{result}");
             Ok(())
         }
-        Some("--help" | "-h") => {
+        Some("--help" | "-h") | None => {
             println!(
-                "OpenUT {}\n{RUN_USAGE}\n{DRIVER_USAGE}\n{USAGE}",
-                openut::VERSION
+                "OpenUT {}\n{RUN_USAGE}\n{DRIVER_USAGE}\n{USAGE}\n{}\n{}\n{}\nopenut --version",
+                openut::VERSION,
+                watcher::WATCH_USAGE,
+                watcher::REPLAY_USAGE,
+                watcher::SUMMARIZE_USAGE,
             );
             Ok(())
         }

@@ -75,11 +75,132 @@ fn drain(follower: &mut LogFollower, now: i64, deadline: Option<i64>) -> Vec<Fol
     std::iter::from_fn(|| follower.next_event(time(now), deadline.map(time))).collect()
 }
 
+fn positions(events: &[FollowEvent]) -> Vec<&RecordPosition> {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            FollowEvent::Record { position, .. } => position.as_ref(),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn positions_survive_the_driver_wait_and_untimed_server_bytes_refresh_growth() {
+    let mut source = MemorySource::default();
+    let mut follower = LogFollower::default();
+    let server_prefix = "# server\n";
+    source.set(SERVER, server_prefix);
+    let driver_entry = line(10, "first driver");
+    let driver_tail = b"broken \xff\n";
+    source.set(DRIVER, [driver_entry.as_bytes(), driver_tail].concat());
+
+    follower.poll(&source, time(15), None).unwrap();
+    assert!(follower.server_found());
+    assert!(follower.server_grew());
+    assert!(!follower.has_pending_server_records());
+    assert_eq!(follower.last_log_time(FileKind::Server), None);
+    let events = drain(&mut follower, 15, None);
+    assert_eq!(positions(&events)[0].end, server_prefix.len() as u64);
+    follower.poll(&source, time(17), None).unwrap();
+    assert!(!follower.server_grew());
+
+    let server_entry = line(20, "first server");
+    source.append(SERVER, &server_entry);
+    follower.poll(&source, time(25), None).unwrap();
+    assert_eq!(follower.last_log_time(FileKind::Server), Some(time(20)));
+    assert_eq!(follower.last_log_time(FileKind::Driver), Some(time(10)));
+    assert!(follower.has_pending_server_records());
+    let events = drain(&mut follower, 25, None);
+    assert!(!follower.has_pending_server_records());
+    let records = positions(&events);
+    let [server, driver, invalid] = records.as_slice() else {
+        panic!("one server and two driver rows");
+    };
+    assert_eq!(
+        (server.name.as_str(), server.end),
+        (SERVER, (server_prefix.len() + server_entry.len()) as u64)
+    );
+    assert_eq!(
+        (driver.name.as_str(), driver.end),
+        (DRIVER, driver_entry.len() as u64)
+    );
+    assert_eq!(
+        (invalid.name.as_str(), invalid.end),
+        (DRIVER, (driver_entry.len() + driver_tail.len()) as u64)
+    );
+    assert_eq!(invalid.decode.replaced_chars, 1);
+}
+
+#[test]
+fn eof_and_new_generations_use_positions_from_their_own_file() {
+    const NEXT: &str = "ViveTrackerServer_20261129.txt";
+    let mut source = MemorySource::default();
+    let mut follower = LogFollower::default();
+    let old = b"# first\nwithout a delimiter";
+    source.set(SERVER, old);
+    follower.poll(&source, time(1), None).unwrap();
+    let first = drain(&mut follower, 1, None);
+    let first_generation = positions(&first)[0].generation;
+
+    source.set(NEXT, b"# new\r\n");
+    follower.poll(&source, time(2), None).unwrap();
+    let rotated = drain(&mut follower, 2, None);
+    let end = positions(&rotated)[0];
+    assert_eq!(
+        (end.name.as_str(), end.end, end.generation),
+        (SERVER, old.len() as u64, first_generation)
+    );
+    follower.poll(&source, time(3), None).unwrap();
+    let next = drain(&mut follower, 3, None);
+    let new = positions(&next)[0];
+    assert_eq!((new.name.as_str(), new.end), (NEXT, 7));
+    assert!(new.generation > first_generation);
+}
+
+#[test]
+fn server_rebuilds_identify_the_affected_file() {
+    let mut source = MemorySource::default();
+    let mut follower = LogFollower::default();
+    source.set(SERVER, "# former\n");
+    follower.poll(&source, time(1), None).unwrap();
+    let first = drain(&mut follower, 1, None);
+    let mut last_generation = positions(&first)[0].generation;
+    for (reason, bytes) in [
+        (RebuildReason::Replaced, Some("# longer replacement\n")),
+        (RebuildReason::Truncated, Some("# new\n")),
+        (RebuildReason::Disappeared, None),
+        (RebuildReason::Restored, Some("# restored\n")),
+    ] {
+        if let Some(bytes) = bytes {
+            source.set(SERVER, bytes);
+        } else {
+            source.files.remove(SERVER);
+        }
+        follower.poll(&source, time(2), None).unwrap();
+        let events = drain(&mut follower, 2, None);
+        assert_eq!(
+            events[0],
+            FollowEvent::Rebuild {
+                file: FileKind::Server,
+                reason,
+                name: Some(SERVER.to_owned()),
+            }
+        );
+        if let Some(bytes) = bytes {
+            let records = positions(&events);
+            assert_eq!(records[0].end, bytes.len() as u64);
+            assert!(records[0].generation > last_generation);
+            last_generation = records[0].generation;
+        }
+    }
+}
+
 fn bodies(events: &[FollowEvent]) -> Vec<(FileKind, &str, bool)> {
     events
         .iter()
         .filter_map(|event| {
-            let FollowEvent::Record { record, late } = event else {
+            let FollowEvent::Record { record, late, .. } = event else {
                 return None;
             };
             let text = match &record.data {
@@ -317,8 +438,9 @@ fn rebuilding_a_driver_file_rewinds_both_streams_and_drops_partial_decoding() {
         events.first(),
         Some(FollowEvent::Rebuild {
             file: FileKind::Driver,
-            reason: RebuildReason::Truncated
-        })
+            reason: RebuildReason::Truncated,
+            name: Some(name),
+        }) if name == DRIVER
     ));
     assert_eq!(
         bodies(&events),
@@ -388,6 +510,7 @@ fn a_shorter_replacement_during_catch_up_rewinds_both_streams() {
         Some(&FollowEvent::Rebuild {
             file: FileKind::Driver,
             reason: RebuildReason::Replaced,
+            name: Some(DRIVER.to_owned()),
         }),
     );
     assert!(bodies(&events).contains(&(FileKind::Server, "server from the beginning", false)));

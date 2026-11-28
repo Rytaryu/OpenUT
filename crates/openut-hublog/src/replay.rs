@@ -44,6 +44,8 @@ impl ReplayCounts {
 pub struct ReplayResult {
     pub counts: ReplayCounts,
     pub detections: Vec<Detection>,
+    /// The log offset at each detection, in the same order as `detections`.
+    pub detection_offsets: Vec<UtcOffset>,
     pub stats: EngineStats,
     pub snapshot: Snapshot,
     pub summaries: Vec<Summary>,
@@ -74,10 +76,22 @@ pub fn replay_with_flush(
     cfg: EngineConfig,
     flush_s: u64,
 ) -> ReplayResult {
+    replay_with_options(files, cfg, flush_s, false)
+}
+
+/// Replay saved logs with optional catch-up delivery semantics.
+pub fn replay_with_options(
+    files: &[ReplayFile<'_>],
+    cfg: EngineConfig,
+    flush_s: u64,
+    catch_up: bool,
+) -> ReplayResult {
     let mut input = ReplayInput::from_files(files);
     let mut engine = Engine::new(cfg);
+    engine.set_catching_up(catch_up);
     let mut stats = EngineStats::default();
     let mut detections = Vec::new();
+    let mut detection_offsets = Vec::new();
     let mut summaries = Vec::new();
 
     while let Some((source, record)) = input.next_record() {
@@ -99,7 +113,13 @@ pub fn replay_with_flush(
                 record_file_source(&mut engine, source, date, meta, decode);
             }
             ReplayRecord::Rebuild(_) => {
-                collect_segment(&mut engine, &mut detections, &mut summaries, &mut stats);
+                collect_segment(
+                    &mut engine,
+                    &mut detections,
+                    &mut detection_offsets,
+                    &mut summaries,
+                    &mut stats,
+                );
                 engine.rebuild();
             }
         }
@@ -110,13 +130,21 @@ pub fn replay_with_flush(
         let millis = i64::try_from(flush_s.saturating_mul(1_000)).unwrap_or(i64::MAX);
         engine.advance_to(LogTime(last.0.saturating_add(millis)));
     }
+    engine.set_catching_up(false);
     engine.finish_summaries();
-    collect_segment(&mut engine, &mut detections, &mut summaries, &mut stats);
+    collect_segment(
+        &mut engine,
+        &mut detections,
+        &mut detection_offsets,
+        &mut summaries,
+        &mut stats,
+    );
     stats.pushes = engine.stats().pushes;
 
     ReplayResult {
         counts: input.counts,
         detections,
+        detection_offsets,
         stats,
         snapshot: engine.snapshot(),
         summaries,
@@ -128,9 +156,11 @@ pub fn replay_with_flush(
 fn collect_segment(
     engine: &mut Engine,
     detections: &mut Vec<Detection>,
+    detection_offsets: &mut Vec<UtcOffset>,
     summaries: &mut Vec<Summary>,
     stats: &mut EngineStats,
 ) {
+    detection_offsets.extend_from_slice(engine.pending_detection_offsets());
     for output in engine.drain() {
         match output {
             Output::Detection(detection) => detections.push(detection),
