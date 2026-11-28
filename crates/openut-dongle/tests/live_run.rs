@@ -1,0 +1,769 @@
+use std::collections::VecDeque;
+use std::io::Cursor;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
+
+use openut_dongle::record::{
+    Device, EndReason, Header, Mode, Note, RawReport, Record, RecordReader, RecordWriter,
+    TrackerLabel,
+};
+use openut_dongle::replay::Replay;
+use openut_dongle::run::{
+    Clock, Notice, ReadOutcome, ReportSource, RunOptions, RunResult, SourceItem, Stamp, main_loop,
+    reader_loop, run_probe, run_record,
+};
+use openut_dongle::tracker::{Link, Transition};
+
+const BASE_WALL_MS: i64 = 10_000;
+
+fn wall_ms(mono_us: u64) -> i64 {
+    BASE_WALL_MS + i64::try_from(mono_us / 1_000).expect("synthetic time fits in an i64")
+}
+
+fn header(mode: Mode) -> Header {
+    Header {
+        tool: "synthetic-live-test".into(),
+        mode,
+        started_wall_ms: BASE_WALL_MS,
+        device: Device {
+            vid: 0,
+            pid: 0,
+            interface: 0,
+            usage_page: 0,
+            usage: 0,
+        },
+        server_running_at_start: mode == Mode::ProbeSharing,
+        anonymized: false,
+    }
+}
+
+fn pose(tracker: u8, sequence: u16) -> Vec<u8> {
+    let mut bytes = vec![0x28];
+    bytes.extend_from_slice(&sequence.to_le_bytes());
+    bytes.extend_from_slice(&[0, tracker, 0, 0, 0, 0, 0x10, 0x01, 37]);
+    let mut payload = [0; 37];
+    payload[0] = tracker;
+    payload[14..16].copy_from_slice(&0x3c00_u16.to_le_bytes());
+    payload[36] = 2;
+    bytes.extend_from_slice(&payload);
+    bytes
+}
+
+fn rows(recording: &[u8]) -> Vec<Record> {
+    let mut reader = RecordReader::new(Cursor::new(recording)).expect("read synthetic header");
+    let mut rows = Vec::new();
+    while let Some(row) = reader.read_record().expect("read synthetic row") {
+        rows.push(row);
+    }
+    assert_eq!(reader.stats().time_reversed, 0);
+    assert_eq!(reader.stats().malformed, 0);
+    rows
+}
+
+fn replay_transitions(recording: &[u8]) -> Vec<Transition> {
+    let mut replay = Replay::new(Cursor::new(recording)).expect("open replay");
+    let mut transitions = Vec::new();
+    while let Some(step) = replay.read_step().expect("replay synthetic row") {
+        transitions.extend(step.transitions);
+    }
+    assert_eq!(replay.stats().time_reversed, 0);
+    transitions
+}
+
+fn assert_ended(recording: &[u8], at_us: u64, note: Note, reason: EndReason) {
+    let rows = rows(recording);
+    assert_eq!(
+        rows[rows.len() - 2],
+        Record::Note {
+            mono_us: at_us,
+            wall_ms: wall_ms(at_us),
+            text: note,
+        }
+    );
+    assert!(matches!(
+        rows.last(),
+        Some(Record::Footer {
+            mono_us,
+            wall_ms: Some(wall),
+            reason: end,
+            time_reversed: 0,
+            ..
+        }) if (*mono_us, *wall, *end) == (at_us, wall_ms(at_us), reason)
+    ));
+}
+
+fn stamp(mono_us: u64) -> Stamp {
+    Stamp {
+        mono_us,
+        wall_ms: wall_ms(mono_us),
+    }
+}
+
+struct FakeClock(Arc<AtomicU64>);
+
+impl Clock for FakeClock {
+    fn now(&mut self) -> Stamp {
+        stamp(self.0.load(Ordering::Relaxed))
+    }
+}
+
+struct FakeSource {
+    time: Arc<AtomicU64>,
+    reads: VecDeque<(u64, ReadOutcome)>,
+}
+
+impl ReportSource for FakeSource {
+    fn read_timeout(&mut self, timeout: Duration) -> ReadOutcome {
+        assert!(!timeout.is_zero() && timeout <= Duration::from_millis(100));
+        let Some((at_us, read)) = self.reads.pop_front() else {
+            return ReadOutcome::Removed;
+        };
+        self.time.store(at_us, Ordering::Relaxed);
+        read
+    }
+}
+
+fn script(reads: impl IntoIterator<Item = (u64, ReadOutcome)>) -> (FakeSource, FakeClock) {
+    let time = Arc::new(AtomicU64::new(0));
+    (
+        FakeSource {
+            time: Arc::clone(&time),
+            reads: reads.into_iter().collect(),
+        },
+        FakeClock(time),
+    )
+}
+
+fn record_with(
+    reads: impl IntoIterator<Item = (u64, ReadOutcome)>,
+    duration: Duration,
+    guard: impl FnMut() -> bool,
+) -> Vec<u8> {
+    let mut writer = RecordWriter::new(Vec::new(), &header(Mode::Record)).expect("write header");
+    let (source, clock) = script(reads);
+    run_record(
+        source,
+        clock,
+        &mut writer,
+        stamp(0),
+        duration,
+        guard,
+        |_| Ok(()),
+    )
+    .expect("write synthetic recording");
+    writer.into_inner()
+}
+
+#[test]
+fn record_writes_a_note_and_footer_when_the_duration_ends() {
+    let recording = record_with(
+        [
+            (1_000_000, ReadOutcome::Idle),
+            (2_000_000, ReadOutcome::Idle),
+        ],
+        Duration::from_secs(2),
+        || false,
+    );
+    assert_ended(&recording, 2_000_000, Note::Duration, EndReason::Duration);
+}
+
+#[test]
+fn record_writes_a_note_and_footer_when_the_server_appears() {
+    let mut checks = 0;
+    let recording = record_with(
+        [
+            (1_000_000, ReadOutcome::Idle),
+            (2_000_000, ReadOutcome::Idle),
+            (3_000_000, ReadOutcome::Idle),
+            (4_000_000, ReadOutcome::Idle),
+        ],
+        Duration::from_secs(6),
+        || {
+            checks += 1;
+            checks == 2
+        },
+    );
+    assert_eq!(checks, 2);
+    assert_ended(
+        &recording,
+        4_000_000,
+        Note::ServerAppeared,
+        EndReason::ServerAppeared,
+    );
+}
+
+#[test]
+fn record_writes_the_timestamp_and_code_of_a_read_error() {
+    let recording = record_with(
+        [
+            (100_000, ReadOutcome::Idle),
+            (550_000, ReadOutcome::ReadError(21)),
+        ],
+        Duration::from_secs(2),
+        || false,
+    );
+    assert_ended(
+        &recording,
+        550_000,
+        Note::ReadError(21),
+        EndReason::ReadError,
+    );
+}
+
+#[test]
+fn a_stalled_reader_checks_the_server_without_advancing_tracker_time() {
+    let (tx, rx) = mpsc::channel();
+    tx.send(SourceItem::Report(RawReport {
+        mono_us: 10_000_000,
+        wall_ms: wall_ms(10_000_000),
+        bytes: pose(1, 1),
+    }))
+    .expect("queue the first report");
+    // Keep the producer open with no more items to distinguish a stall from disconnection.
+    let mut writer = RecordWriter::new(Vec::new(), &header(Mode::Record)).expect("write header");
+    let mut checks = 0;
+    let mut stalls = 0;
+    let result = main_loop(
+        &rx,
+        &AtomicBool::new(false),
+        &mut writer,
+        RunOptions {
+            start: stamp(0),
+            duration: Duration::from_secs(20),
+            mode: Mode::Record,
+        },
+        || {
+            checks += 1;
+            checks == 2
+        },
+        |notice| {
+            if let Notice::Stalled = notice {
+                stalls += 1;
+            }
+            Ok(())
+        },
+    )
+    .expect("finish the stalled capture");
+    drop(tx);
+
+    assert_eq!(stalls, 1);
+    assert_eq!(result.table.now_us(), 10_000_000);
+    assert_eq!(
+        result
+            .table
+            .view(TrackerLabel('A'))
+            .expect("tracker A")
+            .link,
+        Link::Receiving
+    );
+    assert_ended(
+        &writer.into_inner(),
+        10_000_000,
+        Note::ServerAppeared,
+        EndReason::ServerAppeared,
+    );
+}
+
+fn collect_items(reads: impl IntoIterator<Item = (u64, ReadOutcome)>) -> Vec<SourceItem> {
+    let (source, clock) = script(reads);
+    let mut items = Vec::new();
+    reader_loop(
+        source,
+        clock,
+        |item| {
+            items.push(item);
+            true
+        },
+        &AtomicBool::new(false),
+    );
+    items
+}
+
+fn run_main(
+    stream: &mpsc::Receiver<SourceItem>,
+    stop: &AtomicBool,
+    settings: RunOptions,
+) -> (Vec<u8>, Vec<Transition>, RunResult) {
+    let mut writer = RecordWriter::new(Vec::new(), &header(settings.mode)).expect("write header");
+    let mut transitions = Vec::new();
+    let state = main_loop(
+        stream,
+        stop,
+        &mut writer,
+        settings,
+        || false,
+        |notice| {
+            if let Notice::Transition(change) = notice {
+                transitions.push(change);
+            }
+            Ok(())
+        },
+    )
+    .expect("consume recorded stream");
+    (writer.into_inner(), transitions, state)
+}
+
+fn run_queued(
+    items: Vec<SourceItem>,
+    settings: RunOptions,
+) -> (Vec<u8>, Vec<Transition>, RunResult) {
+    let (tx, rx) = mpsc::channel();
+    for item in items {
+        tx.send(item).expect("enqueue synthetic item");
+    }
+    drop(tx);
+    run_main(&rx, &AtomicBool::new(false), settings)
+}
+
+fn ticks(recording: &[u8]) -> Vec<u64> {
+    rows(recording)
+        .iter()
+        .filter_map(|row| match row {
+            Record::Tick { mono_us, .. } => Some(*mono_us),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn idle_polls_keep_ticks_moving_and_expire_all_trackers_at_the_same_deadline() {
+    let items = collect_items(
+        (1..=3)
+            .map(|tracker| {
+                (
+                    10_000_000,
+                    ReadOutcome::Report(pose(tracker, u16::from(tracker))),
+                )
+            })
+            .chain((1..=30).map(|poll| (10_000_000 + poll * 100_000, ReadOutcome::Idle))),
+    );
+    assert_eq!(
+        items
+            .iter()
+            .filter_map(|item| match item {
+                SourceItem::Idle(at) => Some(at.mono_us),
+                _ => None,
+            })
+            .collect::<Vec<_>>(),
+        (1..=30)
+            .map(|poll| 10_000_000 + poll * 100_000)
+            .collect::<Vec<_>>()
+    );
+    let (recording, transitions, result) = run_queued(
+        items,
+        RunOptions {
+            start: stamp(0),
+            duration: Duration::from_secs(13),
+            mode: Mode::Record,
+        },
+    );
+    assert_eq!(
+        ticks(&recording),
+        [10_000_000, 11_000_000, 12_000_000, 13_000_000]
+    );
+    assert_eq!(result.reason, EndReason::Duration);
+    let silent_changes: Vec<_> = transitions
+        .iter()
+        .filter(|change| change.to == Link::Silent)
+        .copied()
+        .collect();
+    assert_eq!(
+        silent_changes,
+        ['A', 'B', 'C'].map(|label| Transition {
+            at_us: 12_000_000,
+            tracker: TrackerLabel(label),
+            from: Link::Receiving,
+            to: Link::Silent,
+        })
+    );
+    for tracker in result.table.views() {
+        assert_eq!(tracker.link, Link::Silent);
+        assert_eq!(tracker.pose_rate_hz, 0.0);
+    }
+    assert_eq!(replay_transitions(&recording), transitions);
+}
+
+#[test]
+fn processing_a_backlog_matches_per_item_processing_and_replay() {
+    let reads = || {
+        [
+            (10_000_000, ReadOutcome::Report(pose(1, 1))),
+            (11_990_000, ReadOutcome::Report(pose(1, 2))),
+            (12_100_000, ReadOutcome::Idle),
+        ]
+    };
+    let settings = RunOptions {
+        start: stamp(0),
+        duration: Duration::from_millis(12_100),
+        mode: Mode::Record,
+    };
+    let (queued, queued_changes, queued_result) = run_queued(collect_items(reads()), settings);
+    let (per_item, per_item_changes, per_item_result) = thread::scope(|scope| {
+        let (tx, rx) = mpsc::sync_channel(0);
+        let (source, clock) = script(reads());
+        let stop = Arc::new(AtomicBool::new(false));
+        let reader_stop = Arc::clone(&stop);
+        let reader = scope.spawn(move || {
+            reader_loop(source, clock, |item| tx.send(item).is_ok(), &reader_stop);
+        });
+        let result = run_main(&rx, &stop, settings);
+        drop(rx);
+        reader.join().expect("join unbuffered reader");
+        result
+    });
+
+    assert_eq!(queued, per_item);
+    assert_eq!(ticks(&queued), [10_000_000, 11_990_000]);
+    assert_eq!(queued_changes, per_item_changes);
+    assert_eq!(queued_changes, replay_transitions(&queued));
+    assert_eq!(
+        queued_changes,
+        [Transition {
+            at_us: 10_000_000,
+            tracker: TrackerLabel('A'),
+            from: Link::NotSeen,
+            to: Link::Receiving,
+        }]
+    );
+    assert_eq!(queued_result.time_reversed, 0);
+    assert_eq!(per_item_result.time_reversed, 0);
+}
+
+#[test]
+fn probe_opens_only_after_baseline_and_records_both_windows_in_order() {
+    let duration = Duration::from_secs(2);
+    let (source, clock) = script([
+        (2_100_000, ReadOutcome::Report(pose(1, 1))),
+        (3_950_000, ReadOutcome::Idle),
+        (4_000_000, ReadOutcome::Report(pose(1, 2))),
+        (4_500_000, ReadOutcome::Report(pose(2, 3))),
+    ]);
+    let now = Arc::clone(&clock.0);
+    let mut writer = RecordWriter::new(Vec::new(), &header(Mode::ProbeSharing)).expect("header");
+    let result = run_probe(
+        &mut writer,
+        clock,
+        duration,
+        |wait| {
+            assert_eq!(wait, duration);
+            assert_eq!(now.load(Ordering::Relaxed), 0);
+            now.store(2_000_000, Ordering::Relaxed);
+        },
+        || true,
+        || {
+            assert_eq!(now.load(Ordering::Relaxed), 2_000_000);
+            Ok(source)
+        },
+        |_| Ok(()),
+    )
+    .expect("write synthetic probe record");
+
+    assert_eq!(now.load(Ordering::Relaxed), 4_000_000);
+    let recorded = rows(&writer.into_inner());
+    let mut report_times = Vec::new();
+    let mut windows = Vec::new();
+    for row in &recorded {
+        match row {
+            Record::Input(report) => report_times.push(report.mono_us),
+            Record::Note { mono_us, text, .. }
+                if matches!(
+                    text,
+                    Note::WindowBaseStart
+                        | Note::WindowBaseEnd
+                        | Note::WindowProbeStart
+                        | Note::WindowProbeEnd
+                ) =>
+            {
+                windows.push((*mono_us, *text));
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(result.end, stamp(4_000_000));
+    assert_eq!(result.reason, EndReason::Duration);
+    assert_eq!(result.stats.reports, 2);
+    assert_eq!(report_times, [2_100_000, 4_000_000]);
+    assert_eq!(
+        windows,
+        [
+            (0, Note::WindowBaseStart),
+            (2_000_000, Note::WindowBaseEnd),
+            (2_000_000, Note::WindowProbeStart),
+            (4_000_000, Note::WindowProbeEnd),
+        ]
+    );
+    assert!(
+        recorded
+            .windows(2)
+            .all(|pair| pair[0].mono_us() <= pair[1].mono_us())
+    );
+}
+
+#[test]
+fn probe_reads_and_releases_the_device_while_startup_display_is_blocked() {
+    const WAIT: Duration = Duration::from_secs(3);
+
+    struct GatedSource {
+        source: FakeSource,
+        start: Option<mpsc::Receiver<()>>,
+        dropped_at: mpsc::Sender<u64>,
+    }
+
+    impl ReportSource for GatedSource {
+        fn read_timeout(&mut self, timeout: Duration) -> ReadOutcome {
+            if let Some(start) = self.start.take() {
+                start
+                    .recv_timeout(WAIT)
+                    .expect("startup display should release the first read");
+            }
+            self.source.read_timeout(timeout)
+        }
+    }
+
+    impl Drop for GatedSource {
+        fn drop(&mut self) {
+            let _ = self
+                .dropped_at
+                .send(self.source.time.load(Ordering::Relaxed));
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    enum StartupNotice {
+        WindowStart,
+        Opened,
+    }
+
+    let expected_reports = [
+        (1_100_000, pose(1, 1)),
+        (1_100_000, pose(2, 2)),
+        (1_990_000, pose(1, 3)),
+    ];
+    let deadline = 2_000_000;
+    let capture = |pause: Option<StartupNotice>| {
+        let (source, clock) = script(
+            expected_reports
+                .iter()
+                .map(|(at, bytes)| (*at, ReadOutcome::Report(bytes.clone())))
+                .chain([
+                    (deadline, ReadOutcome::Idle),
+                    (2_500_000, ReadOutcome::Report(pose(3, 4))),
+                ]),
+        );
+        let now = Arc::clone(&clock.0);
+        let (start_reader, start) = mpsc::channel();
+        let (dropped_at, device_closed) = mpsc::channel();
+        let source = GatedSource {
+            source,
+            start: Some(start),
+            dropped_at,
+        };
+        let mut start_reader = Some(start_reader);
+        let release_at = pause.unwrap_or(StartupNotice::Opened);
+        let mut writer =
+            RecordWriter::new(Vec::new(), &header(Mode::ProbeSharing)).expect("header");
+        let result = run_probe(
+            &mut writer,
+            clock,
+            Duration::from_secs(1),
+            |_| now.store(1_000_000, Ordering::Relaxed),
+            || true,
+            || Ok(source),
+            |notice| {
+                if matches!(
+                    (release_at, notice),
+                    (
+                        StartupNotice::WindowStart,
+                        Notice::Window {
+                            note: Note::WindowProbeStart,
+                            ..
+                        }
+                    ) | (StartupNotice::Opened, Notice::ProbeOpened)
+                ) {
+                    start_reader
+                        .take()
+                        .expect("one startup notice")
+                        .send(())
+                        .expect("release the first read");
+                    if pause.is_some() {
+                        assert_eq!(
+                            device_closed
+                                .recv_timeout(WAIT)
+                                .expect("reader should close the source before display returns"),
+                            deadline,
+                        );
+                        now.store(2_500_000, Ordering::Relaxed);
+                    }
+                }
+                Ok(())
+            },
+        )
+        .expect("write synthetic probe record");
+
+        assert_eq!(result.end, stamp(deadline));
+        assert_eq!(result.reason, EndReason::Duration);
+        assert_eq!(result.stats.reports, expected_reports.len() as u64);
+        writer.into_inner()
+    };
+
+    let normal = capture(None);
+    let reports: Vec<_> = rows(&normal)
+        .into_iter()
+        .filter_map(|row| match row {
+            Record::Input(report) => Some((report.mono_us, report.bytes)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(reports, expected_reports);
+    for notice in [StartupNotice::WindowStart, StartupNotice::Opened] {
+        assert_eq!(capture(Some(notice)), normal);
+    }
+}
+
+#[test]
+fn a_probe_backlog_ends_at_the_deadline_and_counts_only_reports_in_the_window() {
+    let settings = RunOptions {
+        start: stamp(0),
+        duration: Duration::from_secs(1),
+        mode: Mode::ProbeSharing,
+    };
+    let deadline = 1_000_000;
+    let before = 900_000;
+    let cases: [(Option<ReadOutcome>, &[u64]); 3] = [
+        (Some(ReadOutcome::Idle), &[before]),
+        (Some(ReadOutcome::Report(pose(1, 2))), &[before, deadline]),
+        (None, &[before]),
+    ];
+    for (at_deadline, expected_reports) in cases {
+        let items = collect_items(
+            [(before, ReadOutcome::Report(pose(1, 1)))]
+                .into_iter()
+                .chain(at_deadline.map(|read| (deadline, read)))
+                .chain([
+                    (2_500_000, ReadOutcome::Report(pose(2, 3))),
+                    (2_600_000, ReadOutcome::ReadError(5)),
+                ]),
+        );
+        let (recording, transitions, result) = run_queued(items, settings);
+        let on_time_end = if expected_reports.len() == 2 {
+            ReadOutcome::Report(pose(1, 2))
+        } else {
+            ReadOutcome::Idle
+        };
+        let (on_time, _, _) = run_queued(
+            collect_items([
+                (before, ReadOutcome::Report(pose(1, 1))),
+                (deadline, on_time_end),
+            ]),
+            settings,
+        );
+
+        assert_eq!(recording, on_time);
+        assert_eq!(result.end, stamp(deadline));
+        assert_eq!(result.reason, EndReason::Duration);
+        assert_eq!(result.stats.reports, expected_reports.len() as u64);
+        assert_eq!(result.table.now_us(), deadline);
+        assert_eq!(transitions, replay_transitions(&recording));
+        let recorded = rows(&recording);
+        let report_times: Vec<_> = recorded
+            .iter()
+            .filter_map(|row| match row {
+                Record::Input(report) => Some(report.mono_us),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(report_times, expected_reports);
+        assert_eq!(
+            &recorded[recorded.len() - 3..],
+            &[
+                Record::Note {
+                    mono_us: deadline,
+                    wall_ms: wall_ms(deadline),
+                    text: Note::Duration,
+                },
+                Record::Note {
+                    mono_us: deadline,
+                    wall_ms: wall_ms(deadline),
+                    text: Note::WindowProbeEnd,
+                },
+                Record::Footer {
+                    mono_us: deadline,
+                    wall_ms: Some(wall_ms(deadline)),
+                    reports: expected_reports.len() as u64,
+                    malformed: 0,
+                    estimated_lost: 0,
+                    reason: EndReason::Duration,
+                    time_reversed: 0,
+                },
+            ],
+        );
+    }
+}
+
+#[test]
+fn a_probe_skips_opening_if_the_server_stops_during_baseline() {
+    let duration = Duration::from_secs(1);
+    let baseline_end = 1_000_000;
+    let (_, clock) = script([]);
+    let now = Arc::clone(&clock.0);
+    let server_running = AtomicBool::new(true);
+    let mut stopped_notices = 0;
+    let mut writer = RecordWriter::new(Vec::new(), &header(Mode::ProbeSharing)).expect("header");
+    let result = run_probe(
+        &mut writer,
+        clock,
+        duration,
+        |wait| {
+            assert_eq!(wait, duration);
+            assert!(server_running.swap(false, Ordering::Relaxed));
+            now.store(baseline_end, Ordering::Relaxed);
+        },
+        || server_running.load(Ordering::Relaxed),
+        || -> Result<FakeSource, i32> { panic!("probe must skip opening") },
+        |notice| {
+            if let Notice::ProbeServerStopped = notice {
+                stopped_notices += 1;
+            }
+            Ok(())
+        },
+    )
+    .expect("record why the probe was skipped");
+
+    assert_eq!(stopped_notices, 1);
+    assert_eq!(result.end, stamp(baseline_end));
+    assert_eq!(result.reason, EndReason::ServerNotRunning);
+    assert_eq!(result.stats.reports, 0);
+    let recorded = rows(&writer.into_inner());
+    assert_eq!(
+        recorded,
+        [
+            Record::Note {
+                mono_us: 0,
+                wall_ms: wall_ms(0),
+                text: Note::WindowBaseStart,
+            },
+            Record::Note {
+                mono_us: baseline_end,
+                wall_ms: wall_ms(baseline_end),
+                text: Note::WindowBaseEnd,
+            },
+            Record::Note {
+                mono_us: baseline_end,
+                wall_ms: wall_ms(baseline_end),
+                text: Note::ProbeServerStopped,
+            },
+            Record::Footer {
+                mono_us: baseline_end,
+                wall_ms: Some(wall_ms(baseline_end)),
+                reports: 0,
+                malformed: 0,
+                estimated_lost: 0,
+                reason: EndReason::ServerNotRunning,
+                time_reversed: 0,
+            },
+        ],
+    );
+}

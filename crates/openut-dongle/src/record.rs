@@ -151,6 +151,7 @@ pub struct OmissionCount {
 pub enum EndReason {
     Duration,
     ServerAppeared,
+    ServerNotRunning,
     ReadError,
     DeviceRemoved,
     Complete,
@@ -166,6 +167,7 @@ pub enum Note {
     WindowBaseEnd,
     WindowProbeStart,
     WindowProbeEnd,
+    ProbeServerStopped,
     OpenFailed(i32),
 }
 
@@ -182,6 +184,7 @@ impl Serialize for Note {
             Self::WindowBaseEnd => "window_base_end",
             Self::WindowProbeStart => "window_probe_start",
             Self::WindowProbeEnd => "window_probe_end",
+            Self::ProbeServerStopped => "probe_server_stopped",
             Self::OpenFailed(code) => {
                 return serializer.collect_str(&format_args!("open_failed:{code}"));
             }
@@ -201,6 +204,7 @@ impl<'de> Deserialize<'de> for Note {
             "window_base_end" => Self::WindowBaseEnd,
             "window_probe_start" => Self::WindowProbeStart,
             "window_probe_end" => Self::WindowProbeEnd,
+            "probe_server_stopped" => Self::ProbeServerStopped,
             _ => {
                 let (kind, code) = word
                     .split_once(':')

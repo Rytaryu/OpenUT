@@ -190,7 +190,8 @@ fn link_name(link: Link) -> &'static str {
     }
 }
 
-fn slam_error_name(code: u32) -> &'static str {
+/// The documented meaning of a received SLAM error code, if known.
+pub fn slam_error_name(code: u32) -> &'static str {
     match code {
         1100 => "カメラなし",
         1121 | 1122 => "カメラの異常",
