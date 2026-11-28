@@ -1,6 +1,6 @@
 # M1 見張り役の設計
 
-VIVE Hub を使ったまま横で動かし、VIVE Hub のトラッカー用サーバーのログを読んで、始まらない・途切れる理由と対処を、その場で知らせる（PRD の 5 章）。最終更新: 2026-11-28（ログの書式のメモに合わせた追補。Issue #18。PR #26 のレビューの指摘への対応を含む）。
+VIVE Hub を使ったまま横で動かし、VIVE Hub のトラッカー用サーバーのログを読んで、始まらない・途切れる理由と対処を、その場で知らせる（PRD の 5 章）。最終更新: 2026-11-28（画面と通知で見せるものの追補。Issue #27。PRD の W-10〜W-12）。
 
 ## 0. 範囲と前提
 
@@ -8,10 +8,11 @@ VIVE Hub を使ったまま横で動かし、VIVE Hub のトラッカー用サ�
 - **メモ（Issue #7）に合わせて直した版**（Issue #18）。直したのは、4.1〜4.8（読み取り、行の種類）、5 章（状態）、6.2 の R1 と R4、8 章（集計）、9 章（設定、フォルダー）、10 章（再生）、14 章。メモは、オーナーの PC 1 台・6 日分・1 つの版のログによる（メモの冒頭）。ほかの版や PC で違っていても止まらないことは、4.7 で守る。
 - PR #26 のレビュー（1 回目）の指摘で直したもの: ずれの読めない行の時刻（4.3 の「ずれの補い」）、ドライバーの記録を待つ決まり（3.7、4.6。R4 の照合の範囲と、追記を待つ時間を分けた）、予告と接続の対応（6.2 の R4）、ホストの根拠を Wi-Fi 情報と別に持つこと（3.5、5.3）、ドングルが抜けたときにドングル経由の台だけを切ること（5.1。接続の経路 `link`）。
 - レビュー（2 回目）の指摘で直したもの: サーバーとドライバーで時間の基準を 1 つにすること（4.3 の「ずれの補い」）、起動・再構築の追いつきの終わりでも、追記中のドライバーのファイルを待つこと（4.5、4.6 の 3。d₀）、切断の行を見落としたつなぎ直しで接続を区切ること（5.1 の「接続」、6.2 の R4）、ホストの根拠を接続に結びつけ、番号が別の台に使われたら、その台の名前で案内しないこと（3.5、5.3、6.2 の R1）。
+- **画面と通知で見せるものを直した版**（Issue #27。PRD の W-10〜W-12、D-34、D-35）。直したのは、1 章、3.2〜3.7、4.4、4.8、5.1、5.4〜5.6（足した）、6.2 の R1、7 章、8 章、9.1、14 章。内部の状態（W-2 の 6 つ）、PC の Wi-Fi 情報、見張り役の具合は、検出のためにこれまでどおり持ち、画面と通知には出さない（7.4 の対応）。トラッカーは、設定のニックネームではなく、VIVE Hub と同じ番号とシリアル番号の末尾で呼ぶ（3.2）。
 - **ドライバーのファイルも読む**（4.1）。サーバーのファイルにない「電源オフの予告」（メモの 3.5）を、R4 の除外に使うためだけ。PRD の W-1 は、サーバーのファイルを挙げている（読むものを足すだけで、W-7 の「読むだけ」は変わらない。14 章で PM に確かめる）。
 - M1 は実機に命令を送らない（W-7、D-13）。読むのはログのファイルだけ。書くのは、OpenUT 自身の保存場所のファイル、デスクトップの通知、SteamVR の中の表示だけ（11 章）。
 - トラッカー内のログの収集（L-3）は、この文書の範囲に入れない。オーナーの PC のつなぎのスクリプトを確かめてから、別に依頼が出る（STATUS の「次の一手」の 6）。
-- 画面と通知の**見た目**は UI/UX デザイン担当の範囲（`docs/design/ui/`）。この文書は、何をいつ見せるか、案内の文言の意味、操作の流れまでを決める（7 章）。
+- 画面と通知の**見た目**は UI/UX デザイン担当の範囲（`docs/design/ui/`）。この文書は、何をいつ見せるか（利用者に見せる状態、手引きの段、トラッカーの項目、読めないときの扱い）、案内の文言の意味、操作の流れまでを決める（7 章）。配置、印、色、書体、言い回しは決めない。
 - 自分たちで測っていない数値は、そう書く。しきい値はすべて仮の値で、決め方を書く（6.1）。
 
 ## 1. 要件との対応
@@ -27,6 +28,9 @@ VIVE Hub を使ったまま横で動かし、VIVE Hub のトラッカー用サ�
 | W-7 実機に命令を送らない | 0 章、11 章 | 全項目 | レビュー（M1 の依存に、HID・パイプ・ドングルを扱うものがないこと）。ログを読み取り専用で開くことの単体テスト |
 | W-8 保存したログを時刻順に流す再生テスト | 10 章 | M1-2、M1-6、M1-13 | 再生テストが CI で動く |
 | W-9 ログの置き場所、台数、シリアル番号を固定しない | 9 章、5.1 | M1-9 | 単体テスト（台数を変えた合成ログ、設定なしでの自動検出） |
+| W-10 見せるのは、手引き、いまの状態（正常・待機中・異常）、異常のときにすること、だけ | 7.1（文言と、使わない言葉）、7.4（見せるもの・見せないもの、利用者に見せる状態、手引き、仕組みの側の不具合の伝え方） | M1-7（表示の写しと文言）、M1-9（見張り役の具合）、M1-11 | 単体テスト（内部の状態と見張り役の具合から、利用者に見せる状態と手引きの段への写し。文言に使わない言葉が入らないこと）。見た目は UI/UX デザインとオーナーの確認 |
+| W-11 トラッカーごとの項目（接続、電池、シリアル番号、状態、ファームウェアの版、ホスト）と、ドングルの接続 | 4.4（読む行）、5.1、5.4〜5.6、7.4 の「トラッカーの項目」 | M1-3、M1-5、M1-7、M1-11 | 単体テスト（見本の行から電池・版・番号・ドングルを読む。台帳とドングルの遷移。読めないときの値）。オーナーの確認（VIVE Hub の画面と見比べる。U-18〜U-20） |
+| W-12 部位で呼ばない。VIVE Hub の番号とシリアル番号の末尾で示す | 3.2、5.4、6.2 の R1、7.1、7.4、9.1 | M1-5、M1-6、M1-7 | 単体テスト（呼び名と並べ方が、3 台・5 台、ホストの交代、スロットの使い回しで変わらないこと。番号が読めないときの呼び名） |
 | 受け入れ: 2026-11-22〜27 のログで W-3 の検出が 4 回だけ | 6.2 の R1、10.4 | M1-13 | 再生テスト（匿名化した実物のログ。PM が `tests/` に入れたあと） |
 | 受け入れ: VR の動作を重くしない | 12 章 | M1-9〜M1-12 | オーナーの実機の確認（12 章の手順） |
 | 受け入れ: 想定と違う行でも止まらずに読み続ける | 4.7 | M1-1、M1-3 | 単体テスト（乱れたバイト列、知らない行、壊れた数値） |
@@ -63,7 +67,7 @@ VIVE Hub を使ったまま横で動かし、VIVE Hub のトラッカー用サ�
 | スレッド | すること |
 |---|---|
 | 主スレッド | トレイと状態の窓（イベントループ）。画面なしの `openut watch` では使わない |
-| 見張り | 500 ms ごとに追記を読み、エンジンに渡し、出力を配る。集計を 60 秒ごとと日の終わりに書く |
+| 見張り | 500 ms ごとに追記を読み、エンジンに渡し、出力を配る。集計を 60 秒ごとと日の終わりに書く。Windows では 10 秒ごとに VIVE Hub のプロセスがあるかを確かめる（5.6）。見張り役の具合（7.4）を決め、表示の写し（7.4）を作って主スレッドに渡す |
 | SteamVR | SteamVR につながるのを 10 秒ごとに試し、つながっていれば案内を VR の中に出す |
 
 スレッドのあいだは `std::sync::mpsc` でつなぐ。非同期のランタイム（tokio など）は使わない（入出力が少なく、要らないため）。
@@ -94,16 +98,40 @@ pub struct LogDate { pub year: i32, pub month: u8, pub day: u8 }
 /// The slot the source of events uses for a tracker while it is connected.
 /// M1: the dongle slot N (0..=4) in "(N)" / "(index: N)" / "device index: N" in the VIVE Hub log.
 /// M3: the slot number of the runtime.
-/// Not stable across reconnections: never use it to name a tracker.
+/// Not stable across reconnections: never use it to name a tracker, never show it to the user.
 pub struct TrackerKey(pub u16);
 /// A serial number, when the source tells it. Never written to the repository.
 pub struct Serial(pub String);
+/// The number VIVE Hub shows for a tracker: N of "model name: (VIVE Ultimate Tracker N)" (4.4).
+pub struct HubNumber(pub u16);
+/// How a tracker is called on the screen and in the notices (W-12). Never built from the slot.
+pub struct TrackerLabel {
+    pub hub_number: Option<HubNumber>,
+    pub serial_tail: Option<String>,   // the last characters of the serial (length: below)
+    pub host: bool,                    // used only when both are None ("ホストのトラッカー")
+}
 ```
 
-- **番号 N はドングルのスロット**（0〜4）で、つなぎ直しで変わる。同じトラッカーが、同じ日に別の番号で出る（メモの 3.5）。
+- **番号 N はドングルのスロット**（0〜4）で、つなぎ直しで変わる。同じトラッカーが、同じ日に別の番号で出る（メモの 3.5）。**利用者には見せない**（VIVE Hub の画面の番号とは別の数のため。W-12）。
 - 状態と規則は、出来事が持つ番号（`TrackerKey`）をキーにした表で動く（どの出来事にも番号が入り、シリアル番号が入るのは 1 種類の行だけのため）。台数を決めない（W-9）。初めて出てきた番号で行を足す。
-- **トラッカーそのものは、シリアル番号で見分ける**。番号とシリアル番号の対応は `SerialKnown`（4.4 の `GetDeviceInfoAndResponse` の行。接続のたびに何度も出る）で分かり、その番号の行に付ける（5.1）。利用者に見せる名前と、日ごとの集計の行は、シリアル番号で引く（8 章、9.1）。
-- 名前は、設定のニックネーム（9.1。シリアル番号で引く）。シリアル番号がまだ分からない番号と、ニックネームのないトラッカーは `トラッカー{N}`（N はいまの番号）。番号で名前を引くことはしない（つなぎ直すと、別のトラッカーを指すため）。
+- **トラッカーそのものは、シリアル番号で見分ける**。番号とシリアル番号の対応は `SerialKnown`（4.4 の `GetDeviceInfoAndResponse` の行。接続のたびに何度も出る）で分かり、その番号の行に付ける（5.1）。シリアル番号ごとに分かったこと（VIVE Hub の番号、ファームウェアの版）は、台帳（5.4）に持つ。利用者に見せる呼び名と、日ごとの集計の行は、シリアル番号で引く（7.4、8 章）。
+
+**呼び名**（W-12。`openut_core::text`）: 利用者に見せる呼び名は、**VIVE Hub と同じ番号**（`model name: (VIVE Ultimate Tracker N)` の N。4.4）と、**シリアル番号の末尾**の 2 つで作る（PRD の W-12。示し方は PM の判断。#27）。
+
+- **呼び名にしないもの**: 体の部位（腰、足、胸）、スロットの番号 N、ホストかどうか、役割。部位はトラッカーに決まっておらず（使い方で替わる）、スロットは VIVE Hub の画面の番号と違う数で、ホストは使っているうちに替わるため。初版の設定のニックネーム（9.1 の `[trackers."<シリアル番号>"] name = "腰"`）と、名前を付ける流れ（7.4 の F3）は、やめた（部位の名前を付ける前提の作りだったため。呼び名は、ログから決まるものだけにする）。
+- **VIVE Hub の番号**は、その台（シリアル番号）の、最後に読めた `SerialKnown` の値（5.4）。台ごとに固定かは確かめていない（U-18）。固定でなくても、VIVE Hub がそのとき出していた番号と同じものを出す。
+- **末尾の長さ**: 台帳（5.4）にあるすべてのシリアル番号について、末尾が重ならない最も短い長さ。4 文字から始め、重なれば 1 文字ずつ延ばす（最長はシリアル番号の全体。全体が同じなら同じ台）。台帳の全台に同じ長さを使う（並べたときにそろうように）。台帳が変わったら決め直す。シリアル番号が 4 文字より短ければ、全体を使う。
+- **読めないとき**（シリアル番号は `GetDeviceInfoAndResponse` の行で来るので、番号だけ分かることはない）:
+
+  | 分かっていること | 呼び名（意味） | 文言の既定（仮。言い回しは UI/UX デザイン担当） |
+  |---|---|---|
+  | 番号と末尾 | 番号と末尾 | `トラッカー 1（…0001）` |
+  | 末尾だけ（`model name` が読めない） | 末尾だけ | `トラッカー（…0001）` |
+  | どちらもない（シリアル番号がまだ来ていない。途中から読み始めて、接続の始まりを見ていない台） | ホストの接続が続いていれば「ホストのトラッカー」、でなければ「トラッカー」 | `ホストのトラッカー`、`トラッカー` |
+
+  - シリアル番号は、ふつう接続から 1 秒以内に来る（見本の 4 章）ので、どちらもないのは、接続の直後と、前の日のファイルのない途中からの読み始めのときだけ。画面では、どの枠か（7.4 のトラッカーの項目）と、ホストの印で見分けられる。
+- **呼び名は、台数、ホストの交代、スロットの番号に左右されない**（3 台でも 5 台でも、胸などに足しても、同じ形）。呼び名を決めるのは、案内を作るとき（3.6）と、表示の写しを作るとき（7.4）で、そのときの台帳から作る（作ったあとに番号が分かっても、出した案内の文言は変えない）。
+- 番号で名前を引くことはしない（つなぎ直すと、別のトラッカーを指すため）。
 
 ### 3.3 ログの 1 行（`openut_hublog`）
 
@@ -130,9 +158,9 @@ pub struct Entry<'a> {
 /// Which file a record came from (4.1). Driver records never move the engine time (3.7).
 pub enum FileKind { Server, Driver }
 /// What a body says (4.4).
-pub enum LineKind { ServerStart, ServerRelease, DongleRemoved, TrackerAdded, TrackerRemoved,
+pub enum LineKind { ServerStart, ServerRelease, DongleAdded, DongleRemoved, TrackerAdded, TrackerRemoved,
     DeviceInfo, HostMode, HostWifiQuery, HostWifiGot, WifiAssign, WifiNotYet, ClientLink,
-    DeviceStatus, Pose, OetLost, OetReloc, OetOverspeed, Command, PowerOffNotice, Other }
+    DeviceStatus, ServiceStatus, Pose, OetLost, OetReloc, OetOverspeed, Command, PowerOffNotice, Other }
 ```
 
 - `openut_hublog::record` は、`Entry` から、種類と読み取った値（4.4 の表の「取り出すもの」）を返す。値の持ち方（種類ごとの列挙か、共通の構造体か）は実装担当が決めてよい。
@@ -147,10 +175,14 @@ pub struct Timed { pub at: LogTime, pub offset: UtcOffset, pub event: Event }
 pub enum Event {
     ServerStarted,                                            // the PC-side server started
     ServerStopped,                                            // the server began to shut down
+    DongleAdded,                                              // the dongle was found (plugged in, or at server start)
     DongleRemoved,                                            // every tracker connected through the dongle is gone
+    DongleReport { connected: bool },                         // a report of the dongle, not a change (5.5)
     TrackerAdded { tracker: TrackerKey, usb: bool },
     TrackerRemoved { tracker: TrackerKey, usb: bool },        // usb: connected by cable, not by the dongle
-    SerialKnown { tracker: TrackerKey, serial: Serial },
+    SerialKnown { tracker: TrackerKey, serial: Serial,
+                  hub_number: Option<HubNumber>,              // N of "VIVE Ultimate Tracker N", if readable
+                  firmware: Option<String> },                 // "fw version: (...)", if readable
     HostAssigned { tracker: TrackerKey },                     // PC told the tracker to be the host
     HostWifiQueried { host: TrackerKey },                     // PC asked the host for its Wi-Fi info
     HostWifiObtained { host: Option<TrackerKey> },            // PC got the host's Wi-Fi info (M1: None)
@@ -158,7 +190,8 @@ pub enum Event {
     WifiAssigned { tracker: TrackerKey },                     // PC gave the info to a client
     ClientLink { tracker: TrackerKey, connected: bool },      // client joined / left the host's Wi-Fi
     Status { tracker: TrackerKey, connected: bool, host: bool, map_ready: bool,
-             usb: Option<bool> },                             // a report, not a change. usb: None if not written
+             usb: Option<bool>,                               // a report, not a change. usb: None if not written
+             battery: Option<Battery> },                      // None: not connected, or not readable (4.4)
     Pose { tracker: TrackerKey, status: PoseStatus },
     Oet { tracker: TrackerKey, kind: OetKind },
     PowerOffNotice { tracker: TrackerKey },                   // the tracker said it is powering off
@@ -166,6 +199,8 @@ pub enum Event {
 }
 pub enum PoseStatus { Ok, Lost, RecentlyLost, Other(i64) }    // 2, 3, 4
 pub enum OetKind { LostTracking, RelocBack, Overspeed }
+/// The battery of a connected tracker (W-11).
+pub struct Battery { pub percent: u8 /* 1..=100 */, pub charging: Option<bool> }
 ```
 
 - `HostAssigned`、`HostWifiQueried`、`WifiAssigned` は、PC からトラッカーへの命令でもある。R4 の「直前に命令があったか」は、この 3 つと `PcCommand` を見る。`PcCommand` の `tracker: None` は、番号のない命令（`Unpair All` など）で、すべてのトラッカーへの命令として扱う。
@@ -173,6 +208,7 @@ pub enum OetKind { LostTracking, RelocBack, Overspeed }
 - `TrackerAdded` と `TrackerRemoved` の `usb` は、`connection type: 2`（USB でつないだ。推定。メモの 3.5）のとき `true`。ドングルを通さない接続なので、`DongleRemoved` では切れない（5.1）。
 - `HostWifiObtained` と `WifiRequestUnanswered` の行には、トラッカーの番号がない（メモの 3.1）。M1 では常に `None` で、5 章の「番号のない出来事」の扱いになる（M3 のランタイムは番号を持てるので、型には残す）。
 - 初版の `Map` の出来事は、`Status` の `map_ready` に置き換えた（地図の状態は単独の行ではなく、状態の行の一部のため。メモの 3.1）。
+- **画面に見せる項目のための値**（W-11。#27 で足した）: `SerialKnown` の `hub_number` と `firmware`、`Status` の `battery`、`DongleAdded` と `DongleReport`。どれも、台帳（5.4）、電池の表示（5.1）、ドングルの表示（5.5）だけに使い、規則（6 章）と、トラッカーの状態の遷移（5.1 の `phase`）は変えない。`hub_number` か `firmware` が読めなくても、`SerialKnown` は出す（シリアル番号だけで台を見分けられるため。4.4）。
 
 ### 3.5 状態の写し（`openut_core::state`）
 
@@ -191,6 +227,7 @@ pub struct TrackerView {
     pub link: Link,                    // from TrackerAdded (usb), or from Status (usb) when inferred
     pub tracked_since_connect: bool,   // reached Tracking at least once since TrackerAdded
     pub inferred: bool,                // first seen without TrackerAdded (started mid-way)
+    pub battery: Option<Battery>,      // the last report of the current connection (5.1). None when disconnected
 }
 /// What tells which tracker is the host (5.3). Kept apart from HostWifi.
 pub enum HostBy { Command, Report }    // Command: HostAssigned. Report: a status report or a Wi-Fi query
@@ -204,15 +241,38 @@ pub enum HostWifi {
     Missing { since: LogTime, queried: bool },
     Held { since: LogTime },
 }
+/// What the log told about one tracker, by serial (5.4). Kept after it disconnects.
+pub struct Identity {
+    pub serial: Serial, pub hub_number: Option<HubNumber>, pub firmware: Option<String>,
+    pub last_seen: LogTime,
+}
+/// The dongle as the log tells it (5.5).
+pub enum DongleState { Unknown, Connected, Disconnected }
+/// The VIVE Hub tracker server as the log tells it (5.6).
+pub enum HubState { Unknown, Running, Stopped }
+/// How a tracker is connected, as shown to the user (7.4).
+pub enum Connection { Disconnected, Dongle, Usb }
+/// One tracker as the screen lists it (5.4): one per serial in the roster, plus one per
+/// connected slot whose serial is not known yet (serial: None).
+pub struct DeviceView {
+    pub serial: Option<Serial>, pub hub_number: Option<HubNumber>, pub firmware: Option<String>,
+    pub key: Option<TrackerKey>,       // the slot while connected. Internal: never shown
+    pub connection: Connection,
+    pub battery: Option<Battery>,
+    pub host: bool,                    // the host connection is going on (below)
+    pub phase: Phase,                  // internal: the display maps it to 正常・待機中 (7.4)
+}
 pub struct Snapshot {
-    pub trackers: Vec<TrackerView>, pub host: Option<HostRef>, pub host_wifi: HostWifi, pub at: LogTime,
+    pub trackers: Vec<TrackerView>, pub host: Option<HostRef>, pub host_wifi: HostWifi,
+    pub roster: Vec<Identity>, pub devices: Vec<DeviceView>,
+    pub dongle: DongleState, pub hub: HubState, pub at: LogTime,
 }
 ```
 
 - **ホスト**（`host`）と **PC の Wi-Fi 情報**（`host_wifi`）は別に持つ。途中から読み始めると、Wi-Fi 情報は `Unknown` のままでも、状態の行の `is host: 1` でホストは分かるため（5.3）。R1 の案内するトラッカー（6.2）は `host` を使い、番号のない問い合わせの候補（5.1）は、`host` から決まる役割を使う。
-- **ホストの根拠は、番号だけでなく接続（`conn`）に結びつける**（5.3）。番号はスロットで、ホストが切れたあとに別のトラッカーが同じ番号でつながりうるため。「ホストの接続が続いている」は、番号 `key` の行が未接続でなく、その行の `conn` が `HostRef::conn` と同じこと。続いていなければ、その番号の台をホストとして案内しない（6.2 の R1）。状態の窓のホストの印（7.4）も、接続が続いているときだけ付ける。
+- **ホストの根拠は、番号だけでなく接続（`conn`）に結びつける**（5.3）。番号はスロットで、ホストが切れたあとに別のトラッカーが同じ番号でつながりうるため。「ホストの接続が続いている」は、番号 `key` の行が未接続でなく、その行の `conn` が `HostRef::conn` と同じこと。続いていなければ、その番号の台をホストとして案内しない（6.2 の R1）。トラッカーの項目のホストの印（7.4。`DeviceView::host`）も、接続が続いているときだけ付ける。
 
-画面に出す状態の名前（W-2）: `Disconnected` 未接続、`Connected` 接続、`WaitingWifi` Wi-Fi 待ち、`MapSyncing` 地図同期中、`Relocalizing` 位置取り直し中、`Tracking` 追跡中。PC の Wi-Fi 情報: `Held` 持っている、`Missing` 持っていない、`Unknown` 不明。
+**内部の状態の名前**（W-2）: `Disconnected` 未接続、`Connected` 接続、`WaitingWifi` Wi-Fi 待ち、`MapSyncing` 地図同期中、`Relocalizing` 位置取り直し中、`Tracking` 追跡中。PC の Wi-Fi 情報: `Held` 持っている、`Missing` 持っていない、`Unknown` 不明。**これらの名前は、画面と通知に出さない**（W-10）。使うのは、検出の規則、アプリのログ、テストの表示だけ。利用者には、7.4 の「利用者に見せる状態」（正常・待機中・異常）に写して見せる。
 
 ### 3.6 検出と案内（`openut_core::rules`、`openut_core::notice`）
 
@@ -221,11 +281,13 @@ pub enum RuleId { R1, R2, R3, R4, R5 }
 /// One run of a rule's condition, from start to end.
 pub struct Detection {
     pub rule: RuleId, pub tracker: Option<TrackerKey>, pub episode: u64,
+    pub serial: Option<Serial>,   // the tracker the episode is about, when known (below)
     pub at: LogTime, pub step: Step,
 }
 pub enum Step { Raised, Escalated, Resolved, Ended }   // Ended: the condition went away without a fix
 pub struct Notice {
     pub rule: RuleId, pub tracker: Option<TrackerKey>, pub episode: u64,
+    pub serial: Option<Serial>,
     pub step: Step, pub at: LogTime,
     pub headline: String,   // state, one short line (Japanese)
     pub action: String,     // what to do now, one line (Japanese). Empty for Resolved.
@@ -235,13 +297,14 @@ pub struct Notice {
 ```
 
 - 規則は `Detection` を出す。配信の決まり（7.1）が、`Detection` から `Notice` を作り、`push` を決める。どちらも入出力を持たず、単体テストで確かめる。
-- 文言（7.1 の表）は `openut_core::text` にまとめ、トラッカーの名前を差し込む関数にする（テストで文言を確かめられるように）。
+- **`serial`**（#27 で足した）: エピソードが指す台のシリアル番号（分かれば）。R1 は案内する台（6.2 の R1 の「案内するトラッカー」の 1 か 2 で決まった台。3 なら `None`）、R2・R3・R5 は `Raised` のときの番号 N の行のシリアル番号、R4 は切れた接続のシリアル番号（切れる前に分かっていたもの）。表示の写し（7.4）が、どの台を「異常」にするかを、スロットではなく台で決めるため（R4 の台は、切れたあとスロットの行からシリアル番号が外れる。5.1）と、同じ台の繰り返し（7.1）を台で数えるために使う。`Raised` のあとに分かっても変えない（`Escalated`、`Resolved`、`Ended` は `Raised` の値を引き継ぐ）。
+- 文言（7.1 の表）は `openut_core::text` にまとめ、トラッカーの呼び名（3.2）を差し込む関数にする（テストで文言を確かめられるように）。
 
 ### 3.7 エンジン（`openut_core::engine`）
 
 ```rust
 impl Engine {
-    pub fn new(cfg: EngineConfig, names: Names) -> Engine;
+    pub fn new(cfg: EngineConfig) -> Engine;   // no names table: labels come from the roster (3.2)
     /// The caller promises that every later input from the server file has at >= t.
     /// Fire every timer whose deadline is < t (in deadline order), then set now = t.
     /// A timer whose deadline == t stays pending: an input at the deadline is in time (6.1).
@@ -305,7 +368,7 @@ impl Engine {
   2. `Engine::rebuild` で、状態、規則、集計を捨てる。配信の決まりが覚えていることは残す（3.7）。
   3. 4.5 の手順（前の日のファイル、いまのファイルの先頭から）で、追いつきとして読む。追いつきのあいだは、集計を書き出さない。
   4. 追いつきが終わったときの配信は 4.5 と 7.1 のとおり。作り直しの前に push 済みで続いていたエピソードと、規則とトラッカーが同じで続いているエピソードは、同じものの続きとして push し直さない（7.1）。
-  - 見分け方の 3（消えた）のときは、残っているうちで最も新しいものを、いまのファイルにして再構築する。1 つもなければ「ログが見つからない」（7.4 の見張り役の状態）にして、見つかったら再構築する。
+  - 見分け方の 3（消えた）のときは、残っているうちで最も新しいものを、いまのファイルにして再構築する。1 つもなければ、見張り役の具合を「見つからない」（7.4 の「仕組みの側の不具合」）にして、見つかったら再構築する。
   - 再構築したあとの集計は、起動し直した場合と同じ（いまあるファイルから決まる。8.1）。再構築の回数を `source.rebuilds` に数え、アプリのログに理由（縮んだ、置き換えられた、消えた）を残す。
   - サーバーとドライバーの、どちらのいまのファイルが作り直されても、両方を 4.5 の手順で読み直す（決まりを 1 つにするため。6 日分では、作り直しは起きていない。メモの 2.3 の `Truncate=0`）。ドライバーのファイルが消えて 1 つも残らないときは、再構築せず、ドライバーなしで続ける。
   - 同じ日に VIVE Hub が起動し直すと、ファイルの途中に `# Log begin at ...` から始まる見出しが足される（メモの 2.3。11/23 は 5 回）。これは追記なので、再構築しない。状態は、そのあとの `ServerStarted`（4.4）で捨てる。
@@ -375,17 +438,19 @@ impl Engine {
 |---|---|---|---|---|
 | ServerStart | `main` | `Tracker Server Starts.` | — | `ServerStarted` |
 | ServerRelease | `OETServer::Release` | `Release begin` | — | `ServerStopped` |
+| DongleAdded | `OETServer::OnDongleAddedCB` | `Dongle is added.`（あとに ` version: (...)` が続く） | — | `DongleAdded` |
 | DongleRemoved | `OETServer::OnDongleRemovedCB` | `Dongle is removed.` | — | `DongleRemoved` |
 | TrackerAdded | `OETServer::AddTrackerCB` | `Add new tracker: (N), connection type: V` | N、V | `TrackerAdded`（`usb` は V が 2 のとき） |
 | TrackerRemoved | `OETServer::RemoveTrackerCB` | `Remove tracker (N), connection type: V, power state:V `（`power state:` のあとに空白がない） | N、V（connection type） | `TrackerRemoved`（`usb` は V が 2 のとき） |
-| DeviceInfo | `OETServer::GetDeviceInfoAndResponse` | `Response - cmd type: ` で始まり、`, sn: (` を含む（含まなければ `Other`）。`, device index: N,` と `, sn: (S)` | N、S（括弧の中。空なら出来事にしない） | `SerialKnown` |
+| DeviceInfo | `OETServer::GetDeviceInfoAndResponse` | `Response - cmd type: ` で始まり、`, sn: (` を含む（含まなければ `Other`）。`, device index: N,` と `, sn: (S)`、任意で `, model name: (VIVE Ultimate Tracker V)` と `, fw version: (X)` | N、S（括弧の中。空なら出来事にしない）、V、X（下の注） | `SerialKnown`（V が `hub_number`、X が `firmware`） |
 | HostMode | `Tracker::UpdateSwitchingMode` | `Tracker (N) - switch to HOST mode.` | N | `HostAssigned` |
 | HostWifiQuery | `OETServer::TrackerSwitchAndResponse` | `Query wifi from tracker N`（括弧なし） | N | `HostWifiQueried` |
 | HostWifiGot | `OETServer::ProcessDeviceMsg` | `Got host wifi info.`（**番号なし**） | — | `HostWifiObtained { host: None }` |
 | WifiAssign | 同上 | `Assign wifi info to client tracker (index: N).` | N | `WifiAssigned` |
 | WifiNotYet | 同上（`WARN`） | `Wifi info is not yet available.`（**番号なし**） | — | `WifiRequestUnanswered { tracker: None }` |
 | ClientLink | 同上 | `Client tracker (index: N) is connected to host: V` | N、V（0 か 1。ほかは読めなかった行） | `ClientLink`（V が 1 なら `connected`） |
-| DeviceStatus | `OETServer::DeviceStatusToVHServer` | `display index: ` で始まり、`key: value` を `, ` で並べたもの（下の注） | `device index`、`connected`、`map status`、`map state`、`is host`、`bIsConnectedOnUSB`（任意） | `Status` |
+| DeviceStatus | `OETServer::DeviceStatusToVHServer` | `display index: ` で始まり、`key: value` を `, ` で並べたもの（下の注） | `device index`、`connected`、`map status`、`map state`、`is host`、`bIsConnectedOnUSB`（任意）、`percentage`（任意）、`charging`（任意） | `Status` |
+| ServiceStatus | `OETServer::ServiceStatusToVHServer` | `[ServiceStatusToVHServer] ` で始まり、`key: value` を `, ` で並べたもの | `dongle connected`（0 か 1。ほか・ないなら読めなかった行） | `DongleReport`（1 なら `connected`） |
 | Pose | `Tracker::CopyFromDriverThreadProc` | `(SteamVR: S)(N)[K]Pose status is changed: Pose data - status: V,` | N、V | `Pose`（2 → `Ok`、3 → `Lost`、4 → `RecentlyLost`、ほか → `Other(V)`） |
 | OetLost | `OETServer::OnTrackerErrorNotification` | `OET LOST TRACKING! index: N` | N | `Oet(LostTracking)` |
 | OetReloc | 同上 | `OET reloc back. index: N` | N | `Oet(RelocBack)` |
@@ -408,17 +473,27 @@ impl Engine {
 | `camera_rate` | `Camera frame rate: V`。**関数名が `OETServer::SetCameraFrameRateToAllTrackers` のときだけ**（起動のときの設定の読み込み〔`OETServer::ParseConfig`〕にも同じ本文が出るため） | なし（全台） |
 
 - `HostAssigned`（`switch to HOST mode.`）、`HostWifiQueried`、`WifiAssigned` も命令にあたる（3.4）。命令の失敗の行（`power_off`、`stop` の一部）も、PC がそうしようとした印として、命令に数える。
-- **状態の行**（DeviceStatus）: トラッカー 1 台について 1 行（メモの 3.1）。`, ` で区切って `key: value` の組にし、上の 5 つのキーの値を整数で読む（どれかがない・読めなければ、読めなかった行）。ほかのキー（`tracking status`、`percentage` など）は使わない。出来事の値:
+- **状態の行**（DeviceStatus）: トラッカー 1 台について 1 行（メモの 3.1）。`, ` で区切って `key: value` の組にし、`device index`、`connected`、`map status`、`map state`、`is host` の 5 つのキーの値を整数で読む（どれかがない・読めなければ、読めなかった行）。任意のキー（`bIsConnectedOnUSB`、`percentage`、`charging`）は、なくても読めなかった行にしない。ほかのキー（`tracking status`、`has new fw` など）は使わない。出来事の値:
   - `connected`: `connected` が 1。`host`: `is host` が 1。
   - `usb`: `bIsConnectedOnUSB` が 1 なら `Some(true)`、0 なら `Some(false)`、キーがない・読めなければ `None`（このキーだけは、なくても読めなかった行にしない。接続の経路を補うだけのため。5.1）。見本の状態の行は、どれも 0。
   - `map_ready`: `map state` が 2、または `map status` が 6。値の意味は、初版の調べ（解析ライブラリ pyvut の定数の名前 `MAP_REUSE_OK` などと合う、という記述）による。pyvut（<https://github.com/rocketmark/pyvut>）にはライセンスの表示がないので、定数の表は写さず、意味だけを使う。メモでは、意味を確かめ直していない。
   - `tracking status` は使わない。姿勢の行の値（2・3・4）にない 5・6・7 が出るので、同じ番号づけか分からないため（メモの 3.1）。
+  - `battery`（W-11。#27 で足した）: `connected` が 1 で、`percentage` が 1〜100 の整数なら `Some(Battery { percent, charging })`。`charging` は、キーの値が 0 なら `Some(false)`、1 なら `Some(true)`、ほか・ないなら `None`。`connected` が 0 の行（起動の直後の、登録済みの台の行。見本の 1 章では `percentage: 0`）、`percentage` がない・0・範囲の外・数でない行は `None`（分からない）。どちらのキーも、なくても読めなかった行にしない（電池の表示だけに使うため）。
+  - **`percentage: 0` を「分からない」とするのは推定**: つながっている台が 0% のまま動き続けることはないと見て、まだ値が来ていない印と読む（0% と見せて、利用者に電池切れと思わせないため）。U-19。M1-13 で、`connected: 1` の行の `percentage: 0` の数と、出る時刻（接続の直後か）を数える。
+  - 値の意味（`percentage` が電池の残りの %、`charging` が充電中）は、キーの名前と、出ていた値（見本で 74、98）からの推定（U-19）。
+- **電池の残りが出る別の行**: `Peripheral data changed - is charging: V, battery percent: V, ...`（`OETServer::OnPeripheralDataChanged`。見本の 2 章）にも電池の残りが出るが、どのトラッカーの値かが行にない（番号がない）ので使わない（`Other`）。電池の残りは、状態の行の `percentage` だけから取る。
+- **`GetDeviceInfoAndResponse` の行の `model name` と `fw version`**（W-11、W-12。#27 で足した）: どちらも `, ` のあとの `key: (値)` の形（見本の 4 章: `sn: (00XX000000001), model name: (VIVE Ultimate Tracker 1), fw version: (1.0.999.178)`）。括弧の中は、閉じ括弧 `)` までとする。
+  - `model name` の括弧の中が `VIVE Ultimate Tracker V`（V は 1〜99 の整数）なら `hub_number = V`。ほかの形（ほかの機種の名前、数がない、0、100 以上、キーがない）は `None`。
+  - `fw version` の括弧の中が、1〜32 文字の、数字・英字・`.`・`-`・`_` だけなら `firmware` にする。空、長すぎる、ほかの文字を含む、キーがないなら `None`。
+  - どちらが `None` でも `SerialKnown` は出し、読めなかった行にしない（3.4）。
+  - シリアル番号 S は、1〜32 文字の、ASCII の英数字と `-` だけのときに受け付ける。ほかの文字（空白、制御文字、ASCII の外）を含むときは、読めなかった行（`unparsed`）にする（画面と集計に、おかしな文字を出さないため。見本の置き換えの形 `00XX000000001` は受け付ける）。空なら、これまでどおり出来事にしない。
+- **`[ServiceStatusToVHServer]` の行**（W-11。#27 で足した。メモの 3.1: 状態の行と同じ時刻に続くことが多い）: `dongle connected: 1` ならドングルがつながっている、`0` ならつながっていない、という報告として `DongleReport` にする（5.5）。意味は、キーの名前と、出ていた値（見本の 2 章で 1）からの推定（U-20）。ほかのキー（`tracker connection type`、`device counts`、`camera fps` など）は使わない。
 - **姿勢の行**（Pose）: 状態が変わったときだけ出る（`Pose status is changed:`。定期的には出ない）。`V` には、接続の直後に意味のなさそうな値（47、58、71 など）や 0 が出る。どれも `Other(V)` にし、止まらない。位置や回転の `-nan` と桁の多い値は読まない（判定に使わない）。
 - 本文の先頭が `(SteamVR: ` でも、`]Pose status is changed: Pose data - status: ` を含まない行（`... includes NAN.`。1 日に最大 8,646 行）は `Other`。
 - **数が多くて検出に使わない行**（メモの 3.1 の終わり）: `... includes NAN.`、`OnPipeClientError::OnPipeError ...`、`Tracker is not found`。どれも `Other`。サーバーの行は 1 日に最大 15,828 行（毎秒 1 行に満たない）なので、読み飛ばしの特別な仕組みは作らない。判定は、本文の先頭の 1 文字か 2 文字で候補を絞り、表の形と前から比べるだけにする（正規表現のクレートを足さない）。
 - 番号や値を読むのは、表の形の `N`・`V` の位置だけ。形の先頭が合ったのに、決まった位置の数が読めない（桁あふれ、数でない）ときは、読めなかった行（`unparsed`。4.7）にする。番号が 0〜4 の外でも読めた数なら受け付ける（台数を決めない。W-9）。
 - **同じ出来事の行が 2 回出る**（メモの 2.2。例: `Remove tracker (2), ...` が 3 ミリ秒おいて 2 回）。本文が同じ行を捨てる処理は**しない**（続けて来る `Wifi info is not yet available.` は、1 つ 1 つが別の問い合わせで、捨てると R1 が数え違えるため）。重なりは、状態の側で、同じ遷移を 2 回しないことで吸収する（5.1）。
-- `Dongle is added.`、`Tracker N entered sleeping (lost tracking)`、`SteamVR Running is changed to V`、`error code: V received` などは、M1 の規則に使わないので `Other`（数えるだけ）。
+- `dongle count: V, tracker count: V`、`Tracker N entered sleeping (lost tracking)`、`SteamVR Running is changed to V`、`error code: V received` などは、M1 の規則と表示に使わないので `Other`（数えるだけ）。初版で `Other` にしていた `Dongle is added.` は、ドングルの表示（5.5）のために種類にした。
 
 **ドライバーのファイル**（`ViveTrackerDriver_*.txt`）
 
@@ -486,8 +561,8 @@ VIVE Hub は、まとめてファイルに書く。ヘッダーの `WriteTimeInt
 | 切り替わったあとの古いファイルの書き足し | 読まない（起動し直すと、前の日のファイルとして読まれるので、この数が 0 でない日だけは、起動し直したときと結果が違いうる） | `late_writes` |
 | いまのファイルが作り直された（縮んだ、置き換えられた、消えた） | 再構築する（4.1） | `rebuilds` |
 
-- 数は、日ごとの集計（8 章）の `source` に書く。`unparsed` が増えたら、ログの書式が変わった印なので、状態の窓に「ログの形が想定と違う行が N 行」と出す（案内ではなく、見張り役の状態として。7.4）。
-- **綴りが変わった版**では、表の行がすべて `other` になり、`unparsed` は増えない。そのため、その日のサーバーの記録が 2,000 件（仮）を超えたのに、表の種類（`Other` でないもの）が 1 件もなければ、同じく「ログの形が想定と違う」にする（7.4）。6 日分では、1 日の記録は 2,002〜15,828 件で、状態の行（`DeviceStatusToVHServer`）がトラッカーをつないでいない日にも出る見込み（起動の直後に、登録済みのトラッカーの行が出る。メモの 3.5）。
+- 数は、日ごとの集計（8 章）の `source` に書く。`unparsed` が増えたら、ログの書式が変わった印なので、見張り役の具合を「形が違う」にする（案内ではない。利用者への伝え方は 7.4 の「仕組みの側の不具合」。行の数と例は、アプリのログにだけ書く）。
+- **綴りが変わった版**では、表の行がすべて `other` になり、`unparsed` は増えない。そのため、その日のサーバーの記録が 2,000 件（仮）を超えたのに、表の種類（`Other` でないもの）が 1 件もなければ、同じく「形が違う」にする（7.4）。6 日分では、1 日の記録は 2,002〜15,828 件で、状態の行（`DeviceStatusToVHServer`）がトラッカーをつないでいない日にも出る見込み（起動の直後に、登録済みのトラッカーの行が出る。メモの 3.5）。
 - アプリのログに残す本文には、シリアル番号などが入りうる。アプリのログは利用者の PC にだけ置き、送る機能（L-4）では匿名化を通す。
 
 ### 4.8 ログの書式で確かめていない点
@@ -503,7 +578,10 @@ VIVE Hub は、まとめてファイルに書く。ヘッダーの `WriteTimeInt
 | U-11 | 電源オフの予告（ドライバーの行）のあった切断が、利用者の操作（ボタンで電源を切った）によるものか、トラッカーが自分で切ったもの（電池切れ、スリープ）を含むか | 6.2 の R4 の条件 5 | 14 章の 2（オーナーの試し） |
 | U-12 | ドングルが抜けたときに、トラッカーの `Remove tracker` が出ないか（1 回の観察だけ） | 5.1（`DongleRemoved`）、R4 の条件 4 | 匿名化した実物のログの再生。次にドングルを抜いたときのログ |
 | U-13 | VIVE Hub が書いている最中のファイルを、ほかのプログラムが読めるか（共有モード。`OpenType=1`、`WriteThrough=1` の意味が分からない） | 4.2。読めなければ設計の作り直しが要る | 14 章の 1（オーナーの試し） |
-| U-17 | ほかの版（VIVE Hub、ランタイム、ファームウェア）と、ほかの PC で、綴りと形が同じか。メモは 1 台・6 日・1 つの版 | 4.4。変わったら 4.7 の「ログの形が想定と違う」で気づく | ログの送信（L-4）が入ってから |
+| U-17 | ほかの版（VIVE Hub、ランタイム、ファームウェア）と、ほかの PC で、綴りと形が同じか。メモは 1 台・6 日・1 つの版 | 4.4。変わったら 4.7 の「形が違う」で気づく | ログの送信（L-4）が入ってから |
+| U-18 | `model name: (VIVE Ultimate Tracker N)` の N が、VIVE Hub の画面に出る番号と同じか。台ごとに固定か（つなぎ直し、ペアリングのし直しで変わるか）。状態の行の `display index`（0〜2）に 1 を足した数と同じか（見本では、`device index: 2` の台が `display index: 0` と `VIVE Ultimate Tracker 1`。メモの 3.5） | 3.2、5.4、7.4（呼び名と並べ方） | オーナーの確認（M1-11 のあと、VIVE Hub の画面と OpenUT の画面の番号を見比べる。14 章）。匿名化した実物のログ（M1-13。シリアル番号ごとの N の変わった回数と、`display index` との対応の数） |
+| U-19 | 状態の行の `percentage` が電池の残り（%）か、`charging` が充電中か。つながっている台の `percentage: 0` が、いつ出るか（接続の直後だけか） | 4.4（0 を分からないとする）、7.4 | 匿名化した実物のログ（M1-13。`connected: 1` の行の `percentage: 0` の数と、接続からの時間）。オーナーの確認（VIVE Hub の電池の表示と見比べる） |
+| U-20 | `[ServiceStatusToVHServer]` の行の `dongle connected` が、ドングルの接続を表すか。ドングルを抜いたあとも、この行が出るか | 4.4、5.5 | 匿名化した実物のログ（M1-13。`Dongle is removed.` の前後の値）。オーナーの確認（ドングルを抜いて 1 分待つ。14 章） |
 
 ## 5. 状態の遷移（W-2）
 
@@ -519,7 +597,7 @@ VIVE Hub は、まとめてファイルに書く。ヘッダーの `WriteTimeInt
 | `TrackerAdded(N)` | 未接続以外 | 下の注の「重なり」 | |
 | `TrackerRemoved(N)` | 未接続以外 | 未接続 | 役割を `Unknown`、シリアル番号をなしに（スロットは別のトラッカーに使われるため）。`link` を `Unknown` |
 | `TrackerRemoved(N)` | 未接続 | 変えない | 数えない（同じ出来事の 2 つ目の行。メモの 2.2） |
-| `SerialKnown(N, S)` | 未接続以外 | 変えない | N のシリアル番号を S にする。ほかの番号に S が付いていれば、そちらから外す |
+| `SerialKnown(N, S, …)` | 未接続以外 | 変えない | N のシリアル番号を S にする。ほかの番号に S が付いていれば、そちらから外す。台帳（5.4）を更新する |
 | `HostAssigned(N)` | 接続、Wi-Fi 待ち | 地図同期中 | ホスト（5.3）を N にする（役割の変え方も 5.3）。ほかの「接続」のトラッカーを Wi-Fi 待ちにする（役割は変えない） |
 | `HostAssigned(N)` | 地図同期中、位置取り直し中、追跡中 | 変えない | ホストの変え方は上の行と同じ。すでに動いているトラッカーへの 2 度目の命令（不具合の始まり）で、状態を巻き戻さないため |
 | `WifiAssigned(N)` | 接続、Wi-Fi 待ち | Wi-Fi 待ち | 役割を `Client` |
@@ -531,6 +609,7 @@ VIVE Hub は、まとめてファイルに書く。ヘッダーの `WriteTimeInt
 | `Status(N, ...)` | ほかの組み合わせ | 変えない | 数えない（状態の行は数分おきにも出る報告のため）。ただし、未接続以外の N に `connected: 0` が来たら「順序の合わない出来事」に数える（切断は `TrackerRemoved`、`DongleRemoved`、`ServerStarted`、`ServerStopped` だけで決める。U-5） |
 | `Status(N, connected, usb = Some(v))` | 未接続以外（`link` が `Unknown` のとき） | 変えない | `link` を、v なら `Usb`、でなければ `Dongle`（途中から読み始めて、`TrackerAdded` を見ていない台のため）。`link` が決まっていれば変えない |
 | `Status(N, connected, host = true)` | どれでも | 変えない | ホストの根拠（5.3）。どの状態の行でも、上の行と合わせて当てる |
+| `Status(N, connected, battery = Some(b))` | 未接続以外 | 変えない | N の `battery` を b にする（W-11）。`battery` が `None` の行では変えない（前の値を残す） |
 | `Pose(N, Ok)`、`Oet(N, RelocBack)` | 未接続以外 | 追跡中 | `tracked_since_connect = true` |
 | `Pose(N, Lost か RecentlyLost)`、`Oet(N, LostTracking)` | 追跡中、地図同期中 | 位置取り直し中 | |
 | `Pose(N, Lost か RecentlyLost か Other)` | 接続、Wi-Fi 待ち | 変えない | 数えない（接続の直後に、意味のなさそうな値や `status: 3` が出るのはふつう。メモの 3.1） |
@@ -541,8 +620,9 @@ VIVE Hub は、まとめてファイルに書く。ヘッダーの `WriteTimeInt
 | `ServerStarted` | どれでも | 全台を未接続 | 役割とシリアル番号をなしに、`link` を `Unknown`。PC の Wi-Fi 情報を `Missing`（5.2）、ホストをなしに（5.3）。終了の行がないまま起動し直すこともあるので（メモの 3.5）、ここで必ず捨てる |
 | `ServerStopped` | どれでも | 全台を未接続 | 役割とシリアル番号をなしに、`link` を `Unknown`。PC の Wi-Fi 情報を `Unknown`、ホストをなしに（5.3） |
 
-- 表にない組み合わせ（例: 未接続のトラッカーの `Pose`）は、状態を変えずに「順序の合わない出来事」として数える。ただし、`TrackerAdded` を一度も見ていない番号（途中から読み始めた）は例外で、その出来事から推し量った状態で行を足し、`inferred = true` にする（`Pose(Ok)` と `Oet(RelocBack)` なら追跡中、`Pose(Lost か RecentlyLost)` と `Oet(LostTracking)` なら位置取り直し中、`ClientLink(true)` なら地図同期中、`Status(connected, map_ready)` なら位置取り直し中、`Status(connected)` なら接続、など。推し量れない出来事なら「接続」。`Status` の `connected: 0` と `SerialKnown` では足さない）。推し量って足した行の `tracked_since_connect` は `false` から始める（追跡中で足したなら `true`）。`link` は、足した出来事が `Status` で `usb` があればその値、なければ `Unknown`（あとの `Status` で決まる）。推し量って足した行にも、新しい `conn` を付ける（下の「接続」）。
-- `Status` の 4 つの行は、1 つの状態の行に、当てはまるものをすべて当てる（状態は上の 2 行のどちらかで決め、`link` とホストは、それぞれの行で決める）。
+- 表にない組み合わせ（例: 未接続のトラッカーの `Pose`）は、状態を変えずに「順序の合わない出来事」として数える。ただし、`TrackerAdded` を一度も見ていない番号（途中から読み始めた）は例外で、その出来事から推し量った状態で行を足し、`inferred = true` にする（`Pose(Ok)` と `Oet(RelocBack)` なら追跡中、`Pose(Lost か RecentlyLost)` と `Oet(LostTracking)` なら位置取り直し中、`ClientLink(true)` なら地図同期中、`Status(connected, map_ready)` なら位置取り直し中、`Status(connected)` なら接続、など。推し量れない出来事なら「接続」。`Status` の `connected: 0` と `SerialKnown` では足さない）。推し量って足した行の `tracked_since_connect` は `false` から始める（追跡中で足したなら `true`）。`link` は、足した出来事が `Status` で `usb` があればその値、なければ `Unknown`（あとの `Status` で決まる）。`battery` も、足した出来事が `Status` で `battery` があればその値。推し量って足した行にも、新しい `conn` を付ける（下の「接続」）。
+- `Status` の 5 つの行は、1 つの状態の行に、当てはまるものをすべて当てる（状態は上の 2 行のどちらかで決め、`link`、ホスト、電池は、それぞれの行で決める）。
+- **電池**（`battery`。W-11）は、いまの接続のあいだの報告だけを持つ。N が未接続になるとき（`TrackerRemoved`、`DongleRemoved`、`ServerStarted`、`ServerStopped`）と、つなぎ直し（下の「重なり」）と、`TrackerAdded` で、なしにする（前の接続の値や、別の台の値を見せないため）。未接続の台の電池は、ログから分からない（7.4）。
 - 同じ状態への遷移は、何もしない（`since` を変えない）。`Pose` と `OET` の両方の行が出ても、二重に数えない。
 - **接続**（`conn`。R4〔6.2〕、ホストの根拠〔5.3〕、集計の時間〔8.1〕で共通に使う）: 1 つの番号 N で、未接続でなくなってから（`TrackerAdded`。推し量って足したときは、足した出来事の時刻）、未接続になるまで（`TrackerRemoved`、`DongleRemoved`、`ServerStarted`、`ServerStopped`）か、下の「重なり」のつなぎ直しまで。始まるたびに新しい `conn` を付ける（エンジンの中の通し番号。`rebuild` で振り直す）。同じ番号 N でも、次の接続は別の接続（番号はスロットで、つなぎ直すと別のトラッカーが使うため。3.2）。
 - **重なり**（同じ出来事の行が 2 回出る。メモの 2.2）: 未接続以外の N に `TrackerAdded(N)` が来たとき、N の前の `TrackerAdded` から 1 秒（`state.dup_ms` = 1000。仮）以内なら、2 つ目の行として何もしない（数えない）。1 秒を超えていたら（前の `TrackerAdded` を見ていない、推し量って足した台も）、`TrackerRemoved` を見落とした**つなぎ直し**として、未接続を経ずに接続にし（上の表の 1 行目の「ほかに変えること」も行う）、「順序の合わない出来事」に数える。`TrackerRemoved` の重なりは、上の表の「未接続 → 変えない」で吸収する。どちらも、R4 と集計の `sessions` は、状態が変わった 1 つ目の行だけで数える。
@@ -600,6 +680,59 @@ VIVE Hub のサーバーが、ホストの Wi-Fi 情報を持っているか。P
 - **例**（番号の使い回し）: `HostAssigned(2)` で A がホスト（命令）になり、PC の Wi-Fi 情報が `Missing` になる。A が `TrackerRemoved(2)` で切れ、別のトラッカー B が `TrackerAdded(2)` でつながる。ホストの根拠は A の接続のまま（接続の終わったホスト）で、B の役割は `Unknown`。B は問い合わせの候補に入る。このあと、次の命令の前に R1 が出ても、B をホストとして案内しない（6.2 の R1）。B の状態の行に `is host: 1` が来れば、ホストは B の接続（報告）に替わる。
 - **例**（途中から読み始めた。前の日のファイルがなく、PC の Wi-Fi 情報は `Unknown`）: `Status(2, connected, host = true)`、`Status(4, connected, host = false)`、`Status(0, connected, host = false)`（どれも `TrackerAdded` を見ていないので、推し量って足す。5.1）。ホストは 2（報告）で、2 の役割は `Host`。続いて `WifiRequestUnanswered` が来ると、候補は 4 と 0 の 2 台なので、状態は変えない（5.1）。0 が `ClientLink(0, true)` で地図同期中になっていれば、候補は 4 だけで、4 が Wi-Fi 待ちになる。R1 が出れば、案内するのはトラッカー 2。
 
+### 5.4 トラッカーの台帳と、画面に並べる台（W-11、W-12）
+
+画面に並べるトラッカーの一覧の元（7.4）。#27 で足した。スロットの行（5.1）は、つなぎ直しで別の台に使われ、切れるとシリアル番号が外れる。そこで、**シリアル番号ごとに**、ログから分かったこと（VIVE Hub の番号、ファームウェアの版、最後に見た時刻）を台帳（`Identity` の並び。3.5）に持ち、切れても消さない（未接続の台も一覧に出すため。W-11 の接続の状態）。
+
+| 出来事 | 台帳 |
+|---|---|
+| （起動時。`rebuild` も） | 空 |
+| `SerialKnown(N, S, hub, fw)` | S の行がなければ足す。`hub_number` は、hub が `Some` ならその値（`None` なら前の値のまま）。`firmware` も同じ。`last_seen` をいまに |
+| `Status(N, connected = true, …)`（N の行にシリアル番号 S が付いている） | S の `last_seen` をいまに |
+| `TrackerRemoved`、`DongleRemoved`、`ServerStarted`、`ServerStopped` | 変えない（台そのものの情報のため） |
+
+- 持つのは 16 台まで（ドングルのスロットは 5 つ。ペアリングをし直した日には、別の台が増えうる）。17 台目を足すときは、いまつながっていない台のうち `last_seen` の最も古いものを消す（つながっている台は消さない。つながっていない台がなければ、`last_seen` の最も古い台を消す。スロットは 5 つなので、ふつうは起きない）。
+- 台帳は、読み直し（起動、再構築）のたびに、前の日のファイルといまのファイルから組み立て直す（4.5）。そのため、一覧に出る未接続の台は、前の日かその日に一度でもつながった台。それより前にしか使っていない台は、つなぐまで出ない（VIVE Hub のペアリングの一覧はログから読めない。起動の直後の `connected: 0` の状態の行には、シリアル番号がない。メモの 3.5）。
+- 同じ VIVE Hub の番号の台が 2 つになっても（ペアリングをし直したなど）、どちらも残す（末尾で見分けられる。3.2。並べ方は 7.4）。番号が台に固定かは確かめていない（U-18）。
+
+**画面に並べる台**（`Snapshot::devices`。`DeviceView`。3.5）は、台帳とスロットの行から、写しを作るたびに組み立てる（状態として持たない）。
+
+- 台帳の台ごとに 1 つ。その台のシリアル番号が付いた、未接続以外のスロットの行があれば（5.1 で、1 つのシリアル番号は多くて 1 つの番号に付く）、その行の値を使う: `key` はその番号、`connection` はその行の `link`（`Usb` なら `Usb`、`Dongle` と `Unknown` なら `Dongle`。`Unknown` をドングル経由とするのは 5.1 の `DongleRemoved` と同じ理由）、`battery` と `phase` はその行の値、`host` は、その行がホストの接続（3.5 の「ホストの接続が続いている」）か。なければ、`key` なし、`connection = Disconnected`、`battery` なし、`phase = Disconnected`、`host = false`。
+- **仮の台**: 未接続以外で、シリアル番号がまだ付いていないスロットの行ごとに 1 つ（`serial`、`hub_number`、`firmware` がない）。接続の直後（ふつう 1 秒以内に `SerialKnown` が来る。見本の 4 章）と、途中から読み始めて接続の始まりを見ていない台。`SerialKnown` が来たら、仮の台は消え、台帳の台の 1 つになる（同じ台が 2 つ並ばない）。
+- 台数を決めない（W-9、W-12）。3 台でも 5 台でも、同じ決まりで並ぶ。
+
+### 5.5 ドングル（W-11）
+
+ドングルの接続（`Snapshot::dongle`）。#27 で足した。表示（7.4）だけに使い、規則とトラッカーの状態は変えない（ドングルが抜けたときにトラッカーを切るのは、これまでどおり `DongleRemoved` の 5.1 の行）。
+
+| 出来事 | ドングル |
+|---|---|
+| （起動時。`rebuild` も） | `Unknown` |
+| `DongleAdded` | `Connected` |
+| `DongleRemoved` | `Disconnected` |
+| `DongleReport(connected)` | connected なら `Connected`、でなければ `Disconnected`（報告。途中から読み始めて、`Dongle is added.` を見ていないときのため） |
+| `TrackerAdded(N, usb = false)` | `Connected`（ドングルを通してつながったのだから、ドングルはある。前が `Disconnected` でも） |
+| `ServerStarted` | `Unknown`（ドングルがあれば、すぐあとに `Dongle is added.` が来る。見本の 1 章で 0.4 秒後） |
+| `ServerStopped` | `Unknown`（VIVE Hub が止まると、ログからは分からないため） |
+
+- `DongleReport` と `DongleAdded` の行が、ドングルがないときにどう出るかは確かめていない（U-20）。
+
+### 5.6 VIVE Hub のトラッカー用サーバー（W-10）
+
+VIVE Hub のサーバーが動いているか（`Snapshot::hub`）。手引きの最初の段（7.4 の G1）と、利用者に見せる全体の状態（7.4）に使う。#27 で足した。
+
+| 出来事 | `HubState` |
+|---|---|
+| （起動時。`rebuild` も） | `Unknown` |
+| `ServerStarted` | `Running` |
+| `ServerStopped` | `Stopped` |
+
+- ほかの記録では変えない（`Release begin` のあとの終了の途中の行で、`Running` に戻さないため）。`Unknown` は、行は読めているが、開始と終了の行を見ていない（途中から読み始めた）ことで、動いているものとして扱う（7.4）。
+- **ログだけでは足りない**: 終了の行のないまま止まることがある（6 日で 4 回。PC の終了や強制の終了。メモの 3.5）。そのときログは `Running` のまま伸びなくなるが、トラッカーがつながっていないと、動いている VIVE Hub も何時間も行を書かない（最長 10.6 時間。メモの 3.5）ので、伸びないことからは見分けられない。
+- そこで、**アプリ（Windows）は、10 秒ごとにプロセスの一覧を見て、`ViveTrackerServer.exe` があるかを確かめる**（M1-9）。読むだけで、プロセスにも機器にも何も送らない（W-7。11 章）。名前は大文字と小文字を区別せずに比べ、設定で足せる（`m2-dongle-reader.md` の DG-3 の確かめと同じ決まり。名前の根拠も同じ）。クレートは M2 と同じ `sysinfo`（0.40.4、MIT。`default-features = false, features = ["system"]`。D-32、`m2-dongle-reader.md` の 10 章）。判定（名前の一覧 → あるか）は、入出力のない関数にする。
+- 表示の写し（7.4）は、VIVE Hub が動いているかを、プロセスの確かめの結果（`Some(true)`・`Some(false)`。確かめていなければ `None`）を先に、なければ `HubState` で決める: プロセスがない → 止まっている。プロセスがある → 動いている（ログが `Stopped` でも。起動し直した直後で、開始の行がまだ書かれていないため）。`None`（Linux、再生、`openut watch` でプロセスを見ないとき）→ `HubState` が `Stopped` なら止まっている、ほかは動いている。
+- プロセスの確かめは、規則と集計には使わない（ログの時刻だけで動かす決まり。D-22）。
+
 ## 6. 検出の規則（W-3、W-4）
 
 ### 6.1 共通の決まり
@@ -632,11 +765,11 @@ VIVE Hub のサーバーが、ホストの Wi-Fi 情報を持っているか。P
   - 仮の値: `r1.count = 3`、`r1.span_s = 15`、`r1.gap_s = 10`（変えない）。ふつうの開始でも、ホストが Wi-Fi の親機を立てるまでのあいだに、クライアントが尋ねて断られることがありうる（6 日分には出ていないが、ほかの環境では分からない）。`span_s` は、それを不具合と見なさないための余裕。`gap_s` は、断られる間隔（9 割が 0.56 秒以内）より十分長く、離れた問い合わせを 1 つに数えない長さ。決め方は 6.1。`gap_s` は `quiet_s` より短くする（始まりは厳しく、終わりはゆるく）。
   - `Query wifi from tracker N` が出たかどうか（`queried`）は条件に入れない。綴りは分かった（4.4）が、尋ねたのに答えが来ない場合も、利用者がすること（ホストの電源の入れ直し）は同じため。`Detection` の詳細として残す。
 - **案内するトラッカー**: ホスト（5.3）。ふつうは最後に `HostAssigned` された台。途中から読み始めて `HostAssigned` を見ていなければ、状態の行で `is host: 1` だった台（PC の Wi-Fi 情報が `Unknown` のままでも分かる）。**ホストの根拠は接続に結びついている**（5.3）ので、案内する台（`{H}`）は、案内を作るたび（`Raised`、`Escalated`）に、次の順で決める。
-  1. ホストの接続が続いていれば、その台（番号 `key`）。名前は、その番号に付いたシリアル番号で引く（3.2）。
-  2. 接続の終わったホストで、根拠の `serial` が分かっていれば、同じシリアル番号の台を探す。いまどこかの番号 M でつながっていれば、その台（番号 M。つなぎ直して番号が変わった同じトラッカー）。つながっていなければ、そのシリアル番号のニックネーム（9.1）があれば、それ（同じトラッカーと分かるため）。
-  3. どれでもなければ（ホストがない、接続の終わったホストのシリアル番号が分からない、ニックネームがない）、「ホストのトラッカー」。**同じ番号にいまつながっている別の台の名前（`トラッカー{N}` も）は使わない**（レビュー〔2 回目〕の指摘。番号の使い回しで、別の台の電源を案内しないため）。
-  - `Detection` の `tracker`（3.6）は、1 か 2 で台が決まったときはその番号（1 は `key`、2 は M）、それ以外は `None`。`expect.toml` の `tracker`（10.3）は、この値と比べる。
-  - **例**（5.3 の例の続き。A のシリアル番号は分からない）: B が番号 2 でつながっているあいだに R1 が出ると、案内は「ホストのトラッカーの電源だけを入れ直す」で、`tracker` は `None`。A のシリアル番号が分かっていて、ニックネームが「腰」なら「腰」。A が番号 4 でつなぎ直していれば（同じシリアル番号の `SerialKnown(4, …)`）、A の名前で、`tracker` は 4。
+  1. ホストの接続が続いていれば、その台（番号 `key`）。呼び名は、その番号に付いたシリアル番号で、台帳（5.4）から作る（3.2）。シリアル番号がまだ付いていなければ、番号のない呼び名（「ホストのトラッカー」。3.2 の表）。
+  2. 接続の終わったホストで、根拠の `serial` が分かっていれば、同じシリアル番号の台を探す。いまどこかの番号 M でつながっていれば、その台（番号 M。つなぎ直して番号が変わった同じトラッカー）。つながっていなければ、台帳のその台の呼び名（VIVE Hub の番号と末尾。同じトラッカーと分かるため。初版の「ニックネームがあれば」は、ニックネームをやめたので、これに替えた）。
+  3. どれでもなければ（ホストがない、接続の終わったホストのシリアル番号が分からない）、「ホストのトラッカー」。**同じ番号にいまつながっている別の台の呼び名は使わない**（レビュー〔2 回目〕の指摘。番号の使い回しで、別の台の電源を案内しないため）。
+  - `Detection` の `tracker`（3.6）は、1 か 2 で台が決まり、いまつながっているときはその番号（1 は `key`、2 は M）、それ以外は `None`。`serial` は、1 ではその番号に付いたシリアル番号（なければ `None`）、2 では根拠の `serial`（つながっていなくても）、3 では `None`。`expect.toml` の `tracker`（10.3）は、`tracker` の値と比べる。
+  - **例**（5.3 の例の続き。A のシリアル番号は分からない）: B が番号 2 でつながっているあいだに R1 が出ると、案内は「ホストのトラッカーの電源だけを入れ直す」で、`tracker` も `serial` も `None`。A のシリアル番号が分かっていれば（台帳にある）、A の呼び名（例: `トラッカー 1（…0001）`）で、`tracker` は `None`、`serial` は A のシリアル番号。A が番号 4 でつなぎ直していれば（同じシリアル番号の `SerialKnown(4, …)`）、A の呼び名で、`tracker` は 4。
 - **長引いたとき**: `Raised` から `r1.escalate_s`（仮 180 秒）たっても続いていたら、`Escalated` を 1 回だけ出す（期限は `Raised` の時刻 + `r1.escalate_s`。ちょうどに直れば出さない）。
 - **直った**: `HostWifiObtained` か `WifiAssigned` が来たら `Resolved`。
 - **終わった**: 未接続以外のトラッカーがなくなったとき、`DongleRemoved` が来たとき（USB の台が残っていても。ドングル経由の台がなくなれば、トラッカー同士の Wi-Fi の話でなくなるため）、または `WifiRequestUnanswered` が `r1.quiet_s`（仮 60 秒）を超えて来なかったとき（期限は最後の問い合わせの時刻 + `r1.quiet_s`）、`Ended`。
@@ -706,7 +839,7 @@ VIVE Hub のサーバーが、ホストの Wi-Fi 情報を持っているか。P
 | `[N] OET OVERSPEED!` | 集計に数えるだけ | 何をすればよいかの根拠がない。走り出し（R-6）の検知は、姿勢を直接読める M3 で行う |
 | 短い喪失（`r5.wait_s` より短い） | 集計に数えるだけ | 6 日で 234 回あり、案内にすると多すぎる |
 | `Query wifi from tracker N` が出たのに `Got host wifi info.` が来ない | 数えるだけ（`Detection` にはしない） | 実例を見ていない（メモでは数えていない）。続けて断られる問い合わせがあれば R1 が出るので、別の規則は要らない見込み。再生テストで実例が見つかれば、規則にするかを決める |
-| ログが止まった（伸びない） | 見張り役の状態として出す（7.4） | トラッカーの不具合ではなく、見張り役が見えていないこと |
+| ログが止まった（伸びない） | 見張り役の具合として持ち、利用者には「確かめられない」として見せる（7.4 の「仕組みの側の不具合」） | トラッカーの不具合ではなく、見張り役が見えていないこと |
 
 ## 7. 案内の出し方（W-5）
 
@@ -719,31 +852,37 @@ VIVE Hub のサーバーが、ホストの Wi-Fi 情報を持っているか。P
 | R1 | push | push（1 回だけ） | push | 欄から消すだけ | エピソードごとに 1 回。間隔は空けない（11/27 は 3 分おきに 3 回起きており、毎回知るべきため） |
 | R2 | push | — | 欄から消すだけ | 欄から消すだけ | 同じトラッカーの R2 のエピソードが終わってから 5 分（`notice.cooldown_s`）以内に始まったものは push しない |
 | R3 | push | — | 欄から消すだけ | 欄から消すだけ | R2 と同じ |
-| R4 | push | — | 欄に「{T} がつながりました」を 30 秒出してから消す | 欄から消すだけ | 同じトラッカーの R4 を push してから 5 分以内は push しない（欄の案内に回数を足す） |
+| R4 | push | — | 欄に「{T} がつながった」を 30 秒出してから消す | 欄から消すだけ | 同じトラッカーの R4 を push してから 5 分以内は push しない（欄の案内に回数を足す） |
 | R5 | push | — | 欄から消すだけ | 欄から消すだけ | R2 と同じ。**既定では R5 を切ってあるので、何も出ない**（6.2） |
+
+- 「同じトラッカー」は、`serial`（3.6）が分かっていれば同じシリアル番号の台、分からなければ同じ番号 N（初版は番号 N だけで見ていた。つなぎ直しで番号が変わっても、同じ台を数えるため）。
+- 「欄」は、状態の窓の異常の案内の欄（7.4 の窓の 2）。
 
 全体の決まり:
 
 - **間隔**: push は、前の push から 10 秒（`notice.min_gap_s`）以上空ける。そのあいだに来た push は待たせ、まとめて 1 つにする（優先度の最も高いものを出し、見出しに「ほか N 件」を足す）。優先度は R1 > R4 > R3 > R2 > R5。
 - **追いつきのあいだ**（4.5）: push しない。終わった時点で続いているエピソードを、優先度の順に、上の間隔の決まりで出す。
-- **再構築のあと**（4.1）: 配信の決まりは、再構築の前に push 済みで続いていたエピソードを、規則とトラッカーの組で覚えている。再構築の追いつきが終わった時点で続いているエピソードのうち、規則とトラッカーが同じものは、同じエピソードの続きとみなして push し直さない（push 済みの段階も引き継ぐ。R1 で `Escalated` を push 済みなら、もう出さない）。覚えている組のうち、再構築のあと続いていないものは、欄から消すだけ（R1 の「直りました」も出さない。直ったのを見たのではないため）。エピソードの番号は再構築で振り直されるので、組の照合には使わない。
+- **再構築のあと**（4.1）: 配信の決まりは、再構築の前に push 済みで続いていたエピソードを、規則とトラッカー（`serial` が分かれば台、分からなければ番号 N）の組で覚えている。再構築の追いつきが終わった時点で続いているエピソードのうち、規則とトラッカーが同じものは、同じエピソードの続きとみなして push し直さない（push 済みの段階も引き継ぐ。R1 で `Escalated` を push 済みなら、もう出さない）。覚えている組のうち、再構築のあと続いていないものは、欄から消すだけ（R1 の「直った」も出さない。直ったのを見たのではないため）。エピソードの番号は再構築で振り直されるので、組の照合には使わない。
 - アプリを起動し直したときは、配信の決まりの覚えていることもなくなるので、続いているエピソードはもう一度 push される（起動し直した利用者に、いまの問題を知らせ直すのはよいこととする）。
 - **直ったら待たせている案内を捨てる**: 待たせている push のエピソードが、出す前に `Resolved` か `Ended` になったら、出さない。
 - 配信の値（`notice.cooldown_s`、`notice.min_gap_s`）も仮の値。再生テストで、1 晩に出る push の数を見て決める（6.1）。
 
-文言（意味。見た目と言い回しの調整は UI/UX デザイン担当。意味を変えるときは設計の変更）。`{T}` は対象のトラッカーの名前、`{H}` はホストの名前（3.2。決め方は 6.2 の R1 の「案内するトラッカー」。決まらなければ「ホストのトラッカー」）。オーナーの方針（`roles/ux.md`）に合わせ、見出し（状態）と、いま何をすればよいかの 1 行だけにする。
+文言（意味。見た目と言い回しの調整は UI/UX デザイン担当。意味を変えるときは設計の変更）。`{T}` は対象のトラッカーの呼び名（3.2。`serial` の台。シリアル番号が分からなければ番号のない呼び名）、`{H}` はホストの呼び名（3.2。決め方は 6.2 の R1 の「案内するトラッカー」。決まらなければ「ホストのトラッカー」）。オーナーの方針（`roles/ux.md`）に合わせ、見出し（いまの状態）と、いま何をすればよいかの 1 行だけにする。
 
-| 規則と段階 | 見出し | すること（1 行） |
+| 規則と段階 | 見出し（意味） | すること（1 行。意味） |
 |---|---|---|
-| R1 `Raised` | トラッカーが始まらない状態です | {H} の電源だけを入れ直す。ほかのトラッカーとドングルはそのまま |
-| R1 `Escalated` | まだ始まらない状態です | {H} の電源だけを入れ直す。ほかのトラッカーとドングルはそのまま |
-| R1 `Resolved` | 直りました | （なし） |
-| R2 `Raised` | {T} が地図を受け取れていません | {T} を {H} の近くに置いて待つ |
-| R3 `Raised` | {T} の位置合わせが終わりません | {T} を手に持ち、部屋の中をゆっくり見せる |
-| R4 `Raised` | {T} の接続が切れました | {T} の電源が入っているか確かめる |
-| R4 `Resolved` | {T} がつながりました | （なし） |
-| R5 `Raised` | {T} が 1 分以上、位置を失っています | {T} のカメラの前をあけ、明るい方へ向ける |
+| R1 `Raised` | トラッカーの追跡が始まらない | {H} の電源だけを入れ直す。ほかのトラッカーとドングルはそのまま |
+| R1 `Escalated` | まだ追跡が始まらない | {H} の電源だけを入れ直す。ほかのトラッカーとドングルはそのまま |
+| R1 `Resolved` | 直った | （なし） |
+| R2 `Raised` | {T} の準備に時間がかかっている | {T} を {H} の近くに置いて待つ |
+| R3 `Raised` | {T} の追跡が始まらない | {T} を手に持ち、部屋の中をゆっくり見せる |
+| R4 `Raised` | {T} の接続が切れた | {T} の電源が入っているか確かめる |
+| R4 `Resolved` | {T} がつながった | （なし） |
+| R5 `Raised` | {T} の追跡が 1 分以上止まっている | {T} のカメラの前をあけ、明るい方へ向ける |
 
+- **#27 で直した文言**（W-10）: 初版の R2「地図を受け取れていません」、R3「位置合わせが終わりません」、R5「位置を失っています」は、内部の仕組みの言葉なので、利用者から見えること（準備が終わらない、追跡が始まらない・止まっている）に替えた。R1 の「トラッカーが始まらない状態です」は、何が始まらないのかが分からない（`roles/ux.md` の「不自然な言い回しの例」）ので、「追跡が始まらない」にした。すること（1 行）は変えていない。
+- **使わない言葉**（W-10。文言の表、7.4 の 1 行、手引き、トレイの 1 行のすべて）: 地図、同期、Wi-Fi、位置合わせ、位置取り直し、見張り、監視、ログ、スロット、エピソード、規則の名前（R1〜R5）、内部の状態の名前（3.5）。使ってよい言葉は、VIVE Hub の画面と、機器と、利用者の操作の言葉: トラッカー、ドングル、ホスト、電源、追跡、接続、電池、充電、VIVE Hub、SteamVR、OpenUT。M1-7 のテストで、文言の関数が返すすべての文字列に、使わない言葉が入っていないことを確かめる。
+- 文言の既定（`openut_core::text` が返す文字列）は、この表の意味を丁寧な形にしたものを、M1-7 で仮に置く（例: 「トラッカーの追跡が始まりません」「{H}の電源だけを入れ直してください。ほかのトラッカーとドングルは、そのままにします」）。UI/UX デザイン担当の文言（`docs/design/ui/`。yomiyasu で推敲したもの）が main に入ったら、そちらに替える（意味が同じなら設計の変更は要らない）。
 - R1 の文言は W-3 のとおり、全台の電源オフとドングルのリセットを勧めない。「ほかのトラッカーとドングルはそのまま」をはっきり書くのは、11/27 にドングルのリセットと再ペアリングを 3 回やって 3 回とも再発しているため（`findings-2026-11-27.md`）。
 - R3 の「部屋の中を見せる」は、静止したまま起動すると位置合わせに失敗し続けた記録（`findings-2026-11-28.md`）と、PRD の R-8 による。
 - R5 の「カメラの前をあけ、明るい方へ」は、HTC の公式の案内（追跡が安定しないとき: 障害物から離す、本が読める明るさ。`findings-2026-11-27.md` の「HTC の公式情報」）による。
@@ -758,7 +897,7 @@ VIVE Hub のサーバーが、ホストの Wi-Fi 情報を持っているか。P
 - **クレート**: `openvr` 0.9.0（MIT）。`openvr_sys` 2.1.4（MIT）を通して OpenVR（BSD 3 条項の形。ValveSoftware/openvr の `LICENSE` で確認）を静的にリンクする。オーバーレイの作成、画像、HMD に対する配置、表示の API がある（クレートの `src/overlay.rs` で確認）。初期化（`openvr::init`）は `unsafe fn` なので、この呼び出しの場所だけ `unsafe` を許す（理由を PR の説明に書く。`roles/impl.md`）。
   - `openvr_sys` は、ビルドのときに CMake と C++ のコンパイラーで OpenVR をビルドし、bindgen（libclang が要る）で型を作る（クレートの `build.rs` で確認）。Windows では MSVC が要る（README で確認）。**CI の Windows で通るかは未確認**。通らなければ、代案として、`libloading` 0.9.1（ISC）で実行時に `openvr_api.dll` を読み、OpenVR の C の関数表（`VR_GetGenericInterface` の `FnTable:` の形）を自前の最小の宣言で呼ぶ（`unsafe` の範囲は、その 1 つのモジュール）。どちらにするかは M1-12 の最初に決め、PR の説明に書く。
   - Windows だけの依存にする（`[target.'cfg(windows)'.dependencies]`）。Linux の CI ではビルドしない。
-- **文字の描画**: 書体は、実行時に Windows の書体のフォルダーから読む（レポジトリと配布物に書体を入れない）。候補は Yu Gothic UI、メイリオ、MS ゴシック の順。日本語以外の Windows にこれらがあるかは未確認。どれもなければ、SteamVR の中の表示をやめ、デスクトップと状態の窓だけにする（状態の窓に理由を出す）。描画のクレートは `fontdue` 0.9.5（MIT OR Apache-2.0 OR Zlib）か `ab_glyph` 0.2.32（Apache-2.0）。状態の窓（egui）と同じものにできるなら、そろえる（M1-12 で決める）。
+- **文字の描画**: 書体は、実行時に Windows の書体のフォルダーから読む（レポジトリと配布物に書体を入れない）。候補は Yu Gothic UI、メイリオ、MS ゴシック の順。日本語以外の Windows にこれらがあるかは未確認。どれもなければ、SteamVR の中の表示をやめ、デスクトップと状態の窓だけにする（理由はアプリのログにだけ書く。仕組みの側の言葉を画面に出さないため。W-10）。描画のクレートは `fontdue` 0.9.5（MIT OR Apache-2.0 OR Zlib）か `ab_glyph` 0.2.32（Apache-2.0）。状態の窓（egui）と同じものにできるなら、そろえる（M1-12 で決める）。
 - 毎フレームの描画はしない。画像を渡すのは案内を出すときだけ（12 章）。
 
 ### 7.3 デスクトップ
@@ -768,46 +907,150 @@ VIVE Hub のサーバーが、ホストの Wi-Fi 情報を持っているか。P
 - トーストには、送り主のアプリの ID（AppUserModelID）が要る。クレートの説明では、インストールしていないプログラムは、当面 PowerShell の ID（`Toast::POWERSHELL_APP_ID`）を使えるとある。その場合、送り主が「Windows PowerShell」と表示される。OpenUT 自身の ID を登録する方法（スタートメニューのショートカットか、レジストリ）は、Microsoft の公式の文書をこの環境から読めなかったので未確認。M1-10 で確かめ、確かめられるまでは PowerShell の ID を使う。
 - SteamVR が動いているときも出す（W-5 は両方に出すことを求めている。設定でどちらも切れる）。
 
-### 7.4 画面: 何をいつ見せるか
+### 7.4 画面: 何をいつ見せるか（W-10〜W-12）
 
-画面は 3 つ: トレイのアイコン（常駐）、状態の窓（開いたときだけ）、通知（7.2、7.3）。画面なしで動かす `openut watch`（コンソールに案内を出す）もある（M1-9）。
+画面は 3 つ: トレイのアイコン（常駐）、状態の窓（開いたときだけ）、通知（7.2、7.3）。画面なしで動かす `openut watch`（コンソールに push の案内を出す）もある（M1-9）。#27 で、オーナーの指示（D-35。PRD の W-10〜W-12）に合わせて、この節を書き直した。
 
-**見張り役の状態**（トラッカーの状態とは別。トレイと状態の窓に出す）
+**見せるもの**（W-10）: 次の 3 つと、トラッカーとドングルの項目（W-11）だけ。
 
-| 状態 | 条件 |
+1. 装着と準備の手引き（下の「手引き」）。
+2. いまの状態が、正常・待機中・異常のどれか（全体と、トラッカーごと。下の「利用者に見せる状態」と「全体」）。
+3. 異常のときに、利用者がすること（7.1 の「すること」と、下の「仕組みの側の不具合」の 1 行）。
+
+**見せないもの**: 内部の状態の名前（3.5。接続、Wi-Fi 待ち、地図同期中、位置取り直し中、追跡中）、PC の Wi-Fi 情報、見張り役の具合（うまく動いているときの「見張り中」「監視中」の印も）、ログのファイルの名前と日付、読めなかった行の数、スロットの番号 N、その状態になってからの時間、日ごとの集計、規則とエピソードの名前。これらは、アプリのログと集計のファイル（8 章、9.3）にだけ書く。初版の状態の窓の 1（見張り役の状態の行。「見張り中（11/28 のログ）」）、3 の内部の状態の名前と経過時間、4（PC の Wi-Fi 情報）、5（今日の集計）と、F3（名前を付ける）は、やめた。
+
+**表示の写し**（`openut_core::display`。入出力なし。#27 で足した）: 画面に出す中身は、次の入力から 1 つの関数で作る。トレイ、状態の窓、`openut watch` は、これを描くだけにする（M3 でも同じものを使う。R-9）。
+
+```rust
+/// How well the app can watch (computed by the app, M1-9). Never shown as words (below).
+pub enum WatchHealth { Ok, NotFound, Unreadable, Stalled, FormatMismatch }
+pub enum Overall { Ok, Waiting, Fault, Unknown }      // 正常、待機中、異常、確かめられない
+pub enum UserState { Ok, Waiting, Fault }             // 正常、待機中、異常 (per tracker)
+pub enum GuideStepId { G1, G2, G3, G4, G5 }
+pub struct GuideStep { pub id: GuideStepId, pub done: bool, pub progress: Option<(u16, u16)> }
+pub enum Line { Fault { headline: String, action: String }, Guide(GuideStepId), Health(WatchHealth) }
+pub struct FaultRow { pub headline: String, pub action: String, pub resolved: bool }   // R4 "つながった": resolved
+pub fn view(snapshot: &Snapshot, live: &[Notice], health: WatchHealth,
+            hub_process: Option<bool>, catching_up: bool) -> DisplayModel;
+pub struct DisplayModel {
+    pub overall: Overall,
+    pub line: Option<Line>,          // the one thing to do now (below)
+    pub faults: Vec<FaultRow>,       // the live notices, newest first (the window's list)
+    pub guide: Vec<GuideStep>,       // G1..G5 (below)
+    pub dongle: DongleState,
+    pub devices: Vec<DeviceRow>,     // in the order of the list (below)
+    pub greyed: bool,                // true when overall is Unknown: no value is shown as current
+}
+pub struct DeviceRow {
+    pub label: TrackerLabel, pub serial: Option<Serial>, pub connection: Connection,
+    pub battery: Option<Battery>, pub state: Option<UserState>, pub firmware: Option<String>,
+    pub host: bool,
+}
+```
+
+- `live` は、配信の決まり（7.1）が持つ「欄」の中身: 続いているエピソード（`Raised` のあと `Resolved` も `Ended` も出ていないもの）の最新の `Notice` と、R4 の「つながった」を出している 30 秒のあいだの `Resolved`。
+- `line` の文言は、`Fault` では案内の文言（7.1）、`Guide` と `Health` では `openut_core::text` が作る（手引きの段、下の「仕組みの側の不具合」の 1 行）。
+- `DisplayModel` と `DeviceRow` には、内部の状態（`Phase`）、PC の Wi-Fi 情報、スロットの番号（`TrackerKey`）、経過時間、集計の値を入れる欄を作らない（見せないものが画面に紛れ込まないよう、型で守る。`DeviceView` の `key` と `phase` は、写しを作るときに使うだけ）。
+
+**利用者に見せる状態**（トラッカーごと。`DeviceRow::state`。上から順に、最初に当てはまるもの）
+
+| 見せる状態 | 条件 |
 |---|---|
-| 見張り中 | いまのファイルを読めている |
-| 待機中 | 見張り中で、未接続以外のトラッカーがない |
-| ログが見つからない | ログのフォルダーか `ViveTrackerServer_*.txt` が見つからない |
-| ログを読めない | 読み取りが 3 回続けて失敗した（共有の違反、権限など。理由を出す） |
-| ログが止まっている | 未接続以外のトラッカーがあるのに、10 分（仮）ファイルが伸びない |
-| ログの形が想定と違う | 見張り中のまま、その日の `unparsed` が 100 行（仮）を超えた。または、その日のサーバーの記録が 2,000 件（仮）を超えたのに、4.4 の表の種類が 1 件もない（4.7） |
+| 異常 | その台を指す、続いている案内がある（`live` の `Raised`・`Escalated` で、`serial` がその台のシリアル番号と同じもの。`serial` のない案内は、R4 でなく、`tracker` が仮の台〔5.4〕の `key` と同じもの。R4 は切れた台の案内で、同じスロットに別の台がつながりうるので、スロットでは当てない）。未接続の台でも（R4 の、切れた台） |
+| なし（`None`） | 未接続（接続の状態の「未接続」で見せる） |
+| 正常 | 内部の状態が追跡中 |
+| 待機中 | 未接続でなく、追跡中でない（内部の状態が接続、Wi-Fi 待ち、地図同期中、位置取り直し中） |
+
+- R1 では、案内する台（ホスト。6.2）が異常になり、Wi-Fi 情報を待っているクライアントは待機中のまま（利用者が手を動かす台は、ホストだけのため）。案内する台が決まらない R1（`serial` も `tracker` も `None`）では、どの台も異常にならず、全体だけが異常になる。
+- 案内の出ない待ち（R2・R3 のしきい値の前。R5 を切ってある既定では、追跡中でなくなった台も）は、待機中のまま（6.2）。
+- R4 の `Resolved`（つながった）では、異常にしない。シリアル番号の分からない台の R4 は、どの枠も異常にせず、全体と異常の案内の欄だけで見せる。
+
+**全体**（トレイと、窓の上の段。`DisplayModel::overall` と `line`。上から順に、最初に当てはまるもの）
+
+| 全体 | 条件 | `line`（いますること） |
+|---|---|---|
+| 確かめられない | 追いつき（4.5）のあいだ。または、見張り役の具合が `Unreadable`、`Stalled`、`FormatMismatch` | 追いつきのあいだは、なし。ほかは `Health`（下の「仕組みの側の不具合」の 1 行） |
+| 待機中 | 見張り役の具合が `NotFound`。または、VIVE Hub が止まっている（5.6 の決め方） | `Guide(G1)`（VIVE Hub を起動する） |
+| 異常 | `live` に `Raised`・`Escalated` の案内がある | 最も優先度の高い案内（7.1 の優先度。同じなら新しいもの）。そのすること |
+| 正常 | 未接続でない台が 1 台以上あり、そのすべてが正常 | `Guide(G5)`（身につける） |
+| 待機中 | そのほか | 手引きの、いまの段（下） |
+
+- **「確かめられない」**は、正常・待機中・異常（W-10）のどれとも言えないときの見え方（14 章で PM に確かめる）。そのあいだ、トラッカーの項目とドングルの値を、いまの値として見せない（`greyed`。見た目は UI/UX デザイン担当）。正常と見せて安心させたり、異常と見せて手を動かさせたりしないため。追いつきは、ふつう数秒で終わる（4.5、12 章）。
+
+**手引き**（W-10 の (a)。`DisplayModel::guide`）: 使い始めるときの段を、この順に見せる。どの段が済んだかは、ログ（と、VIVE Hub のプロセスの確かめ。5.6）から決める。言い回しは UI/UX デザイン担当。
+
+| 段 | 利用者がすること（意味） | 済んだとする条件 |
+|---|---|---|
+| G1 | VIVE Hub を起動する | 見張り役の具合が `NotFound` でなく、VIVE Hub が止まっていない（5.6） |
+| G2 | ドングルを PC につなぐ | ドングルが `Connected` か `Unknown`（5.5。分からないときは、利用者に手間を頼まない） |
+| G3 | トラッカーの電源を入れる | 未接続でない台が 1 台以上 |
+| G4 | 追跡が始まるのを待つ。始まらなければ、トラッカーを部屋へ向けて、ゆっくり動かす（カメラの前をふさがない） | 未接続でない台のすべてが正常。済んでいないあいだは、`progress` に、正常の台数と、未接続でない台数を入れる（例: 2/3） |
+| G5 | トラッカーを身につける | なし（ログからは分からない。G1〜G4 が済んだら、いまの段として見せる） |
+
+- **いまの段**は、最初の済んでいない段（G1〜G4 がすべて済んでいれば G5）。いまの段より後の段は、条件を満たしていても「済んだ」と見せない（`done = false`。例: VIVE Hub が止まっているときに、G2〜G4 を済んだと見せない）。
+- 異常があるときも、手引きは見せる（いますることの 1 行は、異常の案内を先にする。上の「全体」）。
+- G4 の「部屋へ向けて動かす」は、静止したまま起動すると数分のあいだ位置合わせに失敗し続けた記録（`findings-2026-11-28.md`）による（R3 の案内と同じ根拠。7.1）。G4 を G5（身につける）より前にしたのは、カメラが部屋を見渡せる向きで追跡を始めるため（設計の案。順を変えるかは、UI/UX デザインの確認で、オーナーに見てもらう。14 章）。
+- 体の部位は書かない（W-12。どこに付けるかは、利用者の使い方による）。
+- 手引きは、状態の窓にだけ出す（push しない。VR の中とデスクトップには、7.1 の push の案内だけを出す）。
+
+**仕組みの側の不具合**（W-10。見張り役の具合 `WatchHealth`。アプリ〔M1-9〕が決めて、表示の写しに渡す）
+
+| 具合（内部） | 条件 | 全体 | 利用者に見せる 1 行（すること。意味） |
+|---|---|---|---|
+| `Ok` | いまのファイルを読めている | （上の「全体」のとおり） | — |
+| `NotFound` | ログのフォルダーか `ViveTrackerServer_*.txt` が見つからない（4.1、9.2） | 待機中 | 手引きの G1「VIVE Hub を起動する」。窓には「フォルダーを選ぶ」（F4）も出す（VIVE Hub を既定と違う場所に入れた人のため） |
+| `Unreadable` | 読み取りが 3 回続けて失敗した（共有の違反、権限など） | 確かめられない | 「OpenUT を起動し直す」 |
+| `Stalled` | 未接続でない台があるのに、サーバーのファイルが 10 分（仮。`summary.gap_s` と同じ値。8.1）伸びない（下の注） | 確かめられない | 「VIVE Hub を起動し直す」 |
+| `FormatMismatch` | その日の `unparsed` が 100 行（仮）を超えた。または、その日のサーバーの記録が 2,000 件（仮）を超えたのに、4.4 の表の種類が 1 件もない（4.7） | 確かめられない | 「OpenUT を新しい版にする」（VIVE Hub の版が変わり、ログの形が変わったと見るため） |
+
+- **理由は画面に出さない**（W-10。オーナーの指示: 内部の実装に関わるエラーの文言を出さない）。どの具合になったか、その理由（読めなかった理由、伸びない時間、読めなかった行の数と例）、ログのフォルダーの場所は、アプリのログにだけ書く。利用者に見せるのは、全体の見え方と、すること 1 行だけ。初版の「ログが見つからない」「ログを読めない（理由を出す）」「ログが止まっている」「ログの形が想定と違う行が N 行」の表示は、やめた。
+- **どれも push しない**（VR の中とデスクトップには出さない）。トラッカーの不具合ではなく、すぐに手を動かすことでもないため。トレイの見え方と、窓の上の段で分かる。
+- VIVE Hub が止まったとき（5.6）は、見張り役の具合ではなく、手引きの G1 で見せる（利用者がすることが「VIVE Hub を起動する」で、仕組みの側の不具合ではないため）。トラッカーは、5.1 の `ServerStopped` の行で未接続になっている。
+- **`Stalled` の数え方**: アプリが最後にサーバーのファイルの伸びを見た時から、壁時計で数える。**起動と再構築の追いつきの終わりには、壁時計 − サーバーで最後に読んだ記録の時刻**（どちらも同じ PC の時計）から数え始める。VIVE Hub が終了の行のないまま止まり（5.6）、前の回の状態のまま「つながっている」台が残っているときに、10 分待たずに気づくため。ずれの読み違い（U-3）でこの差が実際より大きく出ても、VIVE Hub が動いていれば、トラッカーがつながっているあいだは数秒でファイルが伸びる（記録の間隔は 99% が 8.2 秒以内。メモの 3.5）ので、`Ok` に戻る。伸びたら `Ok` に戻る。
+
+**トラッカーの項目**（W-11。`DeviceRow`。1 台 1 つの枠）
+
+| 項目 | 元 | 読めないとき（見せ方の意味。印は UI/UX デザイン担当） |
+|---|---|---|
+| 呼び名（VIVE Hub の番号と、シリアル番号の末尾） | 台帳（5.4）。3.2 | 3.2 の表（番号がなければ末尾だけ。どちらもなければ番号のない呼び名） |
+| シリアル番号（全体） | 台帳 | 仮の台（5.4）は、分からない印 |
+| 接続の状態 | `DeviceView::connection`（未接続、ドングル、USB） | 分からないことはない（「確かめられない」のときは、全体を灰色にする） |
+| 電池の残り（% と、充電中か） | スロットの行の `battery`（5.1。つながっているあいだだけ） | 未接続なら見せない（ログから分からない）。つながっていて `battery` がないとき（状態の行がまだ来ない、`percentage: 0`。4.4）は、分からない印（0% と見せない）。`charging` がなければ、充電中の印を付けない |
+| 状態（正常・待機中・異常） | 上の「利用者に見せる状態」 | 未接続で異常でなければ、見せない |
+| ファームウェアの版 | 台帳の `firmware` | 分からない印 |
+| ホスト | `DeviceView::host`（ホストの接続が続いている台だけ。3.5） | 印を付けない |
+
+- **並べ方**（W-12）: VIVE Hub の番号の小さい順。番号の同じ台は、つながっている台を先に、次にシリアル番号の順。番号のない台は、そのあとに、シリアル番号の順。仮の台は最後に、スロットの番号の順（スロットの番号は見せない）。**並びと呼び名は、ホストの交代、つなぎ直し（スロットの番号の変化）、台数で変わらない**。3 台でも 5 台でも、同じ形の枠を並べる（5 台で崩れない配置は UI/UX デザイン担当。#28）。
+- 枠の数は、台帳の台（16 台まで。5.4）と仮の台の数。台帳にある未接続の台は、未接続の枠として並ぶ（その日か前の日に使った台。5.4）。
+- 電池の値は、状態の行が来るたびに変わる（つながっている台ごとに数分おき。メモの 3.1）ので、最大で数分前の値。電池が少ないときの案内は作らない（W-11 は見せるだけ。案内にするかは 14 章で PM に聞く）。
+
+**ドングルの項目**（W-11）: 5.5 の `DongleState` を、つながっている・つながっていない・分からない、の 3 つで見せる。
 
 **トレイのアイコン**
 
-- 3 つの見え方: ふつう（見張り中・待機中で、案内の欄が空）、案内あり（案内の欄に 1 件以上）、見えていない（ログが見つからない・読めない・止まっている）。
-- 指を置いたときの 1 行: 「追跡中 2/3」（追跡中の台数／未接続以外の台数）、「案内 1 件」、「ログが見つかりません」など、いまの見え方の理由。
+- 4 つの見え方: 全体の 4 つ（正常、待機中、異常、確かめられない）。
+- 指を置いたときの 1 行: 全体の名前と、正常の台数／未接続でない台数（例: 「正常 3/3」「待機中 2/3」）。異常のときは、最も優先度の高い案内の見出し。確かめられないときは、その 1 行。言い回しは UI/UX デザイン担当。
 - メニュー: 「状態を開く」「終了」。左クリックでも状態の窓を開く。
 
-**状態の窓**（小さな窓。閉じてもアプリは終わらない。トレイから開く）
+**状態の窓**（横長のデスクトップの窓。D-34。閉じてもアプリは終わらない。トレイから開く。配置は UI/UX デザイン担当で、VIVE Hub の配置を参考にする。W-10）
 
-上から:
+中に置くもの:
 
-1. 見張り役の状態の 1 行（例: 「見張り中（11/28 のログ）」）。「ログが見つからない」ときは「フォルダーを選ぶ」ボタン。
-2. 案内の欄: 続いているエピソードの見出しと 1 行。新しいものが上。なければ欄ごと出さない。
-3. トラッカーの一覧: 名前、ホストの印（ホストの接続が続いている台だけ。3.5）、状態（W-2 の 6 つの名前）、その状態になってからの時間。行の並びは番号の順。
-4. PC の Wi-Fi 情報: 持っている／持っていない／不明。
-5. 今日の集計: 位置が出ていた割合、喪失の回数、不具合の回数（8 章）。
+1. 全体（正常・待機中・異常・確かめられない）と、いますることの 1 行（`line`）。`NotFound` のときは「フォルダーを選ぶ」ボタン。
+2. 異常の案内の欄: 続いている案内の見出しとすること（新しいものが上。なければ欄ごと出さない）。R4 の「つながった」は 30 秒（7.1）。
+3. 手引き: G1〜G5 と、済んだ段の印、いまの段。全体が正常のときは、たたんでよい（UI/UX デザイン担当）。
+4. ドングルの項目。
+5. トラッカーの枠の並び（トラッカーの項目）。
 6. 設定: 通知（VR の中、デスクトップ）を出すかどうか。
 
 **操作の流れ**
 
 | 流れ | 手順 |
 |---|---|
-| F1 起動 | 起動 → ログのフォルダーを探す（9.2）→ 見つかれば、窓を開かずにトレイに常駐し、追いつき（4.5）のあと見張り中。見つからなければ、状態の窓を開いて「フォルダーを選ぶ」を出す |
-| F2 案内 | push の案内 → VR の中とデスクトップに出る → 状態の窓の案内の欄に残る → 直ったら欄から消える（R1 は「直りました」も push） |
-| F3 トラッカーに名前を付ける | 状態の窓の一覧で名前を押して入力する → シリアル番号をキーにして設定に保存（9.1）→ 以後の案内と一覧に使う（つなぎ直して番号が変わっても、同じ名前）。シリアル番号がまだ分からない行（3.2）は、名前を付けられない（押せない。分かるのは、ふつう接続から 1 秒以内。見本の 4 章）。どの行がどのトラッカーか分からないときは、1 台のカメラを手で覆うと、その行が数秒遅れて「位置取り直し中」に変わるので、それで見分ける（覆うと位置合わせがやり直しになることは、HTC の公式の案内「位置が合わないとき: カメラを手で 5 秒覆ってから離す」からの推定。ログに出るまでの遅れは 4.6） |
-| F4 フォルダーを選ぶ | 「フォルダーを選ぶ」→ フォルダーの選択の画面 → 選んだフォルダーに `ViveTrackerServer_*.txt` があれば設定に保存して見張り中。なければ、そう出して選び直してもらう |
+| F1 起動 | 起動 → ログのフォルダーを探す（9.2）→ 見つかれば、窓を開かずにトレイに常駐し、追いつき（4.5）のあと全体の状態を見せる。見つからなければ、状態の窓を開いて、手引きの G1 と「フォルダーを選ぶ」を出す |
+| F2 案内 | push の案内 → VR の中とデスクトップに出る → 状態の窓の異常の案内の欄に残り、その台の枠が異常になる → 直ったら欄から消える（R1 は「直った」も push） |
+| F3 | （やめた。初版の「トラッカーに名前を付ける」。呼び名は VIVE Hub の番号とシリアル番号の末尾で決まる。3.2） |
+| F4 フォルダーを選ぶ | 「フォルダーを選ぶ」→ フォルダーの選択の画面 → 選んだフォルダーに `ViveTrackerServer_*.txt` があれば設定に保存して、追いつきのあと全体の状態を見せる。なければ、そう出して選び直してもらう。この画面の題と、選び直しの 1 行だけは、どのフォルダーかを示すために「ログ」の語を使ってよい（7.1 の使わない言葉の例外） |
 | F5 終了 | トレイのメニューの「終了」→ 集計を書き出してから終わる |
 
 **画面の作り方（Rust）**
@@ -815,6 +1058,7 @@ VIVE Hub のサーバーが、ホストの Wi-Fi 情報を持っているか。P
 | 部品 | クレート（2026-11-28 に crates.io で確認） | ライセンス | 保守 | 確かめたこと・未確認 |
 |---|---|---|---|---|
 | トレイ | `tray-icon` 0.27.0（メニューは `muda` 0.22.0） | MIT OR Apache-2.0 | tauri-apps。2026-11-25 に更新 | Windows では、作ったスレッドでイベントループが回っている必要がある（README で確認）。バルーン通知の機能はない（ソースで確認） |
+| VIVE Hub のプロセスの確かめ（5.6） | `sysinfo` 0.40.4（`default-features = false, features = ["system"]`） | MIT | 2026-11-16 に更新（M2 の設計で確かめた。D-32、`m2-dongle-reader.md` の 10 章） | M2 と同じクレートと決まり。Windows だけの依存にする |
 | 状態の窓 | `eframe` / `egui` 0.37.0（内部で `winit` 0.30.13。Apache-2.0） | MIT OR Apache-2.0 | 2026-10-15 に更新 | egui の既定の書体には日本語の字がないので、7.2 と同じく Windows の書体を実行時に読み込む（既定の書体に日本語がないことは、この版では確かめていない）。窓を閉じたときに隠すだけにできるか、トレイと同じイベントループで動くかは、M1-11 の最初に確かめる |
 | フォルダーの選択 | `rfd` 0.18.0 | MIT | 2026-11-07 に更新 | |
 
@@ -823,11 +1067,14 @@ VIVE Hub のサーバーが、ホストの Wi-Fi 情報を持っているか。P
 
 ### 7.5 UI/UX デザイン担当に頼むこと（PM が `role:ux` の Issue にする）
 
-1. トレイのアイコンの 3 つの見え方（7.4）。
-2. 状態の窓の配置（7.4 の 1〜6）と、トラッカーの 6 つの状態の見分け方。
-3. SteamVR の中の案内の板: 大きさ、HMD からの距離と高さ、表示の長さ（仮 10 秒）、色、字の大きさ。VR の中で読めること（`roles/ux.md` の 4）。
-4. デスクトップのトーストの形（見出しと 1 行）。
-5. 7.1 の文言の言い回しの調整（意味は変えない）。
+#27 で直した（PM は #28 にしている）。
+
+1. トレイのアイコンの 4 つの見え方（7.4 の全体: 正常、待機中、異常、確かめられない）と、指を置いたときの 1 行。
+2. 状態の窓の配置（7.4 の 1〜6。横長。VIVE Hub の配置を参考にする。D-34、D-35）。トラッカーの枠: 呼び名（VIVE Hub の番号とシリアル番号の末尾）、シリアル番号、接続の状態、電池の残り、状態（正常・待機中・異常）、ファームウェアの版、ホストの印を、文章に頼らず配置と印で見せる（W-10、W-11）。読めないときの印（7.4 のトラッカーの項目の表）。3 台でも 5 台でも崩れないこと（W-12）。ドングルの項目。「確かめられない」ときの灰色の見せ方（`greyed`）。
+3. 手引き（G1〜G5）の見せ方: 済んだ段、いまの段、G4 の台数。
+4. SteamVR の中の案内の板: 大きさ、HMD からの距離と高さ、表示の長さ（仮 10 秒）、色、字の大きさ。VR の中で読めること（`roles/ux.md` の 4）。
+5. デスクトップのトーストの形（見出しと 1 行）。
+6. 言い回し: 7.1 の文言、手引きの段、7.4 の「仕組みの側の不具合」の 1 行、呼び名の形（3.2 の表の既定の `トラッカー 1（…0001）` など）。意味は変えない。7.1 の「使わない言葉」を使わない。yomiyasu で推敲する（`roles/ux.md`）。
 
 ## 8. 日ごとの集計（W-6）
 
@@ -839,7 +1086,7 @@ VIVE Hub のサーバーが、ホストの Wi-Fi 情報を持っているか。P
 
 - **日の区切り**: 日 D の分は、D の 0:00:00.000 から、次の日の 0:00:00.000 の手前まで。比べるのは行に書かれた地方の日付と時刻（`LogTime` では、その行のずれで D の 0 時を表した時刻）。ファイル名の日付では分けない（前の日のファイルに 0 時より後の時刻の行があれば、その行は D の分）。ファイル名の日付は、どのファイルを読むか（4.1、4.5）にだけ使う。
 - **時間の値**（`connected_s`、`in_use_s`、`tracking_s`、`unobserved_s`）: サーバーのファイルの、先頭が読めた行（種類を問わない。`Other` も含む。ドライバーの行は時刻を進めないので入れない。3.7）と、次の先頭が読めた行のあいだの区間を、前の行を適用したあとの状態で数える。区間が 0 時をまたぐなら、0 時で 2 つの日に分ける。
-  - 区間が `summary.gap_s`（仮 600 秒のまま。7.4 の「ログが止まっている」の 10 分と同じ値）より長ければ、その区間は状態に数えず、`unobserved_s` に足す。VIVE Hub が行を書かずに止まったとき（終了の行のない終わり。メモの 3.5）や、PC のスリープ（記録が最長 10.6 時間出なかった）に、止まる前の状態のまま何時間も数えないため。
+  - 区間が `summary.gap_s`（仮 600 秒のまま。7.4 の見張り役の具合 `Stalled` の 10 分と同じ値）より長ければ、その区間は状態に数えず、`unobserved_s` に足す。VIVE Hub が行を書かずに止まったとき（終了の行のない終わり。メモの 3.5）や、PC のスリープ（記録が最長 10.6 時間出なかった）に、止まる前の状態のまま何時間も数えないため。
   - 600 秒の根拠（メモの 3.5）: トラッカーが 1 台以上つながっているあいだのサーバーの記録の間隔は、99% が 8.2 秒以内、99.9% が 270 秒以内。長いほうから 8 つは、8〜10 分が 5 回、20〜36 分が 3 回（後者は、ドングルが抜けたあとなど、つながっていなかった時間を含むかもしれない）。600 秒は、前者を状態に数え、後者を数えない。状態の行は、つながっているトラッカーごとに、変化がなくても数分おきに出る（99% が 687 秒以内）ので、使っているあいだに 10 分を超えて記録が出ないのはまれ。決め直し方: 匿名化した実物のログ（L-2）を `summary.gap_s` を 300・600・1200・1800 秒にして流し、日ごとの `unobserved_s` が、オーナーが使っていなかった時間帯と合う値にする（M1-13 の PR に書く）。
   - 数えるのは**最後に読んだ行の時刻まで**。見張りの時刻（4.6）や再生の `flush_s`（10.2）で時刻を進めても、行のない先の時間は数えない（次の行が来たときに、その区間として数える）。
   - 前の日のファイルがなく、不明な状態から始めたとき（4.5）は、D の 0 時から最初の行までを `unobserved_s` に数える。
@@ -883,7 +1130,7 @@ VIVE Hub のサーバーが、ホストの Wi-Fi 情報を持っているか。P
               "driver": { "found": false, "lines": 0, "meta": 0, "no_header": 0, "bad_offset": 0,
                           "replaced_chars": 0, "long_lines": 0, "late": 0, "late_writes": 0 } },
   "trackers": [
-    { "serial": null, "slots": [1], "name": null,
+    { "serial": null, "slots": [1], "hub_number": null,
       "connected_s": 0.0, "in_use_s": 0.0, "tracking_s": 0.0, "tracking_ratio": null,
       "sessions": 0, "first_pose_s": [], "losses": 0, "long_losses": 0,
       "unexpected_disconnects": 0, "power_offs": 0, "overspeed": 0, "host_count": 0 }
@@ -902,7 +1149,7 @@ VIVE Hub のサーバーが、ホストの Wi-Fi 情報を持っているか。P
 | `unobserved_s` | 行が `summary.gap_s` より長く空いた区間と、不明な状態から始めた日の 0 時から最初の行までの時間（8.1）。どの状態にも数えていない |
 | `trackers` | シリアル番号ごとの行（8.1）。`serial` が `null` の行は、シリアル番号が分からなかった接続の分で、`slots` の番号ごとに 1 行 |
 | `slots` | その行のトラッカーが、その日に使った番号（3.2） |
-| `name` | 設定のニックネーム（9.1）。なければ `null` |
+| `hub_number` | その台の VIVE Hub の番号（3.2。その日の最後に分かった値。5.4）。分からなければ `null`。初版の `name`（設定のニックネーム）は、ニックネームをやめたので替えた |
 | `connected_s` | 未接続以外だった時間 |
 | `in_use_s` | 接続してから最初に追跡中になったあと、未接続になるまでの時間（起動直後の待ちを除く） |
 | `tracking_s` | 追跡中だった時間 |
@@ -921,15 +1168,15 @@ VIVE Hub のサーバーが、ホストの Wi-Fi 情報を持っているか。P
 | `source.meta`、`source.bad_offset` | `#` で始まる行の数、ずれが読めなかった行の数（4.3、4.7） |
 | `source.driver` | ドライバーのファイルの数（4.7）。`found` は、その日にドライバーのファイルを読めたか（`false` なら R4 の条件 5 を確かめていない）。`late` は L より遅れて届いた記録（4.6。見張りの回の数で、再生では 0） |
 
-- `serial` と `name` は、分かったときだけ。集計にはシリアル番号が入るので、利用者の PC にだけ置く。送る機能（L-4）では、匿名化してから送る。
+- `serial` と `hub_number` は、分かったときだけ。集計にはシリアル番号が入るので、利用者の PC にだけ置く。送る機能（L-4）では、匿名化してから送る。
 - 「位置が出ていた割合」は、`findings-2026-11-28.md` の「位置が出ていたフレームの割合」とは数え方が違う（あちらはトラッカー内の毎フレームの記録、こちらは PC のログの状態の変わり目）。突き合わせはまだしていない。
 
 ## 9. 設定と保存場所（W-9）
 
 ### 9.1 設定のファイル
 
-- 置き場所: `%APPDATA%\OpenUT\config.toml`（`--config` で変えられる）。なくても動く（すべて既定値）。読めない・形が違うときは、既定値で動き、状態の窓とアプリのログに理由を出す（止まらない）。
-- 形は TOML（`toml` 1.2.3、`serde` 1.0.229。どちらも MIT OR Apache-2.0）。アプリが書き直すとき（名前の変更、通知の切り替え）は、ファイル全体を書き直す（コメントは残らない。仕方ないものとし、ファイルの先頭にそう書く）。
+- 置き場所: `%APPDATA%\OpenUT\config.toml`（`--config` で変えられる）。なくても動く（すべて既定値）。読めない・形が違うときは、既定値で動き、アプリのログに理由を書く（止まらない。画面には出さない。W-10）。
+- 形は TOML（`toml` 1.2.3、`serde` 1.0.229。どちらも MIT OR Apache-2.0）。アプリが書き直すとき（通知の切り替え、フォルダーの選択）は、ファイル全体を書き直す（コメントは残らない。仕方ないものとし、ファイルの先頭にそう書く）。
 
 ```toml
 # OpenUT の設定。OpenUT が書き直すことがある（コメントは消える）。
@@ -941,10 +1188,9 @@ VIVE Hub のサーバーが、ホストの Wi-Fi 情報を持っているか。P
 steamvr = true
 desktop = true
 
-# トラッカーの名前。キーはシリアル番号（状態の窓で名前を付けると書かれる）。
-# 台数は決めない。書かなくてよい。
-[trackers."<シリアル番号>"]
-name = "腰"
+# VIVE Hub のトラッカー用サーバーのプロセスの名前（5.6）。書かなければ ViveTrackerServer.exe だけ。
+# [watch]
+# hub_process_names = ["ViveTrackerServer.exe"]
 
 # しきい値（6 章）。書かなければ既定値。上級者向け。
 [rules]
@@ -962,8 +1208,8 @@ name = "腰"
 
 - 名前の書き方は、`--set` と `expect.toml` と同じ（`rules.r1.count`、`rules.r3.clients`、`summary.gap_s`、`notice.cooldown_s` など）。
 
-- **台数とシリアル番号を固定しない**: 状態はログに出てきた番号から作る（5.1）。設定の `trackers` は名前を付けるためだけのもので、書かなくても全台を見張る。シリアル番号を設定に書くのは、利用者が名前を付けたときだけ（利用者の PC にだけ置く）。
-- 番号 N はつなぎ直しで変わる（3.2）ので、名前のキーはシリアル番号だけにする（初版の `index:N` のキーはやめた）。シリアル番号が分からない番号には名前を付けられず、`トラッカー{N}` と出す。
+- **台数とシリアル番号を固定しない**: 状態はログに出てきた番号から作り（5.1）、画面に並べる台はログに出てきたシリアル番号から作る（5.4）。設定に、台数もシリアル番号も書かない。
+- **トラッカーの名前の設定はない**（#27。W-12）。初版の `[trackers."<シリアル番号>"] name = "腰"`（ニックネーム）は、部位の名前を付ける前提だったので、やめた。呼び名は、VIVE Hub の番号とシリアル番号の末尾で決まる（3.2）。初版の設定のファイルに `[trackers]` があっても、読み飛ばす（止まらない。アプリのログに 1 回だけ書く）。
 
 ### 9.2 ログのフォルダーを探す
 
@@ -971,7 +1217,7 @@ name = "腰"
 
 1. 設定の `log_dir`、またはコマンドの `--log-dir`。
 2. 既知の候補: `%ProgramData%\HTC\ViveSoftware\ViveUltimateTracker\Log`（メモの 1 章。VIVE Hub の 1 つの版で確かめた場所。利用者のフォルダー名を含まない）。`%ProgramData%` は環境変数から作る（変数がなければ、この候補を飛ばす）。候補を足すときも環境変数からの相対で書き、利用者のフォルダー名を設計にもコードにも書かない。ドライバーのファイルは、見つけたフォルダーと同じ場所で探す（4.1）。
-3. 見つからなければ「ログが見つからない」（7.4、F4）。
+3. 見つからなければ、見張り役の具合を `NotFound` にする（7.4 の「仕組みの側の不具合」。利用者には手引きの G1 と「フォルダーを選ぶ」〔F4〕で見せる）。
 
 - 候補の場所を、深くたどって探し回ることはしない（起動を遅くしないため）。
 - 見つけたフォルダーの場所は、アプリのログにだけ書く（利用者のフォルダー名が入るため、集計には書かない）。
@@ -1071,13 +1317,14 @@ before = "2026-11-26 01:45:00"       # この時刻より前
 | VIVE Hub のサーバー（名前付きパイプ） | なし | パイプを開かない |
 | VIVE Hub のログ | なし（読み取り専用で開く。4.2） | |
 | SteamVR | オーバーレイの表示だけ（7.2） | トラッカーの機器ではない。SteamVR の設定や、ほかの機器の状態は変えない |
+| Windows のプロセス（`ViveTrackerServer.exe`） | なし（プロセスの一覧の名前を読むだけ。5.6） | VIVE Hub が動いているかを見るため（手引きの G1）。プロセスを開かず、止めず、何も送らない |
 
 - 立て直しの命令（D-13）は M3 で、M2 の命令の一覧（Issue #6）に入ってから。
 - レビューでは、M1 の PR に、HID・名前付きパイプ・ドングルを扱うコードや依存が入っていないことを見る。
 
 ## 12. 性能（VR の動作を重くしない）
 
-- 見張りは 500 ms ごとに、フォルダーの一覧と 2 つのファイル（サーバー、ドライバー）の大きさを見て、伸びた分だけを読む。1 行の判定は、本文の先頭を数回比べるだけ（4.4）。
+- 見張りは 500 ms ごとに、フォルダーの一覧と 2 つのファイル（サーバー、ドライバー）の大きさを見て、伸びた分だけを読む。VIVE Hub のプロセスの確かめ（5.6）は 10 秒ごとに、プロセスの名前の一覧だけを取る（`sysinfo` の、プロセスの名前だけを更新する呼び方。M1-9 で、その呼び方を docs.rs で確かめ、かかる時間を PR に書く）。1 行の判定は、本文の先頭を数回比べるだけ（4.4）。
 - SteamVR の中の表示は、案内を出すときだけ画像を渡す。毎フレームの描画はしない（7.2）。状態の窓は、隠しているあいだ描かない（7.4）。
 - 起動時の追いつきは、1 回 4 MiB ずつ読む（4.2）。1 日分の大きさ（メモの 1 章）: サーバーは 2,002〜15,828 行、0.7〜5.5 MB。ドライバーは 1,957〜18,775 行、0.5〜4.6 MB（9 割以上が `Wait for HID data got timeout.`）。追いつきで読むのは 2 日分の 2 種類で、多くて約 20 MB（5 回ほどの読み取り）。使っているあいだは、合わせて毎秒 1 行に満たない。
 - 目安（測っていない。M1-9 で、合成の大きなログで測って PR に書く）: 見張り中の CPU は 1 つのコアの 1% 未満、メモリは 50 MB 未満（状態の窓を開いていないとき）。
@@ -1095,6 +1342,7 @@ before = "2026-11-26 01:45:00"       # この時刻より前
 | デスクトップの通知 | `tauri-winrt-notification` | 0.8.1 | MIT OR Apache-2.0 | 2026-07 | M1-10 |
 | トレイ | `tray-icon`（`muda`） | 0.27.0（0.22.0） | MIT OR Apache-2.0 | 2026-11 | M1-11 |
 | 状態の窓 | `eframe`、`egui`（`winit`） | 0.37.0（0.30.13） | MIT OR Apache-2.0（winit は Apache-2.0） | 2026-10 | M1-11 |
+| VIVE Hub のプロセスの確かめ | `sysinfo` | 0.40.4 | MIT | 2026-11（M2 の設計で確かめた。D-32） | M1-9 |
 | フォルダーの選択 | `rfd` | 0.18.0 | MIT | 2026-11 | M1-11 |
 | SteamVR | `openvr`（`openvr_sys`） | 0.9.0（2.1.4） | MIT（OpenVR は BSD 3 条項の形） | 2026-04。「passively-maintained」の印 | M1-12 |
 | SteamVR の代案 | `libloading` | 0.9.1 | ISC | 2026-11 | M1-12 |
@@ -1115,6 +1363,9 @@ docs.rs と Microsoft の文書は、この環境から読めなかった（接�
 3. **実物のログの入れ方と、受け入れの基準の読み方。** 匿名化したあとの大きさによっては、レポジトリに直接入れるのが重い。圧縮して入れるか（`.gitignore` に `*.tgz` がある）、一部の時間帯だけ切り出すか（受け入れの基準は 6 日分を流すことなので、切り出すなら基準の読み方も決める）。**2026-11-22 のファイルは残っていない**（メモの 1 章）。受け入れの基準（PRD の 5 章。11/22〜27 で W-3 が 4 回だけ）を、残っている 11/23〜27 で確かめてよいか（4 回の時刻は、どれも 11/26 と 11/27）。ドライバーのファイルも一緒に入れる（R4 の条件 5。10.1）。
 4. **ドライバーのファイルも読んでよいか。** PRD の W-1 は、サーバーのファイル（`ViveTrackerServer_YYYYMMDD.txt`）を読むと書いている。この版は、電源オフの予告のためだけに、ドライバーのファイルも読む（4.1）。読むだけで、W-7 は変わらない。W-1 の書き方を直すかは PM が決める（設計は PRD を変えない）。認められなければ、R4 の条件 5 を外す（電源を切るたびに案内が出うる）。
 5. **R4 で、電源オフの予告のあった切断を、既定で除いてよいか。** 既定は `rules.r4.exclude_power_off = true`（仮。6.2 の R4）。利用者の操作によるものかは、オーナーの試し（下の 2）を待つ。除かないと、使い終わって電源を切るたびに、台ごとに push される。
+6. **「確かめられない」の見え方を足してよいか**（#27。W-10）。W-10 の (b) は、いまの状態を正常・待機中・異常のどれかで見せる、と書いている。この版は、追いつきのあいだと、見張り役の具合が `Unreadable`・`Stalled`・`FormatMismatch` のあいだだけ、全体を 4 つ目の「確かめられない」にする（7.4 の「全体」）。3 つのどれかで見せると、ログが読めていないのに正常や待機中と見え、利用者が OpenUT を当てにしてしまうため。認められなければ、待機中に寄せる（`line` は同じ 1 行）。W-10 の書き方を直すかは PM が決める（設計は PRD を変えない）。
+7. **電池が少ないときに、案内を出すか**（W-11 は見せるだけ）。この版は案内を作らない（7.4）。出すなら、しきい値（例: 15%）と、push するかを決めて、規則として足す（設計の追補）。
+8. **VIVE Hub のプロセスの一覧を読んでよいか**（#27。5.6）。W-1 はログを読むことを書いている。この版は、VIVE Hub が終了の行なしで止まったことを見分けるために、Windows のプロセスの名前の一覧も読む（M2 の DG-3 と同じ `sysinfo`。読むだけで、W-7 は変わらない。11 章）。認められなければ、ログだけで決める（終了の行なしで止まり、トラッカーがつながっていないときは、手引きが G3「電源を入れる」のままになる）。
 
 **オーナーに確かめてもらいたいこと**（PM が `needs-human` にまとめる。どれも 10 分以内）
 
@@ -1122,6 +1373,8 @@ docs.rs と Microsoft の文書は、この環境から読めなかった（接�
 2. **電源オフの予告が、ボタンで電源を切ったときに出るか（U-11。R4 の条件 5 の根拠）。** トラッカーを 3 台つないで 1 分待ってから、1 台ずつ、電源ボタンで電源を切る。それぞれ切った時刻（時計で分と秒）を控え、30 秒あける。終わったら、その日の `ViveTrackerDriver_<今日の日付>.txt` で `Tracker is going to power-off.` の行の時刻と、控えた時刻を並べて書く（ファイルは貼らない。時刻と番号だけ）。3 回とも 10 秒以内に合えば、予告は利用者の操作の印として扱う。合わなければ、R4 の既定を見直す。
 3. **ホストの電源の入れ直しで、「Wi-Fi 情報なし」が直るか（R1 の案内の根拠）。** 次に「始まらない」が起きたときに、ドングルのリセットをせず、ホストのトラッカーの電源だけを入れ直し、ほかのトラッカーが使えるようになるまでの時間と、そのときのログを残す。ホストは、サーバーのファイルの最後の `Tracker (N) - switch to HOST mode.` の N（いまの番号）。直らなかったら、どのくらい待ったかを書く。
 4. **性能（12 章）。** M1-12 のあと。
+5. **VIVE Hub の画面との見比べ（U-18〜U-20。#27）。** M1-11 のあと。VIVE Hub と OpenUT の状態の窓を並べて開き、トラッカーを 3 台つないで追跡を始める。台ごとに、番号、シリアル番号の末尾、電池の残り、ファームウェアの版、ホストの印が、VIVE Hub の画面と合うかを書く（シリアル番号は貼らない。合う・合わないだけ）。続けて、ホストの電源を入れ直して、ホストの印が移るか、番号が変わらないかを書く。最後に、ドングルを抜いて 1 分待ち、OpenUT のドングルの項目が「つながっていない」になるかを書き、挿し直す。
+6. **手引きの段の順（7.4。G4 の「追跡を待つ」が、G5 の「身につける」より前）。** UI/UX デザインの確認（#23 と同じ形）で、オーナーに見てもらう。ふだんの使い方と違えば、順を直す（設計の追補）。
 
 **確かめていないこと**（設計に書いた見込み。実装と再生テストで確かめる）
 
@@ -1135,4 +1388,5 @@ docs.rs と Microsoft の文書は、この環境から読めなかった（接�
 - 見張りの余裕 L を 10 秒にしてよいか（4.6。オーナーの試しの 1）。追いつきを読み終えたとき、サーバーの最後の記録より L 以上前の時刻のドライバーの記録は、書き終わっていると見なしてよいか（4.6 の 3。2 つのファイルを同じプロセスが同じ間隔で書くことからの見込み。M1-9 のアプリのログの、まとまりごとの遅れで確かめる）。
 - ずれの読めない行が、夏時間の変わり目の近くにあったときの時刻（4.3。6 日分では、ずれの読めない行はない）。
 - 切断の行を見落としたつなぎ直し（5.1）が、実物で起きるか（6 日分の `Add new tracker` の重なりは数えていない。M1-13 で「順序の合わない出来事」の数を見る）。
-- カメラを覆うと、ログに喪失が出るまでの遅れ（7.4 の F3）。
+- VIVE Hub の番号（`model name` の N）、電池（`percentage`）、ドングル（`dongle connected`）の値の意味（4.8 の U-18〜U-20）。
+- `sysinfo` で、プロセスの名前だけを 10 秒ごとに取る呼び方と、かかる時間（5.6、12 章。M1-9 で docs.rs を見て確かめる）。
