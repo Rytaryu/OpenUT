@@ -1,7 +1,9 @@
 //! Coordinate transforms and tracking-state conversion for OpenUT poses.
 
 mod axis;
+pub mod calib;
 mod hold;
+mod linalg;
 mod math;
 mod transform;
 
