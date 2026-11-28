@@ -29,12 +29,79 @@ pub fn parse_line(line: &str) -> ParsedLine<'_> {
         return ParsedLine::Meta(line);
     }
     match parse_entry(line) {
-        Some(entry) => ParsedLine::Entry(entry),
+        Some(parts) => ParsedLine::Entry(parts.entry),
         None => ParsedLine::NoHeader(line),
     }
 }
 
-fn parse_entry(line: &str) -> Option<Entry<'_>> {
+/// Text to check for private numeric identifiers. Validated numeric metadata is
+/// excluded, while free text and unrecognized fields remain searchable.
+pub fn unclassified_numeric_fields(line: &str) -> impl Iterator<Item = &str> {
+    let fields = if let Some(parts) = parse_entry(line).filter(|_| {
+        line.split_once(']')
+            .is_some_and(|(header, _)| !header.contains(['\r', '\n']))
+    }) {
+        let entry = parts.entry;
+        let offset = if entry.offset_known { "" } else { parts.offset };
+        let identifier = if parts
+            .identifier
+            .strip_prefix("0x")
+            .or_else(|| parts.identifier.strip_prefix("0X"))
+            .is_some_and(|hex| !hex.is_empty() && hex.bytes().all(|b| b.is_ascii_hexdigit()))
+        {
+            ""
+        } else {
+            parts.identifier
+        };
+        [offset, identifier, entry.level, entry.func, entry.body]
+    } else if is_numeric_metadata(line) {
+        [""; 5]
+    } else {
+        [line, "", "", "", ""]
+    };
+    fields.into_iter().filter(|field| !field.is_empty())
+}
+
+fn is_numeric_metadata(line: &str) -> bool {
+    let Some(text) = line.strip_prefix("# ") else {
+        return false;
+    };
+    if let Some(timestamp) = text
+        .strip_prefix("Log begin at ")
+        .or_else(|| text.strip_prefix("Log rotate by date at "))
+    {
+        return timestamp
+            .split_once(' ')
+            .is_some_and(|(date, clock)| parse_timestamp(date, clock, UtcOffset(0)).is_some());
+    }
+    text.split_once('=').is_some_and(|(key, value)| {
+        matches!(
+            key,
+            "WriteTimeInterval"
+                | "OpenType"
+                | "FileType"
+                | "EncodeType"
+                | "Truncate"
+                | "MaxFileSize"
+                | "MaxRollingCount"
+                | "WriteThrough"
+                | "HardFlush"
+                | "FilenameWithProcessID"
+                | "InitialLogLevel"
+                | "ThreadPriority"
+                | "AllPackagesAccess"
+        ) && !value.is_empty()
+            && value.bytes().all(|b| b.is_ascii_digit())
+    })
+}
+
+struct EntryParts<'a> {
+    entry: Entry<'a>,
+    offset: &'a str,
+    identifier: &'a str,
+}
+
+fn parse_entry(line: &str) -> Option<EntryParts<'_>> {
     let (header, tail) = line.strip_prefix('[')?.split_once(']')?;
     if header.starts_with(char::is_whitespace) {
         return None;
@@ -42,15 +109,15 @@ fn parse_entry(line: &str) -> Option<Entry<'_>> {
     let (date, rest) = take_token(header);
     let (clock, rest) = take_token(rest);
     let (offset_token, after_offset) = take_token(rest);
-    let (offset, rest) = if offset_token.starts_with(['+', '-']) {
-        (parse_offset(offset_token), after_offset)
+    let (offset, offset_text, rest) = if offset_token.starts_with(['+', '-']) {
+        (parse_offset(offset_token), offset_token, after_offset)
     } else {
-        (None, rest)
+        (None, "", rest)
     };
     let offset_known = offset.is_some();
     let offset = offset.unwrap_or(UtcOffset(0));
     let at = parse_timestamp(date, clock, offset)?;
-    let (_, rest) = take_token(rest); // Skip the opaque identifier.
+    let (identifier, rest) = take_token(rest);
     let (level, func) = take_token(rest);
 
     // Consume only the field separator, leaving the body's own leading whitespace.
@@ -62,14 +129,18 @@ fn parse_entry(line: &str) -> Option<Entry<'_>> {
         None => (None, tail),
     };
 
-    Some(Entry {
-        at,
-        offset,
-        offset_known,
-        level,
-        func: func.trim_end(),
-        thread,
-        body,
+    Some(EntryParts {
+        entry: Entry {
+            at,
+            offset,
+            offset_known,
+            level,
+            func: func.trim_end(),
+            thread,
+            body,
+        },
+        offset: offset_text,
+        identifier,
     })
 }
 

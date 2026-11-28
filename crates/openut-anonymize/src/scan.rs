@@ -1,7 +1,7 @@
 use std::ops::Range;
 
 use openut_hublog::decode::LineEnding;
-use openut_hublog::header::{ParsedLine, parse_line};
+use openut_hublog::header::{ParsedLine, parse_line, unclassified_numeric_fields};
 
 use crate::{Kind, Warning};
 
@@ -15,6 +15,21 @@ pub(crate) struct Scan {
     pub warnings: Vec<Warning>,
 }
 
+fn records(text: &str) -> impl Iterator<Item = (&str, usize)> {
+    let separator = LineEnding::detect(text).unwrap_or(LineEnding::Lf).as_str();
+    text.split_inclusive(separator).map(move |raw_record| {
+        let record = raw_record
+            .strip_suffix("\r\n")
+            .or_else(|| raw_record.strip_suffix(separator))
+            .unwrap_or(raw_record);
+        (record, raw_record.len())
+    })
+}
+
+pub(crate) fn possible_universe_id_fields(text: &str) -> impl Iterator<Item = &str> {
+    records(text).flat_map(|(record, _)| unclassified_numeric_fields(record))
+}
+
 pub(crate) fn scan(text: &str, pc_name: Option<&str>) -> Scan {
     let mut scan = Scan {
         spans: Vec::new(),
@@ -24,13 +39,8 @@ pub(crate) fn scan(text: &str, pc_name: Option<&str>) -> Scan {
         // A supplied name cannot consume a delimiter. The residual check still scans for it.
         .filter(|name| !name.is_empty() && !name.contains(['\r', '\n']))
         .map(str::to_ascii_lowercase);
-    let separator = LineEnding::detect(text).unwrap_or(LineEnding::Lf).as_str();
     let mut offset = 0;
-    for (index, raw_record) in text.split_inclusive(separator).enumerate() {
-        let record = raw_record
-            .strip_suffix("\r\n")
-            .or_else(|| raw_record.strip_suffix(separator))
-            .unwrap_or(raw_record);
+    for (index, (record, record_bytes)) in records(text).enumerate() {
         let mut found = RecordSpans::default();
         if let ParsedLine::Entry(entry) = parse_line(record)
             && entry.func == "BiCollector::GetPcSerialNumber"
@@ -56,7 +66,7 @@ pub(crate) fn scan(text: &str, pc_name: Option<&str>) -> Scan {
                 kind,
             });
         }
-        offset += raw_record.len();
+        offset += record_bytes;
     }
     scan
 }

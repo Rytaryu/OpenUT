@@ -422,6 +422,59 @@ fn anonymizes_universe_ids_across_files_and_preserves_zero_and_log_shape() {
 }
 
 #[test]
+fn allows_a_known_universe_number_in_a_parsed_record_header() {
+    let directory = TestDirectory::new();
+    let output = directory.0.join("share");
+    let map = directory.0.join("private");
+    let prefix = "[2026-11-27 00:00:02.000 +9 0x2 INFO OETServer::GetCurrentSteamVRChaperoneInfoAndStore] [2] current universe id: ";
+    let server = write_input(
+        &directory.0,
+        "ViveTrackerServer_20261127.txt",
+        &format!("{prefix}2\r\n"),
+    );
+
+    let result = anonymize(&output, &map, &[&server]);
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert_eq!(
+        read_output(&output, &server),
+        format!("{prefix}UNIVERSE-A\r\n")
+    );
+}
+
+#[test]
+fn rejects_a_short_known_universe_number_outside_a_parsed_header() {
+    let directory = TestDirectory::new();
+    let output = directory.0.join("share");
+    let map = directory.0.join("private");
+    let server = write_input(
+        &directory.0,
+        "ViveTrackerServer_20261127.txt",
+        "[2026-11-27 00:00:02.000 +9 0x1 INFO OETServer::GetCurrentSteamVRChaperoneInfoAndStore] [1] current universe id: 2\r\n",
+    );
+    for line in [
+        "[2026-11-27 00:00:02.001 +9 0x2 INFO Driver] [2] details: 00002\r\n",
+        "[2026-11-27 00:00:61.000 +9 0x1 INFO Driver] [00002] details\r\n",
+    ] {
+        let driver = write_input(&directory.0, "ViveTrackerDriver_20261127.txt", line);
+        let result = anonymize(&output, &map, &[&server, &driver]);
+
+        assert!(!result.status.success());
+        let error = String::from_utf8_lossy(&result.stderr);
+        assert!(
+            error.contains("入力 2 の出力に元の値が残っています"),
+            "{error}"
+        );
+        assert!(!error.contains("00002"));
+        assert!(!output.exists());
+        assert!(!map.exists());
+    }
+}
+
+#[test]
 fn rejects_an_unredacted_known_universe_id_in_another_file() {
     let directory = TestDirectory::new();
     let output = directory.0.join("share");
