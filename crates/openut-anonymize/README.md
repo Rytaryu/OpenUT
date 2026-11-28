@@ -8,4 +8,11 @@ cargo run --locked -- anonymize --out-dir share-logs --map-dir private-logs "Viv
 
 対象は、BOM 付き UTF-16LE の `ViveTrackerServer_YYYYMMDD.txt`、`ViveTrackerDriver_YYYYMMDD.txt`、`ViveTrackerDongle_YYYYMMDD.txt` です。出力も同じ名前と文字コードを使います。Windows では `COMPUTERNAME`、その他の環境では `HOSTNAME` から PC 名を取得します。環境から取得できない場合や別の PC で採ったログを処理する場合は、採取元の PC 名を `--pc-name` で指定してください。有効な PC 名がなければ、出力前に停止します。
 
+## 置き換えるもの
+
+- トラッカーのシリアル番号、無線のアドレス、Wi-Fi の名前とパスワード、PC の名前、利用者のフォルダー名。PC のシリアル番号が記録される本文は削除します。
+- SteamVR のプレイエリアの識別番号（universe id）。`current universe id` と `Universe id from … to …, local's` の各欄を `UNIVERSE-A` などの別名に置き換えます。`0` は「まだない」を表すため、そのまま残します。同じ番号は 1 回の実行で読み込んだファイルの間で同じ別名になります。
+
+## 共有前の確認
+
 非公開フォルダーの `openut-anonymize-map.tsv` には元の値が含まれます。対応表は非公開のまま保管してください。ログを共有する前に、警告が示す記録番号と、出力に残る位置・姿勢・時刻などを確認してください。不明な書式の値は警告付きで元の行に残ることがあります。確認済みの元の値がどれかの出力に残っている場合は、全ファイルの書き出しを中止します。

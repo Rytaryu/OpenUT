@@ -14,6 +14,7 @@ pub enum Kind {
     WifiPassword,
     PcName,
     UserFolder,
+    UniverseId,
     PcSerialBody,
 }
 
@@ -26,6 +27,7 @@ impl Kind {
             Self::WifiPassword => "WIFI-SECRET",
             Self::PcName => "PC",
             Self::UserFolder => "USER",
+            Self::UniverseId => "UNIVERSE",
             Self::PcSerialBody => "PC-SERIAL",
         }
     }
@@ -47,6 +49,7 @@ impl fmt::Display for Kind {
             Self::WifiPassword => "Wi-Fi のパスワード",
             Self::PcName => "PC の名前",
             Self::UserFolder => "利用者のフォルダー名",
+            Self::UniverseId => "SteamVR のプレイエリアの識別番号",
             Self::PcSerialBody => "PC のシリアル番号を記録する本文",
         })
     }
@@ -167,6 +170,13 @@ impl<'a> OriginalValues<'a> {
     fn find_in(&self, text: &str) -> Option<Kind> {
         let mut folded = None;
         self.0.iter().find_map(|(kind, original)| {
+            if *kind == Kind::UniverseId {
+                // Compare complete decimal tokens, including alternate zero padding.
+                return text
+                    .split(|character: char| !character.is_ascii_digit())
+                    .any(|digits| digits.trim_start_matches('0') == original.as_ref())
+                    .then_some(*kind);
+            }
             let search: &str = if kind.ignores_ascii_case() {
                 folded.get_or_insert_with(|| text.to_ascii_lowercase())
             } else {
@@ -194,7 +204,9 @@ impl<'a> OriginalValues<'a> {
 }
 
 fn normalized(kind: Kind, original: &str) -> Cow<'_, str> {
-    if kind.ignores_ascii_case() {
+    if kind == Kind::UniverseId {
+        Cow::Borrowed(original.trim_start_matches('0'))
+    } else if kind.ignores_ascii_case() {
         Cow::Owned(original.to_ascii_lowercase())
     } else {
         Cow::Borrowed(original)
@@ -288,6 +300,28 @@ impl<'a> Aliases<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn treats_zero_padded_spellings_as_the_same_universe_number() {
+        let batch = anonymize(
+            &[
+                "current universe id: 1234567890123456789\n",
+                "current universe id: 01234567890123456789\nunrelated decimal: 91234567890123456789\n",
+            ],
+            None,
+        )
+        .expect("both representations can use the same alias");
+        assert_eq!(batch.outputs[0].text, "current universe id: UNIVERSE-A\n");
+        assert_eq!(
+            batch.outputs[1].text,
+            "current universe id: UNIVERSE-A\nunrelated decimal: 91234567890123456789\n",
+        );
+        assert!(
+            batch
+                .mapping_tsv()
+                .contains("UNIVERSE\t01234567890123456789\tUNIVERSE-A\n")
+        );
+    }
 
     #[test]
     fn skips_an_ssid_equal_to_its_preferred_alias_across_files() {

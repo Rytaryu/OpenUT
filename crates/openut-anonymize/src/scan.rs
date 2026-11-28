@@ -135,6 +135,8 @@ fn find_record_spans(record: &str, pc_name: Option<&str>, found: &mut RecordSpan
         }
     }
 
+    find_universe_spans(record, &lower, found);
+
     if let Some(name) = pc_name {
         for (index, _) in lower.match_indices(name) {
             found.add(index..index + name.len(), Kind::PcName);
@@ -142,6 +144,42 @@ fn find_record_spans(record: &str, pc_name: Option<&str>, found: &mut RecordSpan
     }
 
     warn_about_unknown_shapes(record, &lower, found);
+}
+
+fn find_universe_spans(record: &str, lower: &str, found: &mut RecordSpans) {
+    for tail in unmasked_markers(lower, "current universe id:", found) {
+        let value = value_start(record, tail);
+        let len = value
+            .find(|ch: char| ch.is_whitespace() || matches!(ch, ',' | ';'))
+            .unwrap_or(value.len());
+        let start = record.len() - value.len();
+        add_universe_id(record, start..start + len, found);
+    }
+
+    for mut tail in unmasked_markers(lower, "universe id from ", found) {
+        for prefix in ["", "to", ", local's:"] {
+            let field = value_start(lower, tail).strip_prefix(prefix);
+            let Some(range) =
+                field.and_then(|value| delimited(record, lower.len() - value.len(), '(', ')'))
+            else {
+                found.warn(Kind::UniverseId);
+                break;
+            };
+            tail = range.end + 1;
+            add_universe_id(record, range, found);
+        }
+    }
+}
+
+fn add_universe_id(record: &str, range: Range<usize>, found: &mut RecordSpans) {
+    let before = record[range.clone()].trim_start_matches([' ', '\t']);
+    let value = before.trim_end_matches([' ', '\t']);
+    if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+        found.warn(Kind::UniverseId);
+    } else if value.bytes().any(|byte| byte != b'0') {
+        let start = range.end - before.len();
+        found.add(start..start + value.len(), Kind::UniverseId);
+    }
 }
 
 fn find_wifi_spans(record: &str, lower: &str, found: &mut RecordSpans) {
@@ -415,6 +453,58 @@ mod tests {
                 record: 4,
                 kind: Kind::TrackerSerial,
             }]
+        );
+    }
+
+    #[test]
+    fn selects_universe_ids_in_current_and_transition_records() {
+        let record = concat!(
+            "[2026-11-27 22:53:34.900 +9 0x4D2 INFO OETServer::GetCurrentSteamVRChaperoneInfoAndStore] [1234] ",
+            "current universe id: 1234567890123456789\r\n",
+            "[2026-11-27 22:53:35.000 +9 0x4D2 INFO OETServer::OnPipeQueryData] [1234] ",
+            "Universe id from (0) to (1234567890123456789), local's: (0), chaperone file path: (C:\\Users\\ExampleUser\\Steam\\config\\test.vrchap)\r\n",
+            "[2026-11-27 22:53:35.100 +9 0x4D2 INFO OETServer::OnPipeQueryData] [1234] ",
+            "Universe id from (1234567890123456789) to (9876543210987654321), local's: (1234567890123456789)\r\n",
+            "Universe ID is the same with local, do nothing.\r\n",
+        );
+        let scan = scan(record, None);
+        assert_eq!(
+            selected(record, &scan),
+            [
+                (Kind::UniverseId, "1234567890123456789"),
+                (Kind::UniverseId, "1234567890123456789"),
+                (Kind::UserFolder, "ExampleUser"),
+                (Kind::UniverseId, "1234567890123456789"),
+                (Kind::UniverseId, "9876543210987654321"),
+                (Kind::UniverseId, "1234567890123456789"),
+            ]
+        );
+        assert!(scan.warnings.is_empty());
+    }
+
+    #[test]
+    fn only_warns_for_malformed_universe_id_fields() {
+        let record = concat!(
+            "current Universe ID: 000\n",
+            "current universe id: 123.4\n",
+            "Universe ID from ( 000 ) to ( 0456 ), local's: (missing)\n",
+            "Universe ID is the same with local, do nothing.\n",
+            "unrelated value: 9876543210987654321\n",
+        );
+        let scan = scan(record, None);
+        assert_eq!(selected(record, &scan), [(Kind::UniverseId, "0456")]);
+        assert_eq!(
+            scan.warnings,
+            [
+                Warning {
+                    record: 2,
+                    kind: Kind::UniverseId,
+                },
+                Warning {
+                    record: 3,
+                    kind: Kind::UniverseId,
+                },
+            ]
         );
     }
 
