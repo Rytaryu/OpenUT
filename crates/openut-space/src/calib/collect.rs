@@ -5,8 +5,10 @@ use std::time::Duration;
 
 use crate::{Pose, Vec3};
 
-use super::solve::sufficient_motion;
-use super::{CalibrationConfig, CalibrationError};
+use super::solve::{rotation_progress, sufficient_motion};
+use super::{CalibrationConfig, CalibrationError, RotationProgress};
+
+const MIN_CORRELATION_POINTS: u32 = 3;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TimedSample {
@@ -54,6 +56,34 @@ impl Collector {
     /// Adds a valid SteamVR controller pose. Both clocks use the same origin.
     pub fn add_controller(&mut self, id: u32, sample: TimedSample) {
         add_sample(&mut self.controllers, self.started_at, id, sample);
+    }
+
+    /// Reports the best coverage among tracker streams within this attempt.
+    pub fn rotation_progress(&self, now: Duration, config: &CalibrationConfig) -> RotationProgress {
+        let until = now.min(self.started_at.saturating_add(config.timeout));
+        self.trackers
+            .values()
+            .map(|records| {
+                rotation_progress(
+                    through(records, until)
+                        .iter()
+                        .map(|sample| sample.pose.rotation),
+                    config.min_motion_rad,
+                    config.min_axis_separation_rad,
+                )
+            })
+            .max()
+            .unwrap_or_default()
+    }
+
+    /// Whether a controller has enough valid intervals to estimate correlation.
+    pub fn has_controller_samples(&self, now: Duration, config: &CalibrationConfig) -> bool {
+        let until = now.min(self.started_at.saturating_add(config.timeout));
+        self.controllers.values().any(|records| {
+            angular_speeds(through(records, until), config.max_sample_gap)
+                .nth((MIN_CORRELATION_POINTS - 1) as usize)
+                .is_some()
+        })
     }
 
     pub(super) fn select(
@@ -119,6 +149,10 @@ struct Stream<'a> {
     speeds: Vec<SpeedSample>,
 }
 
+fn through(records: &[TimedSample], until: Duration) -> &[TimedSample] {
+    &records[..records.partition_point(|sample| sample.at <= until)]
+}
+
 fn streams(
     devices: &BTreeMap<u32, Vec<TimedSample>>,
     until: Duration,
@@ -127,11 +161,11 @@ fn streams(
     devices
         .iter()
         .map(|(&id, records)| {
-            let poses = &records[..records.partition_point(|sample| sample.at <= until)];
+            let poses = through(records, until);
             Stream {
                 id,
                 poses,
-                speeds: angular_speeds(poses, max_gap),
+                speeds: angular_speeds(poses, max_gap).collect(),
             }
         })
         .collect()
@@ -143,28 +177,28 @@ struct SpeedSample {
     radians_per_second: f64,
 }
 
-fn angular_speeds(poses: &[TimedSample], max_gap: Duration) -> Vec<SpeedSample> {
-    poses
-        .windows(2)
-        .filter_map(|window| {
-            let first = window[0];
-            let second = window[1];
-            let gap = second.at - first.at;
-            if gap.is_zero() || gap > max_gap {
-                return None;
-            }
-            let delta = second.pose.rotation * first.pose.rotation.conjugate();
-            let angle = 2.0
-                * Vec3::new(delta.x, delta.y, delta.z)
-                    .norm()
-                    .atan2(delta.w.abs());
-            // An interval-average rate corresponds to the interval midpoint.
-            Some(SpeedSample {
-                at: first.at + gap / 2,
-                radians_per_second: angle / gap.as_secs_f64(),
-            })
+fn angular_speeds(
+    poses: &[TimedSample],
+    max_gap: Duration,
+) -> impl Iterator<Item = SpeedSample> + '_ {
+    poses.windows(2).filter_map(move |window| {
+        let first = window[0];
+        let second = window[1];
+        let gap = second.at - first.at;
+        if gap.is_zero() || gap > max_gap {
+            return None;
+        }
+        let delta = second.pose.rotation * first.pose.rotation.conjugate();
+        let angle = 2.0
+            * Vec3::new(delta.x, delta.y, delta.z)
+                .norm()
+                .atan2(delta.w.abs());
+        // An interval-average rate corresponds to the interval midpoint.
+        Some(SpeedSample {
+            at: first.at + gap / 2,
+            radians_per_second: angle / gap.as_secs_f64(),
         })
-        .collect()
+    })
 }
 
 struct Match<'a> {
@@ -358,7 +392,7 @@ fn correlation(
         cov += delta_x * (y - mean_y);
     }
     // At two samples, the magnitude of Pearson's correlation is always one.
-    if count < 3 || var_x <= f64::EPSILON || var_y <= f64::EPSILON {
+    if count < MIN_CORRELATION_POINTS || var_x <= f64::EPSILON || var_y <= f64::EPSILON {
         return None;
     }
     Some((cov / (var_x.sqrt() * var_y.sqrt())).clamp(-1.0, 1.0))

@@ -12,6 +12,7 @@ pub struct RunConfig {
     pub port: u16,
     pub axis_map: AxisMap,
     pub body_rotation: BodyRotation,
+    pub calibration_fix_scale: bool,
 }
 
 impl Default for RunConfig {
@@ -20,6 +21,7 @@ impl Default for RunConfig {
             port: DEFAULT_BRIDGE_PORT,
             axis_map: AxisMap::IDENTITY,
             body_rotation: BodyRotation::IDENTITY,
+            calibration_fix_scale: false,
         }
     }
 }
@@ -52,6 +54,7 @@ impl ConfigWarning {
 struct ConfigFile {
     bridge: BridgeConfig,
     space: SpaceConfig,
+    calibration: CalibrationSettings,
 }
 
 #[derive(Default, Deserialize)]
@@ -63,6 +66,12 @@ struct BridgeConfig {
 struct SpaceConfig {
     axis_map: Option<String>,
     body_rotation: Option<String>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct CalibrationSettings {
+    fix_scale: bool,
 }
 
 impl RunConfig {
@@ -78,7 +87,7 @@ impl RunConfig {
             .unwrap_or_else(|| "+x+y+z".to_owned())
             .parse::<AxisMap>()
             .map_err(|_| ConfigWarning::AxisMap)?;
-        // Until calibration can disambiguate handedness, K2 uses a proper rotation.
+        // The configured fallback is a proper rotation. Calibration can select a reflection.
         if axis_map.group().handedness != Handedness::Preserving {
             return Err(ConfigWarning::AxisMap);
         }
@@ -92,6 +101,7 @@ impl RunConfig {
             port,
             axis_map,
             body_rotation,
+            calibration_fix_scale: config.calibration.fix_scale,
         })
     }
 
@@ -121,12 +131,13 @@ mod tests {
         assert_eq!(RunConfig::parse(""), Ok(RunConfig::default()));
         let config = RunConfig::parse(concat!(
             "[bridge]\nport = 32167\n[space]\naxis_map = '+z+y-x'\nbody_rotation = '-x-y+z'\n",
-            "[watch]\nignored = true\n",
+            "[calibration]\nfix_scale = true\n[watch]\nignored = true\n",
         ))
         .unwrap();
         assert_eq!(config.port, 32_167);
         assert_eq!(config.axis_map, "+z+y-x".parse().unwrap());
         assert_eq!(config.body_rotation, "-x-y+z".parse().unwrap());
+        assert!(config.calibration_fix_scale);
     }
 
     #[test]

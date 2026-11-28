@@ -2,6 +2,8 @@
 //! Windows + SteamVR.
 
 pub mod bridge_out;
+pub mod calib_file;
+pub mod calib_flow;
 pub mod config;
 pub mod driver_reg;
 pub mod replay;

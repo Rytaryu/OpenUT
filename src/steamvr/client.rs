@@ -255,9 +255,17 @@ impl Client {
         &self,
         command: OverlayCommand,
     ) -> Result<Receiver<OverlayResult>, OverlayCommand> {
+        self.overlay_for_epoch(self.state().connection_epoch, command)
+    }
+
+    pub(crate) fn overlay_for_epoch(
+        &self,
+        connection_epoch: u64,
+        command: OverlayCommand,
+    ) -> Result<Receiver<OverlayResult>, OverlayCommand> {
         let (reply, response) = mpsc::sync_channel(1);
         let request = OverlayRequest {
-            connection_epoch: self.state().connection_epoch,
+            connection_epoch,
             command,
             reply,
         };

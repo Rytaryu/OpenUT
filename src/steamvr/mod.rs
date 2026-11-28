@@ -1,5 +1,7 @@
 //! SteamVR client thread, raw tracking samples, and dashboard overlay access.
 
+#[cfg(any(windows, test))]
+pub mod board;
 pub mod client;
 
 #[cfg(windows)]

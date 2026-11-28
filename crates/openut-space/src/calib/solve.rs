@@ -5,7 +5,7 @@ use std::f64::consts::{FRAC_PI_2, PI};
 use crate::linalg::NormalEquations;
 use crate::{AxisMap, Calibration, Pose, Quat, Vec3};
 
-use super::{CalibrationConfig, CalibrationError, SamplePair};
+use super::{CalibrationConfig, CalibrationError, RotationProgress, SamplePair};
 
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Candidate {
@@ -100,14 +100,23 @@ pub(super) fn sufficient_motion(
     min_rotation_rad: f64,
     min_axis_separation_rad: f64,
 ) -> bool {
+    rotation_progress(rotations, min_rotation_rad, min_axis_separation_rad)
+        == RotationProgress::Ready
+}
+
+pub(super) fn rotation_progress(
+    rotations: impl IntoIterator<Item = Quat>,
+    min_rotation_rad: f64,
+    min_axis_separation_rad: f64,
+) -> RotationProgress {
     if !(0.0..=PI).contains(&min_rotation_rad)
         || !(0.0..=FRAC_PI_2).contains(&min_axis_separation_rad)
     {
-        return false;
+        return RotationProgress::None;
     }
     let mut rotations = rotations.into_iter().filter_map(Quat::normalized);
     let Some(first) = rotations.next() else {
-        return false;
+        return RotationProgress::None;
     };
     let maximum_dot = min_axis_separation_rad.cos();
     let mut axes: Vec<Vec3> = Vec::new();
@@ -123,11 +132,15 @@ pub(super) fn sufficient_motion(
             .iter()
             .any(|axis| axis.dot(delta.axis).abs() <= maximum_dot)
         {
-            return true;
+            return RotationProgress::Ready;
         }
         axes.push(delta.axis);
     }
-    false
+    if axes.is_empty() {
+        RotationProgress::None
+    } else {
+        RotationProgress::OneAxis
+    }
 }
 
 fn fit_yaw(samples: &[SamplePair], min_rotation_rad: f64) -> Option<(f64, f64)> {
