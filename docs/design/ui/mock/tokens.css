@@ -6,46 +6,36 @@
      The screenshots in shots/ were taken on Linux with Noto Sans JP standing in. */
   --font: "Yu Gothic UI", "Meiryo UI", "Noto Sans JP", sans-serif;
 
-  /* Desktop, light */
-  --bg: #F4F6F8;
-  --surface: #FFFFFF;
-  --ink: #1B2230;
-  --ink-2: #4D5768;
-  --line: #D5DBE3;
-  --track: #7B8799;
-  --hover: #E3E8EE;
-  --stage: #2F5D9E;
-  --ok: #1E7A5A;
-  --signal: #B4610A;
-  --on-stage: #FFFFFF;
+  /* Status window: one dark theme, whatever the Windows setting (1.2) */
+  --bg: #141A22;
+  --tile: #1C2430;
+  --line: #2A3441;
+  --ink: #E8EDF3;
+  --ink-2: #9AA6B5;
+  --track: #66748A;     /* 1 px outline of a stage not reached yet */
+  --reach: #4D79B8;     /* stage passed */
+  --stage: #8DB6F5;     /* current stage, buttons, host tag, focus */
+  --on-stage: #0E1A2C;
+  --ok-reach: #2E8F6C;  /* stage passed, when the tracker is tracking */
+  --ok: #5FD3A6;        /* current stage when tracking; strip of a "connected again" notice */
+  --on-ok: #0B2A1F;
+  --idle: #475263;      /* current cell of a tracker that is not connected */
+  --signal: #F2A33A;    /* notice strip, notice dot of the mark */
+  --hover: #263142;
 
-  /* Glyph on Windows surfaces (taskbar, toast): one colour that works on light and dark */
+  /* Mark on Windows surfaces (taskbar, toast): one colour that works on light and dark */
   --icon-normal: #3A6FB8;
   --icon-badge: #C8650F;
   --icon-blind: #7D8794;
   --icon-ok: #2E9E77;
 
-  /* SteamVR panel (one theme: always dark) */
-  --vr-panel: rgba(23, 35, 52, 0.94);
+  /* SteamVR panel */
+  --vr-panel: rgba(20, 26, 34, 0.94);
   --vr-edge: rgba(255, 255, 255, 0.14);
   --vr-ink: #F3F6FA;
   --vr-ink-2: #C3CEDC;
   --vr-signal: #F2A33A;
-  --vr-ok: #4CC39A;
-}
-
-.dark {
-  --bg: #172130;
-  --surface: #1F2B3D;
-  --ink: #E7ECF2;
-  --ink-2: #A3AFBF;
-  --line: #2C3A4E;
-  --track: #64758E;
-  --hover: #2A3950;
-  --stage: #7FA6E6;
-  --ok: #4CC39A;
-  --signal: #F2A33A;
-  --on-stage: #10233F;
+  --vr-ok: #5FD3A6;
 }
 
 * { box-sizing: border-box; }
@@ -54,5 +44,5 @@ html, body {
   margin: 0;
   font-family: var(--font);
   color: #1B2230;
-  background: #E3E7EC;
+  background: #C9D0D8;
 }

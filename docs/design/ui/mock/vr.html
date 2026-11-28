@@ -7,6 +7,7 @@
 <link rel="stylesheet" href="tokens.css">
 <script src="glyph.js"></script>
 <script src="wrap.js"></script>
+<script src="names.js"></script>
 <style>
   body { padding: 24px; }
   .cap { font-size: 13px; color: #4D5768; margin: 0 0 8px 2px; }
@@ -20,7 +21,7 @@
   .panel .h { margin: 0; font-size: 64px; line-height: 80px; font-weight: 700; color: var(--vr-ink); }
   .panel .a { margin: 12px 0 0; font-size: 54px; line-height: 73px; font-weight: 400; color: var(--vr-ink-2); }
 
-  #vr-panels, #vr-long { display: inline-grid; gap: 20px; padding: 24px; background: #7F8A93; align-items: start; }
+  #vr-panels, #vr-long { display: inline-grid; gap: 20px; padding: 24px; background: #8A949E; align-items: start; }
   #vr-panels .panel, #vr-long .panel { zoom: 0.5; }
 
   /* Field of view: 100 degrees across the frame. Panel 24.1 degrees wide, centre 10.6 degrees below. */
@@ -44,62 +45,62 @@
 </head>
 <body>
 
-<p class="cap">板（テクスチャーの画素のまま。幅 1280）</p>
+<p class="cap">板（テクスチャーの画素のまま。幅1280）</p>
 <div id="vr-panels">
   <div class="panel" id="vr-r1">
     <canvas data-glyph="normal" data-size="80" data-color="--vr-signal"></canvas>
-    <div><p class="h" data-wrap="トラッカーが|始まりません"></p><p class="a" data-wrap="腰の|電源だけを|入れ直す。\nほかの|トラッカーと|ドングルは|そのまま"></p></div>
+    <div><p class="h" data-wrap="トラッカーの|追跡が|始まりません"></p><p class="a" data-wrap="腰の|電源だけを|入れ直してください。\nほかの|トラッカーと|ドングルは|そのままにしてください。"></p></div>
   </div>
   <div class="panel" id="vr-r1-more">
     <canvas data-glyph="normal" data-size="80" data-color="--vr-signal"></canvas>
-    <div><p class="h" data-wrap="トラッカーが|まだ|始まりません|（ほか1件）"></p><p class="a" data-wrap="腰の|電源だけを|入れ直す。\nほかの|トラッカーと|ドングルは|そのまま"></p></div>
+    <div><p class="h" data-wrap="トラッカーの|追跡が|まだ|始まりません|（ほか1件）"></p><p class="a" data-wrap="腰の|電源だけを|入れ直してください。\nほかの|トラッカーと|ドングルは|そのままにしてください。"></p></div>
   </div>
   <div class="panel" id="vr-r3">
     <canvas data-glyph="normal" data-size="80" data-color="--vr-signal"></canvas>
-    <div><p class="h" data-wrap="トラッカー3の|位置合わせが|終わりません"></p><p class="a" data-wrap="手に持って、|部屋の中を|ゆっくり|見せる"></p></div>
+    <div><p class="h" data-wrap="トラッカー3の|位置合わせが|終わりません"></p><p class="a" data-wrap="手に持って、|部屋の中を|見回すように|ゆっくり動かしてください"></p></div>
   </div>
   <div class="panel" id="vr-r1-ok">
     <canvas data-glyph="normal" data-size="80" data-color="--vr-ok"></canvas>
-    <div><p class="h" data-wrap="始まらない|状態が|直りました"></p></div>
+    <div><p class="h" data-wrap="追跡が|始まらない|問題が|直りました"></p></div>
   </div>
 </div>
 
-<p class="cap" style="margin-top:28px">長い名前と長いしきい値（名前は 8 文字に縮める。6.4）</p>
+<p class="cap" style="margin-top:28px">長い名前と長いしきい値（名前は8文字に縮める。6.4）</p>
 <div id="vr-long">
   <!-- Host named in config.toml "腰のトラッカー（ベルトの後ろ、古いほう）" (20 characters): shortened to 7 characters + "…" (6.4) -->
   <div class="panel">
     <canvas data-glyph="normal" data-size="80" data-color="--vr-signal"></canvas>
-    <div><p class="h" data-wrap="トラッカーが|まだ|始まりません|（ほか2件）"></p><p class="a" data-wrap="腰のトラッカー…の|電源だけを|入れ直す。\nほかの|トラッカーと|ドングルは|そのまま"></p></div>
+    <div><p class="h" data-wrap="トラッカーの|追跡が|まだ|始まりません|（ほか2件）"></p><p class="a" data-wrap="腰のトラッカー…の|電源だけを|入れ直してください。\nほかの|トラッカーと|ドングルは|そのままにしてください。"></p></div>
   </div>
   <!-- Host not known yet: the fixed words from the design (6.2) -->
   <div class="panel">
     <canvas data-glyph="normal" data-size="80" data-color="--vr-signal"></canvas>
-    <div><p class="h" data-wrap="左足のトラッカーが|地図を|受け取れていません|（ほか1件）"></p><p class="a" data-wrap="ホストのトラッカーの|近くに|置いて|待つ"></p></div>
+    <div><p class="h" data-wrap="左足のトラッカーが|地図を|受け取れていません|（ほか1件）"></p><p class="a" data-wrap="ホストのトラッカーの|近くに|置いて待ってください"></p></div>
   </div>
   <!-- R5 with r5.wait_s = 90 -->
   <div class="panel">
     <canvas data-glyph="normal" data-size="80" data-color="--vr-signal"></canvas>
-    <div><p class="h" data-wrap="左足のトラッカーが|1分30秒以上、|位置を|失っています"></p><p class="a" data-wrap="カメラの前を|あけ、|明るい方へ|向ける"></p></div>
+    <div><p class="h" data-wrap="左足のトラッカーの|追跡が|1分30秒以上|途切れています"></p><p class="a" data-wrap="カメラの前の|物を|どけて、|明るい方へ向けてください"></p></div>
   </div>
   <!-- R5 with r5.wait_s = 5400, merged with 2 more: the tallest headline (3 lines) -->
   <div class="panel">
     <canvas data-glyph="normal" data-size="80" data-color="--vr-signal"></canvas>
-    <div><p class="h" data-wrap="左足のトラッカーが|1時間30分以上、|位置を|失っています|（ほか2件）"></p><p class="a" data-wrap="カメラの前を|あけ、|明るい方へ|向ける"></p></div>
+    <div><p class="h" data-wrap="左足のトラッカーの|追跡が|1時間30分以上|途切れています|（ほか2件）"></p><p class="a" data-wrap="カメラの前の|物を|どけて、|明るい方へ向けてください"></p></div>
   </div>
 </div>
 
-<p class="cap" style="margin-top:28px">視野の中（横 100°。板は幅 24°、中心は 10.6° 下）</p>
+<p class="cap" style="margin-top:28px">視野の中（横100°。板は幅24°、中心は10.6°下）</p>
 <div id="vr-view">
   <div class="view room"><span class="cross"></span>
     <div class="anchor"><div class="panel">
       <canvas data-glyph="normal" data-size="80" data-color="--vr-signal"></canvas>
-      <div><p class="h" data-wrap="トラッカーが|始まりません"></p><p class="a" data-wrap="腰の|電源だけを|入れ直す。\nほかの|トラッカーと|ドングルは|そのまま"></p></div>
+      <div><p class="h" data-wrap="トラッカーの|追跡が|始まりません"></p><p class="a" data-wrap="腰の|電源だけを|入れ直してください。\nほかの|トラッカーと|ドングルは|そのままにしてください。"></p></div>
     </div></div>
   </div>
   <div class="view day"><span class="cross"></span>
     <div class="anchor"><div class="panel">
       <canvas data-glyph="normal" data-size="80" data-color="--vr-signal"></canvas>
-      <div><p class="h" data-wrap="左足が|地図を|受け取れていません"></p><p class="a" data-wrap="腰の|近くに|置いて|待つ"></p></div>
+      <div><p class="h" data-wrap="左足が|地図を|受け取れていません"></p><p class="a" data-wrap="腰の|近くに|置いて待ってください"></p></div>
     </div></div>
   </div>
 </div>
