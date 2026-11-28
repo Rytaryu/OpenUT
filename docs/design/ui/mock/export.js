@@ -3,7 +3,7 @@
 const { chromium } = require("playwright");
 const fs = require("fs");
 const path = require("path");
-const COLORS = { ok: "#2F9466", wait: "#B07A12", fault: "#D64A3C" };
+const COLORS = { ok: "#2F9466", wait: "#3A7BD5", fault: "#D64A3C" };
 (async () => {
   const browser = await chromium.launch();
   const page = await browser.newPage();

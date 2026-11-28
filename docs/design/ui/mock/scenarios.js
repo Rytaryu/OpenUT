@@ -1,5 +1,5 @@
 // Scenes of the main window, written in the shape of the display model (design 7.4, DisplayModel).
-// The 5th version has no guide (PRD W-10, D-46): `guide` is not used, and the line of the status bar is a notice,
+// No guide (PRD W-10, D-46): `guide` is not used, and the line of the status panel is a notice,
 // a problem on the side of the app, or "VIVE Hubを起動してください" (m1.md 2.3).
 // The serial numbers are made-up examples in the shape of the design's examples (00XX0000A0001):
 // no real serial number is in this repository.
@@ -83,7 +83,7 @@
   }
 
   scenes.h = {
-    title: "カードのメニュー（仮。中身は #76）",
+    title: "行のメニュー（仮。中身は #76）",
     overall: "ok", line: null, faults: [], dongle: "on",
     devices: scenes.c.devices, menuOpen: 2,
   };
@@ -108,8 +108,8 @@
 
   {
     // Minimum size, the longest tails (design 3.2, 4.4): two made-up serials of 32 characters that share their
-    // last 31, so every tail is 32 characters (a shorter serial shows whole). One is the host with R1,
-    // the other is not connected (no VIVE Hub number) with R4.
+    // last 31, so every tail is 32 characters (the tail has one length for every tracker; a shorter serial shows whole).
+    // One is the host with R1, the other is not connected (no VIVE Hub number) with R4.
     const R = "7KWM3X9QH2VT8ND4ZR6BY0PC5FJ0001";
     const a = dev({ serial: "00XX0000A0003", tail: "00XX0000A0003", hub: 2, battery: 71, state: "ok" });
     const b = dev({ serial: "A" + R, tail: "A" + R, hub: 1, battery: 58, state: "fault", host: true });
@@ -120,6 +120,20 @@
       title: "最小の大きさ、末尾が 32 文字の 2 台",
       overall: "fault", line: { fault: r1 }, faults: [r4, r1], dongle: "on",
       devices: [a, b, c], size: [1000, 600],
+    };
+  }
+
+  {
+    // Minimum size, a serial of 32 characters with a short tail (4) and a firmware version of 32 characters
+    // (digits and periods; design 4.4 takes up to 32). Both made up.
+    const a = dev({ serial: "00XX0000A0001", tail: "0001", hub: 1, battery: 90, state: "ok", host: true });
+    const b = dev({ serial: "Q2HN8XW4TB6RM0ZK3JD7VC5PL9FY1234", tail: "1234", hub: 3, battery: 64, state: "wait",
+                    fw: "1234567.1234567.1234567.12345678" });
+    const c = dev({ serial: "00XX0000A0002", tail: "0002", hub: 2, battery: 77, state: "ok" });
+    scenes.k = {
+      title: "最小の大きさ、32 文字のシリアル番号（末尾 4 文字）とバージョン",
+      overall: "wait", line: null, faults: [], dongle: "on",
+      devices: [a, c, b], size: [1000, 600],
     };
   }
 

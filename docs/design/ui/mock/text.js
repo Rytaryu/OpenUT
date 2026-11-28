@@ -1,4 +1,4 @@
-// Wording of the 5th version (docs/design/ui/m1.md, chapter 3), for the mockups and for mock/fit.js.
+// Wording of the 6th version (docs/design/ui/m1.md, chapter 3), for the mockups and for mock/fit.js.
 // "|" marks a place where a line may break, "\n" a new line after "。" (section 5.4, wrap.js).
 // The app keeps the same strings in openut_core::text.
 
@@ -32,7 +32,8 @@
       "R1 Escalated": [`まだ|トラッキングが|始まりません${more}`, R1A],
       "R1 Resolved": [`トラッキングが|始まらない|問題が|直りました${more}`, null],
       "R2 Raised": [`${T}の|準備に|時間が|かかっています${more}`, `${H}の|近くに|置いて、|待ってください`],
-      "R3 Raised": [`${T}の|トラッキングが|始まりません${more}`, `手に持ち、|カメラに|壁や家具が|映るように、|ゆっくり|左右に|向きを|変えてください`],
+      // R3: the meaning of the VIVE Hub notice (camera facing out, held in front of the chest). PM, 2026-11-28 23:01.
+      "R3 Raised": [`${T}の|トラッキングが|始まりません${more}`, `カメラを|外向きにして、|胸の前に|持ってください`],
       "R4 Raised": [`${T}の|接続が|切れました${more}`, `電源が|入っているか|確かめてください`],
       // Only in the list of the main window's status bar, for 30 seconds: not pushed (design 7.1, m1.md 2.3).
       "R4 Resolved": [`${T}が|つながりました${more}`, null],
@@ -51,7 +52,7 @@
     FormatMismatch: "OpenUTを|新しい|バージョンに|してください",
   };
 
-  // The word on a tracker card (2.4): one word for the connection and the state together, in the words of
+  // The word in the state column of a tracker row (2.5): one word for the connection and the state together, in the words of
   // VIVE Hub where known (provisional, to be checked by the owner: m1.md 8.1).
   function cardWord(d) {
     if (d.link === "none") return "未接続";
@@ -60,27 +61,33 @@
     return d.link === "usb" ? "USB接続" : "接続済み";
   }
 
+  // How many trackers are tracking now, over the rows of the table (2.5). VIVE Hub writes it the same way.
+  const tracking = (a, b) => `現在トラッキング中：${a} / ${b}`;
+
   const words = {
     overall: { ok: "正常", wait: "待機中", fault: "異常" },
     dongle: { on: "接続済み", off: "未接続", unknown: "—" },
     unknown: "—",
     tracker: "トラッカー",
     dongleName: "ドングル",
-    serial: "シリアル番号",
-    firmware: "ファームウェア",
-    ops: { pair: "ペアリング", map: "セットアップ" },
-    menu: { powerOff: "電源を切る", unpair: "ペアリングを解除" },
-    menuLabel: "トラッカーの操作",
+    // The two operations (2.4), in the words of VIVE Hub: the row's name and its button.
+    ops: {
+      pair: { name: "トラッカーのペアリング", button: "新規ペアリング" },
+      setup: { name: "トラッカーのセットアップ", button: "設定の開始" },
+    },
+    // Column headers of the tracker table (2.5). "PCトラッカー", "状態", "ファームウェア", "アクション" are VIVE Hub's.
+    cols: { tracker: "PCトラッカー", state: "状態", battery: "バッテリー", firmware: "ファームウェア", actions: "アクション" },
+    allOff: "すべてオフにする",
+    powerOff: "電源を切る",
+    menuLabel: "その他の操作",
+    menu: { unpair: "ペアリングを解除" },
     settings: "設定",
     pickFolder: "フォルダーを選ぶ",
-    notify: "通知",
-    notifyVr: "VR内",
-    notifyDesktop: "デスクトップ",
     trayOpen: "OpenUTを開く",
     trayQuit: "終了",
   };
 
   const plain = (s) => (s || "").replace(/\|/g, "").replace(/\n/g, "");
 
-  window.OpenUTText = { label, span, notice, hubLine, health, cardWord, words, plain };
+  window.OpenUTText = { label, span, notice, hubLine, health, cardWord, tracking, words, plain };
 })();
