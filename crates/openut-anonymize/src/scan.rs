@@ -1,7 +1,7 @@
 use std::ops::Range;
 
 use openut_hublog::decode::LineEnding;
-use openut_hublog::header::{ParsedLine, parse_line};
+use openut_hublog::header::{ParsedLine, parse_line, unclassified_numeric_fields};
 
 use crate::{Kind, Warning};
 
@@ -15,6 +15,21 @@ pub(crate) struct Scan {
     pub warnings: Vec<Warning>,
 }
 
+fn records(text: &str) -> impl Iterator<Item = (&str, usize)> {
+    let separator = LineEnding::detect(text).unwrap_or(LineEnding::Lf).as_str();
+    text.split_inclusive(separator).map(move |raw_record| {
+        let record = raw_record
+            .strip_suffix("\r\n")
+            .or_else(|| raw_record.strip_suffix(separator))
+            .unwrap_or(raw_record);
+        (record, raw_record.len())
+    })
+}
+
+pub(crate) fn possible_universe_id_fields(text: &str) -> impl Iterator<Item = &str> {
+    records(text).flat_map(|(record, _)| unclassified_numeric_fields(record))
+}
+
 pub(crate) fn scan(text: &str, pc_name: Option<&str>) -> Scan {
     let mut scan = Scan {
         spans: Vec::new(),
@@ -24,13 +39,8 @@ pub(crate) fn scan(text: &str, pc_name: Option<&str>) -> Scan {
         // A supplied name cannot consume a delimiter. The residual check still scans for it.
         .filter(|name| !name.is_empty() && !name.contains(['\r', '\n']))
         .map(str::to_ascii_lowercase);
-    let separator = LineEnding::detect(text).unwrap_or(LineEnding::Lf).as_str();
     let mut offset = 0;
-    for (index, raw_record) in text.split_inclusive(separator).enumerate() {
-        let record = raw_record
-            .strip_suffix("\r\n")
-            .or_else(|| raw_record.strip_suffix(separator))
-            .unwrap_or(raw_record);
+    for (index, (record, record_bytes)) in records(text).enumerate() {
         let mut found = RecordSpans::default();
         if let ParsedLine::Entry(entry) = parse_line(record)
             && entry.func == "BiCollector::GetPcSerialNumber"
@@ -56,7 +66,7 @@ pub(crate) fn scan(text: &str, pc_name: Option<&str>) -> Scan {
                 kind,
             });
         }
-        offset += raw_record.len();
+        offset += record_bytes;
     }
     scan
 }
@@ -135,6 +145,8 @@ fn find_record_spans(record: &str, pc_name: Option<&str>, found: &mut RecordSpan
         }
     }
 
+    find_universe_spans(record, &lower, found);
+
     if let Some(name) = pc_name {
         for (index, _) in lower.match_indices(name) {
             found.add(index..index + name.len(), Kind::PcName);
@@ -142,6 +154,42 @@ fn find_record_spans(record: &str, pc_name: Option<&str>, found: &mut RecordSpan
     }
 
     warn_about_unknown_shapes(record, &lower, found);
+}
+
+fn find_universe_spans(record: &str, lower: &str, found: &mut RecordSpans) {
+    for tail in unmasked_markers(lower, "current universe id:", found) {
+        let value = value_start(record, tail);
+        let len = value
+            .find(|ch: char| ch.is_whitespace() || matches!(ch, ',' | ';'))
+            .unwrap_or(value.len());
+        let start = record.len() - value.len();
+        add_universe_id(record, start..start + len, found);
+    }
+
+    for mut tail in unmasked_markers(lower, "universe id from ", found) {
+        for prefix in ["", "to", ", local's:"] {
+            let field = value_start(lower, tail).strip_prefix(prefix);
+            let Some(range) =
+                field.and_then(|value| delimited(record, lower.len() - value.len(), '(', ')'))
+            else {
+                found.warn(Kind::UniverseId);
+                break;
+            };
+            tail = range.end + 1;
+            add_universe_id(record, range, found);
+        }
+    }
+}
+
+fn add_universe_id(record: &str, range: Range<usize>, found: &mut RecordSpans) {
+    let before = record[range.clone()].trim_start_matches([' ', '\t']);
+    let value = before.trim_end_matches([' ', '\t']);
+    if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+        found.warn(Kind::UniverseId);
+    } else if value.bytes().any(|byte| byte != b'0') {
+        let start = range.end - before.len();
+        found.add(start..start + value.len(), Kind::UniverseId);
+    }
 }
 
 fn find_wifi_spans(record: &str, lower: &str, found: &mut RecordSpans) {
@@ -415,6 +463,58 @@ mod tests {
                 record: 4,
                 kind: Kind::TrackerSerial,
             }]
+        );
+    }
+
+    #[test]
+    fn selects_universe_ids_in_current_and_transition_records() {
+        let record = concat!(
+            "[2026-11-27 22:53:34.900 +9 0x4D2 INFO OETServer::GetCurrentSteamVRChaperoneInfoAndStore] [1234] ",
+            "current universe id: 1234567890123456789\r\n",
+            "[2026-11-27 22:53:35.000 +9 0x4D2 INFO OETServer::OnPipeQueryData] [1234] ",
+            "Universe id from (0) to (1234567890123456789), local's: (0), chaperone file path: (C:\\Users\\ExampleUser\\Steam\\config\\test.vrchap)\r\n",
+            "[2026-11-27 22:53:35.100 +9 0x4D2 INFO OETServer::OnPipeQueryData] [1234] ",
+            "Universe id from (1234567890123456789) to (9876543210987654321), local's: (1234567890123456789)\r\n",
+            "Universe ID is the same with local, do nothing.\r\n",
+        );
+        let scan = scan(record, None);
+        assert_eq!(
+            selected(record, &scan),
+            [
+                (Kind::UniverseId, "1234567890123456789"),
+                (Kind::UniverseId, "1234567890123456789"),
+                (Kind::UserFolder, "ExampleUser"),
+                (Kind::UniverseId, "1234567890123456789"),
+                (Kind::UniverseId, "9876543210987654321"),
+                (Kind::UniverseId, "1234567890123456789"),
+            ]
+        );
+        assert!(scan.warnings.is_empty());
+    }
+
+    #[test]
+    fn only_warns_for_malformed_universe_id_fields() {
+        let record = concat!(
+            "current Universe ID: 000\n",
+            "current universe id: 123.4\n",
+            "Universe ID from ( 000 ) to ( 0456 ), local's: (missing)\n",
+            "Universe ID is the same with local, do nothing.\n",
+            "unrelated value: 9876543210987654321\n",
+        );
+        let scan = scan(record, None);
+        assert_eq!(selected(record, &scan), [(Kind::UniverseId, "0456")]);
+        assert_eq!(
+            scan.warnings,
+            [
+                Warning {
+                    record: 2,
+                    kind: Kind::UniverseId,
+                },
+                Warning {
+                    record: 3,
+                    kind: Kind::UniverseId,
+                },
+            ]
         );
     }
 

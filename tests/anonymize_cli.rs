@@ -17,7 +17,12 @@ const USER_FOLDER: &str = "Synthetic Local User";
 const PC_SERIAL_BODY: &str = "synthetic-only pc serial body";
 const PC_SERIAL_TAIL: &str = "synthetic-only pc serial continuation";
 const ADDRESS: &str = "02 00 00 FE ED 42";
+const UNIVERSE_ID: &str = "1234567890123456789";
 const MAP_NAME: &str = "openut-anonymize-map.tsv";
+
+const CURRENT_UNIVERSE: &str = "[2026-11-27 22:53:30.000 +9 0x4D2 INFO OETServer::GetCurrentSteamVRChaperoneInfoAndStore] [1234] current universe id: ";
+const UNIVERSE_QUERY: &str =
+    "[2026-11-27 22:53:31.000 +9 0x4D2 INFO OETServer::OnPipeQueryData] [1234] ";
 
 struct TestDirectory(PathBuf);
 
@@ -337,4 +342,162 @@ fn rejects_a_known_original_left_in_an_unrecognized_record() {
         assert!(!output.join(name).exists());
     }
     assert!(!map.join(MAP_NAME).exists());
+}
+
+#[test]
+fn anonymizes_universe_ids_across_files_and_preserves_zero_and_log_shape() {
+    let directory = TestDirectory::new();
+    let output = directory.0.join("share");
+    let map = directory.0.join("private");
+    let header = "# Log begin at 2026-11-27 22:53:29.000";
+    let program_path = r"C:\Program Files (x86)\Steam\config\oculus\driver_oculus.vrchap";
+    let profile_path = format!(r"C:\Users\{USER_FOLDER}\Steam\config\oculus\driver_oculus.vrchap");
+    let query_text = |from: &str, to: &str, local: &str, path: &str| {
+        format!(
+            "{UNIVERSE_QUERY}Universe id from ({from}) to ({to}), local's: ({local}), chaperone file path: ({path})"
+        )
+    };
+    let no_number = format!("{UNIVERSE_QUERY}Universe ID is the same with local, do nothing.");
+    let server_text = format!(
+        "{header}\r\n{CURRENT_UNIVERSE}{UNIVERSE_ID}\r\n{}\r\n{}\r\n{no_number}\r\n",
+        query_text("0", UNIVERSE_ID, "0", program_path),
+        query_text(UNIVERSE_ID, UNIVERSE_ID, UNIVERSE_ID, &profile_path),
+    );
+    let next_day_prefix = CURRENT_UNIVERSE.replace("2026-11-27", "2026-11-28");
+    let server = write_input(&directory.0, "ViveTrackerServer_20261127.txt", &server_text);
+    let next_day = write_input(
+        &directory.0,
+        "ViveTrackerServer_20261128.txt",
+        &format!("{next_day_prefix}{UNIVERSE_ID}\r\n{next_day_prefix}0\r\n"),
+    );
+    let result = anonymize(&output, &map, &[&server, &next_day]);
+    assert!(result.status.success(), "universe ID anonymization failed");
+    assert!(
+        result.stderr.is_empty(),
+        "recognized values need no warning"
+    );
+
+    let sanitized = read_output(&output, &server);
+    let records = crlf_records(&sanitized);
+    let alias = records[1]
+        .strip_prefix(CURRENT_UNIVERSE)
+        .expect("the current universe ID stays in its original field");
+    assert!(!alias.is_empty());
+    assert_ne!(alias, "0");
+    let profile_start = r", chaperone file path: (C:\Users\";
+    let profile_end = r"\Steam\config\oculus\driver_oculus.vrchap)";
+    let (_, folder) = records[3]
+        .split_once(profile_start)
+        .expect("the path still starts with the users directory");
+    let folder_alias = folder
+        .strip_suffix(profile_end)
+        .expect("preserve the rest of the path");
+    assert!(!folder_alias.is_empty());
+    let sanitized_path =
+        format!(r"C:\Users\{folder_alias}\Steam\config\oculus\driver_oculus.vrchap");
+    assert_eq!(
+        sanitized,
+        format!(
+            "{header}\r\n{CURRENT_UNIVERSE}{alias}\r\n{}\r\n{}\r\n{no_number}\r\n",
+            query_text("0", alias, "0", program_path),
+            query_text(alias, alias, alias, &sanitized_path),
+        )
+    );
+    assert_eq!(
+        read_output(&output, &next_day),
+        format!("{next_day_prefix}{alias}\r\n{next_day_prefix}0\r\n"),
+    );
+    assert!(!sanitized.contains(UNIVERSE_ID));
+    assert!(!sanitized.contains(USER_FOLDER));
+    assert!(!String::from_utf8_lossy(&result.stdout).contains(UNIVERSE_ID));
+    assert!(!output.join(MAP_NAME).exists());
+    let private = fs::read_to_string(map.join(MAP_NAME)).expect("read private mapping");
+    let expected_mapping = format!("UNIVERSE\t{UNIVERSE_ID}\t{alias}");
+    assert!(private.lines().any(|line| line == expected_mapping));
+    assert!(
+        !private
+            .lines()
+            .any(|line| line.starts_with("UNIVERSE\t0\t"))
+    );
+}
+
+#[test]
+fn allows_a_known_universe_number_in_a_parsed_record_header() {
+    let directory = TestDirectory::new();
+    let output = directory.0.join("share");
+    let map = directory.0.join("private");
+    let prefix = "[2026-11-27 00:00:02.000 +9 0x2 INFO OETServer::GetCurrentSteamVRChaperoneInfoAndStore] [2] current universe id: ";
+    let server = write_input(
+        &directory.0,
+        "ViveTrackerServer_20261127.txt",
+        &format!("{prefix}2\r\n"),
+    );
+
+    let result = anonymize(&output, &map, &[&server]);
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert_eq!(
+        read_output(&output, &server),
+        format!("{prefix}UNIVERSE-A\r\n")
+    );
+}
+
+#[test]
+fn rejects_a_short_known_universe_number_outside_a_parsed_header() {
+    let directory = TestDirectory::new();
+    let output = directory.0.join("share");
+    let map = directory.0.join("private");
+    let server = write_input(
+        &directory.0,
+        "ViveTrackerServer_20261127.txt",
+        "[2026-11-27 00:00:02.000 +9 0x1 INFO OETServer::GetCurrentSteamVRChaperoneInfoAndStore] [1] current universe id: 2\r\n",
+    );
+    for line in [
+        "[2026-11-27 00:00:02.001 +9 0x2 INFO Driver] [2] details: 00002\r\n",
+        "[2026-11-27 00:00:61.000 +9 0x1 INFO Driver] [00002] details\r\n",
+    ] {
+        let driver = write_input(&directory.0, "ViveTrackerDriver_20261127.txt", line);
+        let result = anonymize(&output, &map, &[&server, &driver]);
+
+        assert!(!result.status.success());
+        let error = String::from_utf8_lossy(&result.stderr);
+        assert!(
+            error.contains("入力 2 の出力に元の値が残っています"),
+            "{error}"
+        );
+        assert!(!error.contains("00002"));
+        assert!(!output.exists());
+        assert!(!map.exists());
+    }
+}
+
+#[test]
+fn rejects_an_unredacted_known_universe_id_in_another_file() {
+    let directory = TestDirectory::new();
+    let output = directory.0.join("share");
+    let map = directory.0.join("private");
+    let server = write_input(
+        &directory.0,
+        "ViveTrackerServer_20261127.txt",
+        &format!("{CURRENT_UNIVERSE}{UNIVERSE_ID}\r\n"),
+    );
+    let driver = write_input(
+        &directory.0,
+        "ViveTrackerDriver_20261127.txt",
+        &format!("unrecognized format containing {UNIVERSE_ID}\r\n"),
+    );
+    let result = anonymize(&output, &map, &[&server, &driver]);
+    assert!(
+        !result.status.success(),
+        "a known residual should fail the batch"
+    );
+    assert!(!String::from_utf8_lossy(&result.stdout).contains(UNIVERSE_ID));
+    let error = String::from_utf8_lossy(&result.stderr);
+    assert!(error.contains("出力に元の値が残っています"));
+    assert!(!error.contains(UNIVERSE_ID));
+    assert!(!output.exists());
+    assert!(!map.exists());
 }
