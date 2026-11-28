@@ -46,7 +46,7 @@
   .band .btn { margin-right: 20px; }
 
   /* 3. Devices */
-  .devices { display: flex; align-items: stretch; min-height: 269px; }
+  .devices { display: flex; align-items: stretch; min-height: 245px; }
   .tile.ghost { background: none; box-shadow: inset 0 0 0 1.5px var(--line); }
   .tile.ghost .pict { margin-top: 44px; }
   .devices .sep { width: 1px; background: var(--line); margin: 0 12px; flex: none; }
@@ -58,12 +58,10 @@
   .tile { background: var(--panel); border-radius: 8px; flex: none; position: relative; overflow: hidden;
           padding: 14px 12px 12px; display: flex; flex-direction: column; }
   .tile .sbar { position: absolute; left: 0; right: 0; top: 0; height: 4px; }
-  .tile .name { font-size: 16px; font-weight: 700; line-height: 22px; text-align: center; white-space: nowrap; }
+  .tile .name { font-size: 16px; font-weight: 700; line-height: 22px; white-space: nowrap; height: 22px;
+                display: flex; justify-content: center; align-items: center; gap: 4px; }
   .tile .pict { display: flex; justify-content: center; margin-top: 8px; height: 48px; }
-  .tile .hostrow { height: 20px; margin-top: 4px; display: flex; justify-content: center; align-items: center; }
-  .tag { font-size: 12px; font-weight: 700; line-height: 16px; padding: 1px 8px; border-radius: 10px;
-         color: var(--accent); box-shadow: inset 0 0 0 1.5px var(--accent); }
-  .tile .state { height: 22px; margin-top: 2px; display: flex; justify-content: center; align-items: center; gap: 6px;
+  .tile .state { height: 22px; margin-top: 8px; display: flex; justify-content: center; align-items: center; gap: 6px;
                  font-size: 16px; font-weight: 700; line-height: 22px; }
   .tile hr { border: 0; border-top: 1px solid var(--line); margin: 8px 0; width: 100%; }
   .tile .kv { display: flex; align-items: center; gap: 6px; font-size: 13px; line-height: 20px; height: 20px; white-space: nowrap; }
@@ -159,10 +157,11 @@
   function tile(d) {
     const off = d.link === "none";
     const st = d.state;
-    const ring = st ? c(st) : "var(--idle)";
+    const frame = st ? c(st) : "var(--idle)";
     const bar = st ? `<div class="sbar" style="background:${c(st)}"></div>` : "";
-    // Tile title (3.3): "トラッカー{N}" with the VIVE Hub number, else "トラッカー" (the host is shown by the tag).
-    const name = d.hub ? `${W.tracker}${d.hub}` : W.tracker;
+    // Tile title (3.4): "トラッカー{N}" with the VIVE Hub number, else "トラッカー". The host has a star before it.
+    const name = (d.host ? I.star(16, grey ? "var(--muted)" : "var(--accent)") : "") +
+      `<span>${d.hub ? `${W.tracker}${d.hub}` : W.tracker}</span>`;
     const stateRow = st
       ? `${I.state(st, 14, c(st))}<span style="color:${c(st)}">${W.state[st]}</span>`
       : `${I.state("none", 14, "var(--idle)")}<span>${W.state.none}</span>`;
@@ -175,8 +174,7 @@
     const ser = d.serial ? serialHtml(d.serial, d.tail, tw - 24) : `<span class="unk">${W.unknown}</span>`;
     return `<div class="tile${off && !st ? " off" : ""}${grey ? " grey" : ""}" style="width:${tw}px">${bar}
       <div class="name">${name}</div>
-      <div class="pict">${I.tracker(ring, off ? "outline" : "solid")}</div>
-      <div class="hostrow">${d.host ? `<span class="tag"${grey ? ' style="color:var(--muted);box-shadow:inset 0 0 0 1.5px var(--muted)"' : ""}>${W.host}</span>` : ""}</div>
+      <div class="pict">${I.tracker(frame, off ? "outline" : "solid")}</div>
       <div class="state">${stateRow}</div>
       <hr>
       <div class="kvs${tw - 24 >= 148 ? " one" : ""}">${linkRow}${batRow}</div>
@@ -190,7 +188,6 @@
     return `<div class="tile dongle${grey ? " grey" : ""}" style="width:120px">
       <div class="name">${W.dongleName}</div>
       <div class="pict">${I.dongle(grey && k === "on" ? "on" : k)}</div>
-      <div class="hostrow"></div>
       <div class="state" style="color:${k === "on" && !grey ? "var(--ink)" : "var(--ink-2)"}">${W.dongle[k]}</div>
     </div>`;
   }

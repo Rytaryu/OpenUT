@@ -30,7 +30,7 @@
       "R1 Escalated": [`まだ|追跡が|始まりません${more}`, R1A],
       "R1 Resolved": [`追跡が|始まらない|問題が|直りました${more}`, null],
       "R2 Raised": [`${T}の|準備に|時間が|かかっています${more}`, `${H}の|近くに|置いて、|待ってください`],
-      "R3 Raised": [`${T}の|追跡が|始まりません${more}`, `手に持ち、|部屋の中を|見回すように|ゆっくり|動かしてください`],
+      "R3 Raised": [`${T}の|追跡が|始まりません${more}`, `手に持ち、|カメラに|壁や家具が|映るように、|ゆっくり|左右に|向きを|変えてください`],
       "R4 Raised": [`${T}の|接続が|切れました${more}`, `電源が|入っているか|確かめてください`],
       // Only in the list of the main window's status band, for 30 seconds: not pushed (design 7.1, m1.md 3.3).
       "R4 Resolved": [`${T}が|つながりました${more}`, null],
@@ -46,7 +46,7 @@
     G3: { step: "電源を|入れる", line: "トラッカーの|電源を|入れてください" },
     G4: {
       step: "追跡を|待つ",
-      line: "追跡が|始まるまで|待ってください。\n始まらないときは、|カメラの前を|ふさがずに、|トラッカーを|部屋へ向けて|ゆっくり|動かしてください",
+      line: "追跡が|始まるまで|待ってください。\n始まらないときは、|トラッカーを|手に持ち、|カメラに|壁や家具が|映るように、|ゆっくり|左右に|向きを|変えてください",
     },
     G5: { step: "身につける", line: "トラッカーを|身につけてください" },
   };
@@ -61,16 +61,15 @@
   const words = {
     overall: { ok: "正常", wait: "待機中", fault: "異常" },
     state: { ok: "正常", wait: "待機中", fault: "異常", none: "未接続" },
-    link: { dongle: "ドングル", usb: "USB", none: "未接続" },
+    link: { dongle: "接続済み", usb: "USB接続", none: "未接続" },
     dongle: { on: "接続済み", off: "未接続", unknown: "—" },
     unknown: "—",
-    host: "ホスト",
     tracker: "トラッカー",
     dongleName: "ドングル",
     serial: "シリアル番号",
     firmware: "ファームウェア",
     prepare: "準備",
-    ops: { pair: "ペアリング", map: "地図を作る", cal: "キャリブレーション" },
+    ops: { pair: "ペアリング", map: "セットアップ", cal: "キャリブレーション" },
     stop: "やめる",
     pickFolder: "フォルダーを選ぶ",
     notify: "通知",

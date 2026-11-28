@@ -38,16 +38,28 @@
     return svg(s, s, `<circle cx="${c}" cy="${c}" r="${r - sw / 2}" fill="none" stroke="${color}" stroke-width="${sw}"/>`, "g");
   }
 
-  // Tracker pictogram, 60 x 48 (not a picture of the product: a rounded body and one lens).
-  // ring: colour of the lens ring (the state colour). body: "solid" when connected, "outline" when not.
-  function tracker(ring, body) {
+  // Tracker pictogram, 60 x 48. Not a picture of the product: a rounded body seen from the front with its
+  // two cameras near the top edge. frame: colour of the body's outline (the state colour, or idle).
+  // body: "solid" when connected, "outline" when not (no fill, thin outline, cameras as rings).
+  function tracker(frame, body) {
     const solid = body !== "outline";
+    const lens = (cx) => solid
+      ? `<circle cx="${cx}" cy="17" r="5" fill="#15181C" stroke="#5A6370" stroke-width="1.5"/>`
+      : `<circle cx="${cx}" cy="17" r="4.5" fill="none" stroke="${frame}" stroke-width="1.5"/>`;
     return svg(60, 48,
-      `<rect x="5" y="4" width="50" height="40" rx="12" fill="${solid ? "var(--panel-2)" : "none"}" ` +
-        `stroke="${solid ? "#4A525D" : "var(--idle)"}" stroke-width="2"/>` +
-      `<circle cx="30" cy="24" r="11" fill="${solid ? "#15181C" : "none"}"/>` +
-      `<circle cx="30" cy="24" r="11" fill="none" stroke="${ring}" stroke-width="4"/>` +
-      (solid ? `<circle cx="34" cy="20" r="2.3" fill="#5A6370"/>` : ""), "pict");
+      `<rect x="7.5" y="5.5" width="45" height="37" rx="14" fill="${solid ? "var(--panel-2)" : "none"}" ` +
+        `stroke="${frame}" stroke-width="${solid ? 3 : 2}"/>` +
+      lens(20) + lens(40), "pict");
+  }
+
+  // Host mark, a five-pointed star in a box of s (the host tracker, like VIVE Hub; no word "ホスト").
+  function star(s, color) {
+    const c = s / 2, R = s * 0.48, r = R * 0.47, pts = [];
+    for (let i = 0; i < 10; i++) {
+      const a = (-90 + i * 36) * Math.PI / 180, q = i % 2 ? r : R;
+      pts.push(`${(c + q * Math.cos(a)).toFixed(2)},${(c + 0.04 * s + q * Math.sin(a)).toFixed(2)}`);
+    }
+    return svg(s, s, `<polygon points="${pts.join(" ")}" fill="${color}" stroke="${color}" stroke-width="${(s * 0.06).toFixed(2)}" stroke-linejoin="round"/>`, "g");
   }
 
   // Dongle pictogram, 60 x 48: a USB stick with its plug. look: "on", "off", "unknown" (dashed outline).
@@ -108,5 +120,5 @@
     return svg(s, s, `<path d="M${s * 0.28} ${s * 0.52}L${s * 0.44} ${s * 0.67}L${s * 0.73} ${s * 0.36}" fill="none" stroke="${color}" stroke-width="${s * 0.11}" stroke-linecap="round" stroke-linejoin="round"/>`, "g");
   }
 
-  window.OpenUTIcons = { state, tracker, dongle, link, battery, op, check, arc };
+  window.OpenUTIcons = { state, tracker, star, dongle, link, battery, op, check, arc };
 })();

@@ -25,7 +25,7 @@ add('灰色の状態の名前 / タイル', '文字', t.muted, t.panel, 4.5);
 add('正常の文字 / 帯・タイル', '文字', t.ok, t.panel, 4.5);
 add('待機中の文字 / 帯・タイル', '文字', t.wait, t.panel, 4.5);
 add('異常の文字 / 帯・タイル', '文字', t.fault, t.panel, 4.5);
-add('ホストの印の文字 / タイル', '文字', t.accent, t.panel, 4.5);
+add('ホストの星 / タイル', '図形', t.accent, t.panel, 3);
 add('いまの段の番号 / いまの段の丸', '文字', t.onAccent, t.accent, 4.5);
 add('「フォルダーを選ぶ」の文字 / ボタン', '文字', t.onAccent, t.accent, 4.5);
 add('段の進み（1/2）/ その地', '文字', t.accent, t.panel2, 4.5);

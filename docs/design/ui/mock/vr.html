@@ -50,19 +50,16 @@
                 font-size: 56px; font-weight: 700; }
   .b-band .ln { padding: 0 36px; font-size: 36px; line-height: 52px; }
   .b-dev { display: flex; gap: 16px; }
-  .b-tile { background: var(--panel); border-radius: 16px; width: 248px; min-height: 330px; position: relative; overflow: hidden;
+  .b-tile { background: var(--panel); border-radius: 16px; width: 248px; min-height: 286px; position: relative; overflow: hidden;
             display: flex; flex-direction: column; align-items: center; padding: 20px 0 14px; }
   .b-tile .sbar { position: absolute; left: 0; right: 0; top: 0; height: 8px; }
-  .b-tile .nm { font-size: 32px; font-weight: 700; line-height: 44px; }
+  .b-tile .nm { font-size: 32px; font-weight: 700; line-height: 44px; display: flex; align-items: center; gap: 8px; }
   .b-tile .tl { margin-top: 10px; font-size: 28px; line-height: 38px; color: var(--ink-2); text-align: center; padding: 0 16px; }
   .b-tile .tl b { color: var(--ink); }
   .b-tile .pc { margin-top: 12px; height: 96px; }
   .b-tile .pc svg { width: 120px; height: 96px; }
   .b-tile .st { margin-top: 12px; display: flex; align-items: center; gap: 12px; font-size: 32px; font-weight: 700; line-height: 40px; }
   .b-tile .st svg { width: 28px; height: 28px; }
-  .b-tile .hostrow { height: 36px; margin-top: 8px; display: flex; align-items: center; }
-  .b-tag { font-size: 24px; font-weight: 700; line-height: 32px; padding: 2px 14px; border-radius: 18px; color: var(--accent);
-           box-shadow: inset 0 0 0 3px var(--accent); }
   .b-dongle { width: 160px; }
   .b-dongle .pc svg { width: 100px; height: 80px; }
   .b-sep { width: 2px; background: var(--line); margin: 0 4px; }
@@ -156,13 +153,12 @@
     .map((l, i) => (i === 0 ? `…<b>${esc(l.slice(1))}</b>` : `<b>${esc(l)}</b>`)).join("<br>");
   const btile = (d) => d.st
     ? `<div class="b-tile"><div class="sbar" style="background:${col[d.st]}"></div>` +
-      `<div class="nm">${d.hub ? W.tracker + d.hub : W.tracker}</div>` +
+      `<div class="nm">${d.host ? I.star(32, "var(--accent)") : ""}<span>${d.hub ? W.tracker + d.hub : W.tracker}</span></div>` +
       `<div class="pc">${I.tracker(col[d.st], "solid")}</div>` +
-      `<div class="hostrow">${d.host ? `<span class="b-tag">${W.host}</span>` : ""}</div>` +
       `<div class="st">${I.state(d.st, 28, col[d.st])}<span style="color:${col[d.st]}">${W.state[d.st]}</span></div>` +
       `<div class="tl">${tailH(d.tail)}</div></div>`
     : `<div class="b-tile"><div class="nm" style="color:var(--ink-2)">${W.tracker}</div>` +
-      `<div class="pc">${I.tracker("var(--idle)", "outline")}</div><div class="hostrow"></div>` +
+      `<div class="pc">${I.tracker("var(--idle)", "outline")}</div>` +
       `<div class="st" style="color:var(--ink-2)">${I.state("none", 28, "var(--idle)")}<span>${W.state.none}</span></div>` +
       `<div class="tl">${tailH(d.tail)}</div></div>`;
   const steps = ["トラッカーと|コントローラーを|重ねて持つ", "8の字を描いて|手首を回す", "終わり"];
@@ -177,7 +173,7 @@
     `<div class="b-band"><div class="ov" style="color:var(--ok)">${I.state("ok", 56, "var(--ok)")}<span>${W.overall.ok}</span></div>` +
       `<div class="ln">${esc(X.plain(X.guide.G5.line))}</div></div>` +
     `<div class="b-dev"><div class="b-tile b-dongle"><div class="nm">${W.dongleName}</div>` +
-      `<div class="pc">${I.dongle("on")}</div><div class="hostrow"></div><div class="st" style="font-size:28px">${W.dongle.on}</div></div><div class="b-sep"></div>${devs.map(btile).join("")}</div>` +
+      `<div class="pc">${I.dongle("on")}</div><div class="st" style="font-size:28px">${W.dongle.on}</div></div><div class="b-sep"></div>${devs.map(btile).join("")}</div>` +
     `<div class="b-low"><div class="b-frame"><div class="hd"><div class="nm">${I.op("cal", "var(--accent)")}<span>${W.ops.cal}</span></div>` +
       `<span class="b-btn" style="height:72px">${W.stop}</span></div><div class="b-steps">${stepsH}</div></div>` +
       `<div class="b-ops"><span class="b-btn off">${I.op("pair")}${W.ops.pair}</span><span class="b-btn off">${I.op("map")}${W.ops.map}</span>` +
