@@ -72,16 +72,84 @@ fn read_output(dir: &Path, input: &Path) -> String {
     .expect("decode anonymized log")
 }
 
-fn anonymize(output: &Path, map: &Path, files: &[&Path]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_openut"))
+fn anonymize_command(output: &Path, map: &Path) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_openut"));
+    command
         .args(["anonymize", "--out-dir"])
         .arg(output)
         .arg("--map-dir")
-        .arg(map)
+        .arg(map);
+    command
+}
+
+fn anonymize(output: &Path, map: &Path, files: &[&Path]) -> Output {
+    anonymize_command(output, map)
         .args(["--pc-name", TEST_PC])
         .args(files)
         .output()
         .expect("run openut anonymize")
+}
+
+#[test]
+fn stops_before_writing_when_the_pc_name_is_missing_or_blank() {
+    let directory = TestDirectory::new();
+    let input = write_input(
+        &directory.0,
+        "ViveTrackerServer_20261127.txt",
+        "# WriteTimeInterval=5000\r\n",
+    );
+    let share = directory.0.join("share");
+    let private = directory.0.join("private");
+    for manual_name in [None, Some(" \t ")] {
+        let mut command = anonymize_command(&share, &private);
+        if let Some(name) = manual_name {
+            // An invalid explicit value must fail even if the environment has a name.
+            command
+                .env("COMPUTERNAME", TEST_PC)
+                .env("HOSTNAME", TEST_PC)
+                .args(["--pc-name", name]);
+        } else {
+            command.env_remove("COMPUTERNAME").env_remove("HOSTNAME");
+        }
+        let result = command.arg(&input).output().expect("run openut anonymize");
+        assert!(!result.status.success());
+        let error = String::from_utf8(result.stderr).expect("UTF-8 diagnostic");
+        assert!(error.contains("PC 名"));
+        assert!(error.contains("--pc-name"));
+        assert!(!share.exists());
+        assert!(!private.exists());
+    }
+}
+
+#[test]
+fn uses_a_shared_alias_when_a_wifi_name_matches_the_first_candidate() {
+    let directory = TestDirectory::new();
+    let input_a = write_input(
+        &directory.0,
+        "ViveTrackerServer_20261127.txt",
+        "ssid: \"WIFI-A\", retries: 1\r\n",
+    );
+    let input_b = write_input(
+        &directory.0,
+        "ViveTrackerServer_20261128.txt",
+        "ssid: \"WIFI-A\", retries: 2\r\n",
+    );
+    let share = directory.0.join("share");
+    let private = directory.0.join("private");
+    let result = anonymize(&share, &private, &[&input_a, &input_b]);
+    assert!(result.status.success(), "alias collision must be avoided");
+
+    let first = read_output(&share, &input_a);
+    let alias = first
+        .strip_prefix("ssid: \"")
+        .and_then(|value| value.strip_suffix("\", retries: 1\r\n"))
+        .expect("keep the surrounding log fields");
+    assert!(!alias.is_empty());
+    assert!(!alias.contains("WIFI-A"));
+    assert_eq!(
+        read_output(&share, &input_b),
+        format!("ssid: \"{alias}\", retries: 2\r\n")
+    );
 }
 
 fn serial_fields(log: &str) -> Vec<&str> {

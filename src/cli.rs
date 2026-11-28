@@ -25,7 +25,15 @@ struct Options {
 
 pub(crate) fn run_anonymize(args: impl Iterator<Item = OsString>) -> Result<(), String> {
     let options = parse_options(args)?;
-    let pc_name = options.pc_name.clone().or_else(local_pc_name);
+    let pc_name = options
+        .pc_name
+        .clone()
+        .or_else(local_pc_name)
+        .filter(|name| !name.trim().is_empty())
+        .ok_or_else(|| {
+            "有効な PC 名を取得できませんでした。採取元の PC 名を --pc-name に指定してください"
+                .to_owned()
+        })?;
     let mut decoded = Vec::with_capacity(options.inputs.len());
     for (index, input) in options.inputs.iter().enumerate() {
         let number = index + 1;
@@ -41,7 +49,7 @@ pub(crate) fn run_anonymize(args: impl Iterator<Item = OsString>) -> Result<(), 
         );
     }
     let logs: Vec<_> = decoded.iter().map(String::as_str).collect();
-    let batch = anonymize(&logs, pc_name.as_deref()).map_err(|error| error.to_string())?;
+    let batch = anonymize(&logs, Some(&pc_name)).map_err(|error| error.to_string())?;
     drop(decoded);
 
     let (output_dir, map_dir) = prepare_directories(&options)?;
@@ -149,7 +157,6 @@ fn local_pc_name() -> Option<String> {
         "HOSTNAME"
     })
     .ok()
-    .filter(|name| !name.is_empty())
 }
 
 fn prepare_directories(options: &Options) -> Result<(PathBuf, PathBuf), String> {
