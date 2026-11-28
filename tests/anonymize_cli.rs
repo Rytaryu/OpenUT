@@ -1,0 +1,258 @@
+use std::fs;
+use std::io::ErrorKind;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output};
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+const TEST_PC: &str = "SYNTHETIC-PC";
+const SERIAL: &str = "00ZZ000000111";
+const OTHER_SERIAL: &str = "00ZZ000000222";
+const UNKNOWN_SERIAL: &str = "FUTURE-HW001";
+const SSID: &str = "synthetic-only private wifi";
+const PASSWORD: &str = "synthetic-only password";
+const PSK: &str = "synthetic-only-psk";
+const USER_FOLDER: &str = "Synthetic Local User";
+const PC_SERIAL_BODY: &str = "synthetic-only pc serial body";
+const PC_SERIAL_TAIL: &str = "synthetic-only pc serial continuation";
+const ADDRESS: &str = "02 00 00 FE ED 42";
+const MAP_NAME: &str = "openut-anonymize-map.tsv";
+
+struct TestDirectory(PathBuf);
+
+impl TestDirectory {
+    fn new() -> Self {
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        loop {
+            let path = std::env::temp_dir().join(format!(
+                "openut-anonymize-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
+            match fs::create_dir(&path) {
+                Ok(()) => return Self(path),
+                Err(error) if error.kind() == ErrorKind::AlreadyExists => {}
+                Err(error) => panic!("could not make a test directory: {error}"),
+            }
+        }
+    }
+}
+
+impl Drop for TestDirectory {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+fn encode_utf16le(text: &str) -> Vec<u8> {
+    std::iter::once(0xfeff)
+        .chain(text.encode_utf16())
+        .flat_map(u16::to_le_bytes)
+        .collect()
+}
+
+fn write_input(dir: &Path, name: &str, text: &str) -> PathBuf {
+    let path = dir.join(name);
+    fs::write(&path, encode_utf16le(text)).expect("write synthetic log");
+    path
+}
+
+fn read_output(dir: &Path, input: &Path) -> String {
+    let name = input.file_name().expect("synthetic input has a filename");
+    let bytes = fs::read(dir.join(name)).expect("read anonymized log");
+    let payload = bytes.strip_prefix(&[0xff, 0xfe]).expect("UTF-16LE BOM");
+    let (words, trailing) = payload.as_chunks::<2>();
+    assert!(trailing.is_empty(), "partial UTF-16LE code unit");
+    String::from_utf16(
+        &words
+            .iter()
+            .copied()
+            .map(u16::from_le_bytes)
+            .collect::<Vec<_>>(),
+    )
+    .expect("decode anonymized log")
+}
+
+fn anonymize(output: &Path, map: &Path, files: &[&Path]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_openut"))
+        .args(["anonymize", "--out-dir"])
+        .arg(output)
+        .arg("--map-dir")
+        .arg(map)
+        .args(["--pc-name", TEST_PC])
+        .args(files)
+        .output()
+        .expect("run openut anonymize")
+}
+
+fn serial_fields(log: &str) -> Vec<&str> {
+    log.match_indices("sn: (")
+        .map(|(index, marker)| {
+            log[index + marker.len()..]
+                .split_once(')')
+                .expect("serial field has its closing parenthesis")
+                .0
+        })
+        .collect()
+}
+
+#[test]
+fn refuses_to_put_the_mapping_in_the_share_directory_or_replace_a_file() {
+    let directory = TestDirectory::new();
+    let source = directory.0.join("input");
+    fs::create_dir(&source).expect("create synthetic input folder");
+    let input = write_input(
+        &source,
+        "ViveTrackerServer_20261127.txt",
+        "# WriteTimeInterval=5000\r\n",
+    );
+    let share = directory.0.join("share");
+    let nested = share.join("private");
+    assert!(!anonymize(&share, &nested, &[&input]).status.success());
+    assert!(!nested.join(MAP_NAME).exists());
+
+    fs::create_dir_all(&share).expect("create output folder");
+    let prior = share.join(input.file_name().expect("synthetic log name"));
+    fs::write(&prior, b"previous output").expect("create existing output");
+    let private = directory.0.join("private");
+    assert!(!anonymize(&share, &private, &[&input]).status.success());
+    assert_eq!(
+        fs::read(prior).expect("read existing output"),
+        b"previous output"
+    );
+    assert!(!private.join(MAP_NAME).exists());
+}
+
+#[test]
+fn anonymizes_documented_fields_across_files_and_preserves_record_format() {
+    let directory = TestDirectory::new();
+    let output = directory.0.join("share");
+    let map = directory.0.join("private");
+
+    let response = "[2026-11-27 22:53:25.385 +9 0x82B0 INFO OETServer::GetDeviceInfoAndResponse] [33456] Response - cmd type: 214, cmd key: (TEST), device index: 2, result: 0, sn: ";
+    let not_found = "[2026-11-27 22:53:28.522 +9 0xF88 ERROR OETServer::DeviceInfoCB] [3976] TRACKER NOT FOUND. tracker: ";
+    let wifi = "[2026-11-27 22:53:30.000 +9 0xF88 INFO OETServer::ProcessDeviceMsg] [3976] ";
+    let pc_serial = "[2026-11-27 22:53:31.000 +9 0xF88 INFO BiCollector::GetPcSerialNumber] [3976]";
+    let driver_timeout = "[2026-11-27 19:07:28.939 +9 0x3410 INFO TrackerDongleHID::DataDispatchThreadProc] [13328] Wait for HID data got timeout.\n\r\n";
+    let ordinary = "[2026-11-27 22:53:33.658 +9 0xF88 WARN OETServer::ProcessDeviceMsg] [3976] Wifi info is not yet available.\r\n";
+    let unknown = format!("{not_found}{UNKNOWN_SERIAL}\r\n");
+    let ending = ", model name: (VIVE Ultimate Tracker 1), fw version: (1.0.999.178)\r\n";
+
+    let server_log = format!(
+        "# Log begin at 2026-11-27 22:53:25.000\r\n\
+         {response}({SERIAL}){ending}\
+         {response}({OTHER_SERIAL}){ending}\
+         {wifi}ssid: \"{SSID}\", password: \"{PASSWORD}\", psk={PSK}, retries: 2\r\n\
+         {wifi}machine: {TEST_PC}, peer: peer_synthetic-pc, path: (C:\\Users\\{USER_FOLDER}\\Steam\\config\\chaperone_info.vrchap)\r\n\
+         {pc_serial} {PC_SERIAL_BODY}\n{PC_SERIAL_TAIL}\r\n\
+         {ordinary}{unknown}unrecognized final record: 910",
+    );
+    let second_server_log = format!("{not_found}{SERIAL}\r\n");
+    let dongle_log = format!(
+        "[2026-11-27 22:47:49.306 +9 0x3410 INFO dumpPUMRFConnect] [13328]   - Change Status:    Connected, bt mac address: (#3)({ADDRESS})\r\n"
+    );
+    let server = write_input(&directory.0, "ViveTrackerServer_20261127.txt", &server_log);
+    let next_day = write_input(
+        &directory.0,
+        "ViveTrackerServer_20261128.txt",
+        &second_server_log,
+    );
+    let driver = write_input(
+        &directory.0,
+        "ViveTrackerDriver_20261127.txt",
+        driver_timeout,
+    );
+    let dongle = write_input(&directory.0, "ViveTrackerDongle_20261127.txt", &dongle_log);
+    let result = anonymize(&output, &map, &[&server, &next_day, &driver, &dongle]);
+    assert!(result.status.success(), "batch anonymization failed");
+
+    let sanitized = read_output(&output, &server);
+    let aliases = serial_fields(&sanitized);
+    assert_eq!(aliases.len(), 2);
+    assert!(!aliases[0].is_empty());
+    assert!(!aliases[1].is_empty());
+    assert_ne!(aliases[0], aliases[1], "different trackers stay distinct");
+    assert_eq!(
+        read_output(&output, &next_day),
+        format!("{not_found}{}\r\n", aliases[0]),
+        "the same serial in a different file receives the same alias"
+    );
+    assert!(sanitized.contains(&format!("{response}({}){ending}", aliases[0])));
+    assert!(sanitized.contains(ordinary));
+    assert!(sanitized.contains(&unknown));
+    assert!(sanitized.ends_with("unrecognized final record: 910"));
+    assert!(sanitized.contains(", retries: 2\r\n"));
+    assert!(sanitized.contains("\\Steam\\config\\chaperone_info.vrchap)\r\n"));
+    assert!(
+        sanitized.contains(pc_serial),
+        "the PC record retains its header"
+    );
+    assert_eq!(
+        sanitized.matches("\r\n").count(),
+        server_log.matches("\r\n").count()
+    );
+    assert_eq!(read_output(&output, &driver), driver_timeout);
+
+    let sanitized_dongle = read_output(&output, &dongle);
+    assert!(sanitized_dongle.contains("bt mac address: (#3)("));
+    assert!(sanitized_dongle.ends_with(")\r\n"));
+    assert!(!sanitized_dongle.contains(ADDRESS));
+
+    let stdout = String::from_utf8_lossy(&result.stdout).to_ascii_lowercase();
+    let stderr = String::from_utf8_lossy(&result.stderr).to_ascii_lowercase();
+    assert!(
+        !stderr.is_empty(),
+        "unknown serial shape should report a warning"
+    );
+    assert!(!stderr.contains(&UNKNOWN_SERIAL.to_ascii_lowercase()));
+    let sanitized = sanitized.to_ascii_lowercase();
+    for original in [
+        SERIAL,
+        OTHER_SERIAL,
+        SSID,
+        PASSWORD,
+        PSK,
+        TEST_PC,
+        USER_FOLDER,
+        PC_SERIAL_BODY,
+        PC_SERIAL_TAIL,
+        ADDRESS,
+    ] {
+        let original = original.to_ascii_lowercase();
+        assert!(!sanitized.contains(&original));
+        assert!(!stdout.contains(&original));
+        assert!(!stderr.contains(&original));
+    }
+
+    assert!(!output.join(MAP_NAME).exists());
+    let private = fs::read_to_string(map.join(MAP_NAME)).expect("read private mapping");
+    assert!(private.contains(SERIAL));
+    assert!(private.contains(aliases[0]));
+    assert_eq!(fs::read_dir(&output).expect("list output").count(), 4);
+}
+
+#[test]
+fn rejects_a_known_original_left_in_an_unrecognized_record() {
+    let directory = TestDirectory::new();
+    let output = directory.0.join("share");
+    let map = directory.0.join("private");
+    let original = "original-synthetic-residual-ssid";
+    let first = format!(
+        "[2026-11-27 22:53:30.000 +9 0xF88 INFO OETServer::ProcessDeviceMsg] [3976] ssid: {original}\r\n"
+    );
+    let second = format!("unrecognized format containing {original}\r\n");
+    let server = write_input(&directory.0, "ViveTrackerServer_20261127.txt", &first);
+    let driver = write_input(&directory.0, "ViveTrackerDriver_20261127.txt", &second);
+    let result = anonymize(&output, &map, &[&server, &driver]);
+
+    assert!(
+        !result.status.success(),
+        "a known residual should fail the batch"
+    );
+    assert!(!String::from_utf8_lossy(&result.stdout).contains(original));
+    assert!(!String::from_utf8_lossy(&result.stderr).contains(original));
+    for file in [server, driver] {
+        let name = file.file_name().expect("synthetic input has a filename");
+        assert!(!output.join(name).exists());
+    }
+    assert!(!map.join(MAP_NAME).exists());
+}

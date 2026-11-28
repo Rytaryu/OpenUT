@@ -28,10 +28,18 @@ dependencies = [
 name = "openut"
 version = "0.0.0"
 dependencies = [
+ "openut-anonymize",
  "openut-core",
  "openut-hublog",
  "serde",
  "toml",
+]
+
+[[package]]
+name = "openut-anonymize"
+version = "0.0.0"
+dependencies = [
+ "openut-hublog",
 ]
 
 [[package]]

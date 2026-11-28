@@ -1,9 +1,44 @@
 //! Incremental decoding of VIVE Hub log files.
 
 use std::borrow::Cow;
+use std::fmt;
 
 const MAX_LINE_BYTES: usize = 64 * 1024;
 const ENCODING_PREFIX_BYTES: usize = 4;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Utf16LogError {
+    MissingUtf16LeBom,
+    InvalidUtf16Le,
+}
+
+impl fmt::Display for Utf16LogError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::MissingUtf16LeBom => "UTF-16LE の BOM がありません",
+            Self::InvalidUtf16Le => "UTF-16LE の文字列が壊れています",
+        })
+    }
+}
+
+impl std::error::Error for Utf16LogError {}
+
+/// Decode an entire UTF-16LE Hub file without dropping or changing delimiters.
+///
+/// Unlike the watcher decoder, this keeps overlong lines intact and rejects
+/// malformed input so that anonymization cannot overlook altered characters.
+pub fn decode_utf16le_text(bytes: &[u8]) -> Result<String, Utf16LogError> {
+    let content = bytes
+        .strip_prefix(&[0xff, 0xfe])
+        .ok_or(Utf16LogError::MissingUtf16LeBom)?;
+    let (pairs, remainder) = content.as_chunks::<2>();
+    if !remainder.is_empty() {
+        return Err(Utf16LogError::InvalidUtf16Le);
+    }
+    char::decode_utf16(pairs.iter().copied().map(u16::from_le_bytes))
+        .collect::<Result<String, _>>()
+        .map_err(|_| Utf16LogError::InvalidUtf16Le)
+}
 
 #[derive(Clone, Copy)]
 enum Encoding {
@@ -232,6 +267,28 @@ mod tests {
 
     fn utf16le(text: &str) -> Vec<u8> {
         text.encode_utf16().flat_map(u16::to_le_bytes).collect()
+    }
+
+    #[test]
+    fn decodes_whole_log_without_truncating_or_changing_delimiters() {
+        let log = format!("先頭\r\n{}\n続き\r\n末尾", "x".repeat(MAX_LINE_BYTES + 1));
+        let mut bytes = vec![0xff, 0xfe];
+        bytes.extend(utf16le(&log));
+        assert_eq!(decode_utf16le_text(&bytes), Ok(log));
+    }
+
+    #[test]
+    fn rejects_whole_log_when_bom_or_code_units_are_invalid() {
+        assert_eq!(
+            decode_utf16le_text(b"other encoding"),
+            Err(Utf16LogError::MissingUtf16LeBom)
+        );
+        for bytes in [&[0xff, 0xfe, b'x'][..], &[0xff, 0xfe, 0x00, 0xd8][..]] {
+            assert_eq!(
+                decode_utf16le_text(bytes),
+                Err(Utf16LogError::InvalidUtf16Le)
+            );
+        }
     }
 
     fn decode_in_chunks(bytes: &[u8], chunk_size: usize) -> (Vec<String>, DecodeStats) {
