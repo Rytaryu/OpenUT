@@ -1,0 +1,6 @@
+{"type":"header","format":"openut.dongle-record","version":1,"tool":"openut-dongle synthetic","mode":"record","started_wall_ms":1764302512123,"device":{"vid":"0001","pid":"0002","interface":0,"usage_page":"ff00","usage":"0001"},"server_running_at_start":false,"anonymized":true}
+{"type":"in","mono_us":1520,"wall_ms":1764302512125,"hex":"2800ff80"}
+{"type":"tick","mono_us":1000412,"wall_ms":1764302513123}
+{"type":"note","mono_us":1000412,"wall_ms":1764302513123,"text":"read_error:-5"}
+{"type":"omitted","mono_us":1000500,"wall_ms":1764302513124,"report_type":40,"len":16,"tracker":"A","reason":"check_failed"}
+{"type":"footer","mono_us":1000500,"reports":1,"malformed":0,"estimated_lost":0,"reason":"duration"}
