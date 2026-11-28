@@ -1,6 +1,6 @@
 use std::sync::mpsc::{SyncSender, sync_channel};
 
-use crate::calib_flow::RotationProgress;
+use crate::calib_flow::{CalibrationFailure, RotationProgress};
 
 use super::*;
 
@@ -234,6 +234,26 @@ fn partially_created_board_is_removed_and_failure_is_reported_once_per_epoch() {
 }
 
 #[test]
+fn reports_an_unsaved_result_and_the_previous_calibration_when_present() {
+    let save_failed = view(CalibrationStatus::Failed(CalibrationFailure::SaveFailed));
+    let heading = "キャリブレーションに失敗しました";
+    assert_eq!(
+        pixels::status_text(save_failed),
+        (heading, "結果を保存できませんでした。")
+    );
+    assert_eq!(
+        pixels::status_text(CalibrationView {
+            has_calibration: true,
+            ..save_failed
+        }),
+        (
+            heading,
+            "結果を保存できませんでした。\n前回のキャリブレーションを使っています。"
+        )
+    );
+}
+
+#[test]
 fn rasterizes_opaque_rgba_when_a_local_japanese_font_is_available() {
     use std::{fs, path::Path};
 
@@ -261,6 +281,28 @@ fn rasterizes_opaque_rgba_when_a_local_japanese_font_is_available() {
         (pixels::THUMBNAIL * pixels::THUMBNAIL * 4) as usize
     );
     assert_ne!(initial, collecting);
+    let save_failed = view(CalibrationStatus::Failed(CalibrationFailure::SaveFailed));
+    let first_save = pixels::board(&font, save_failed);
+    let previous = pixels::board(
+        &font,
+        CalibrationView {
+            has_calibration: true,
+            ..save_failed
+        },
+    );
+    assert_ne!(first_save, previous);
+    let completed = pixels::board(
+        &font,
+        CalibrationView {
+            status: CalibrationStatus::Completed {
+                position_rms_m: 0.01,
+                sample_count: 100,
+            },
+            has_calibration: true,
+            ..save_failed
+        },
+    );
+    assert_ne!(completed, previous);
     assert!(
         initial
             .as_chunks::<4>()

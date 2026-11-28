@@ -27,6 +27,7 @@ pub enum CalibrationFailure {
     Fit(CalibrationError),
     SpaceUnavailable,
     SpaceChanged,
+    SaveFailed,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -62,6 +63,7 @@ struct Attempt {
 enum State {
     Idle,
     Collecting(Attempt),
+    Saving(CalibrationRecord),
     Completed,
     Failed(CalibrationFailure),
 }
@@ -105,7 +107,7 @@ impl CalibrationFlow {
 
     /// Starts collecting without replacing an active calibration.
     pub fn start(&mut self, now: Duration) -> bool {
-        if self.is_collecting() {
+        if matches!(self.state, State::Collecting(_) | State::Saving(_)) {
             return false;
         }
         let Some(fingerprint) = self.fingerprint else {
@@ -164,7 +166,7 @@ impl CalibrationFlow {
         }
     }
 
-    /// Applies and returns a new record once when the fit succeeds.
+    /// Returns a fitted record once for the caller to save before applying it.
     pub fn tick(&mut self, now: Duration, unix_s: u64) -> Option<CalibrationRecord> {
         let State::Collecting(attempt) = &mut self.state else {
             return None;
@@ -204,16 +206,33 @@ impl CalibrationFlow {
             created_at_unix_s: unix_s,
             fingerprint,
         };
-        self.record = Some(record);
-        self.needs_recalibration = false;
-        self.state = State::Completed;
+        self.state = State::Saving(record);
         Some(record)
+    }
+
+    /// Resolves the pending save. A failure leaves the previous transform active.
+    pub fn finish_save(&mut self, succeeded: bool) {
+        let State::Saving(record) = self.state else {
+            return;
+        };
+        if succeeded {
+            self.record = Some(record);
+            self.needs_recalibration = self.fingerprint.is_some_and(|current| {
+                record.fingerprint.compare(&current) == SpaceChange::Changed
+            });
+            self.state = State::Completed;
+        } else {
+            self.state = State::Failed(CalibrationFailure::SaveFailed);
+        }
     }
 
     pub fn view(&self) -> CalibrationView {
         let status = match (&self.state, self.record) {
             (State::Collecting(attempt), _) => CalibrationStatus::Collecting {
                 motion: attempt.motion,
+            },
+            (State::Saving(_), _) => CalibrationStatus::Collecting {
+                motion: RotationProgress::Ready,
             },
             (State::Failed(failure), _) => CalibrationStatus::Failed(*failure),
             (_, _) if self.needs_recalibration => CalibrationStatus::NeedsRecalibration,
@@ -347,5 +366,73 @@ mod tests {
         );
         assert!(flow.tick(Duration::from_secs(3), 0).is_none());
         assert_eq!(flow.active(), (saved.axis_map, saved.calibration));
+    }
+
+    #[test]
+    fn save_acknowledgments_control_the_active_pair_and_board_completion() {
+        let candidate = CalibrationRecord {
+            axis_map: "+x+z-y".parse().unwrap(),
+            calibration: Calibration::new(0.5, Vec3::new(1.0, 2.0, 3.0), 1.03),
+            position_rms_m: 0.01,
+            sample_count: 45,
+            offset_ms: -20,
+            created_at_unix_s: 2,
+            fingerprint: fingerprint(2),
+        };
+        let previous = CalibrationRecord {
+            axis_map: "+z+y-x".parse().unwrap(),
+            calibration: Calibration::new(0.2, Vec3::new(3.0, 2.0, 1.0), 0.99),
+            fingerprint: fingerprint(1),
+            ..candidate
+        };
+        for saved in [None, Some(previous)] {
+            let mut flow =
+                CalibrationFlow::new(CalibrationConfig::default(), AxisMap::IDENTITY, saved);
+            flow.set_fingerprint(Some(candidate.fingerprint));
+            let active = flow.active();
+            flow.state = State::Saving(candidate);
+            assert_eq!(flow.active(), active);
+            assert!(!flow.is_collecting());
+            assert_eq!(
+                flow.view().status,
+                CalibrationStatus::Collecting {
+                    motion: RotationProgress::Ready
+                }
+            );
+            assert!(flow.tick(Duration::ZERO, 0).is_none());
+            assert!(!flow.start(Duration::ZERO));
+
+            flow.finish_save(false);
+            let failed = flow.view();
+            assert_eq!(
+                failed.status,
+                CalibrationStatus::Failed(CalibrationFailure::SaveFailed)
+            );
+            assert_eq!(failed.has_calibration, saved.is_some());
+            assert_eq!(failed.needs_recalibration, saved.is_some());
+            flow.finish_save(true);
+            assert_eq!(flow.view(), failed);
+            assert_eq!(flow.active(), active);
+
+            assert!(flow.start(Duration::from_secs(1)));
+            flow.finish_save(true);
+            assert!(flow.is_collecting());
+            assert_eq!(flow.active(), active);
+
+            flow.state = State::Saving(candidate);
+            flow.finish_save(true);
+            assert_eq!(flow.active(), (candidate.axis_map, candidate.calibration));
+            let completed = flow.view();
+            assert_eq!(
+                completed.status,
+                CalibrationStatus::Completed {
+                    position_rms_m: candidate.position_rms_m,
+                    sample_count: candidate.sample_count,
+                }
+            );
+            assert!(!completed.needs_recalibration);
+            flow.finish_save(false);
+            assert_eq!(flow.view(), completed);
+        }
     }
 }

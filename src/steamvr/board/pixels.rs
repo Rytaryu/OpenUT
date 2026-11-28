@@ -113,7 +113,7 @@ pub(super) fn board(font: &Font, view: CalibrationView) -> Vec<u8> {
         SECONDARY,
     );
 
-    let (heading, detail) = status_text(view.status);
+    let (heading, detail) = status_text(view);
     canvas.text(font, heading, 32.0, 75.0, 33.0, TEXT);
     canvas.text(font, detail, 32.0, 136.0, 24.0, SECONDARY);
 
@@ -179,8 +179,8 @@ pub(super) fn thumbnail(font: &Font) -> Vec<u8> {
     canvas.pixels
 }
 
-fn status_text(status: CalibrationStatus) -> (&'static str, &'static str) {
-    match status {
+pub(super) fn status_text(view: CalibrationView) -> (&'static str, &'static str) {
+    match view.status {
         CalibrationStatus::Needed => (
             "キャリブレーションが必要です",
             "トラッカーとコントローラーを用意してください。",
@@ -197,9 +197,10 @@ fn status_text(status: CalibrationStatus) -> (&'static str, &'static str) {
             "キャリブレーションが終わりました",
             "ダッシュボードを閉じて、トラッカーの位置を確かめてください。",
         ),
-        CalibrationStatus::Failed(reason) => {
-            ("キャリブレーションに失敗しました", failure_text(reason))
-        }
+        CalibrationStatus::Failed(reason) => (
+            "キャリブレーションに失敗しました",
+            failure_text(reason, view.has_calibration),
+        ),
         CalibrationStatus::NeedsRecalibration => (
             "キャリブレーションをやり直してください",
             "SteamVR の位置が変わりました。",
@@ -207,7 +208,7 @@ fn status_text(status: CalibrationStatus) -> (&'static str, &'static str) {
     }
 }
 
-fn failure_text(reason: CalibrationFailure) -> &'static str {
+fn failure_text(reason: CalibrationFailure, has_calibration: bool) -> &'static str {
     match reason {
         CalibrationFailure::Fit(CalibrationError::MoreRotation) => {
             "手首をいろいろな向きに回してください。"
@@ -229,6 +230,10 @@ fn failure_text(reason: CalibrationFailure) -> &'static str {
         }
         CalibrationFailure::SpaceUnavailable => "SteamVR の位置を確認できませんでした。",
         CalibrationFailure::SpaceChanged => "途中で SteamVR の位置が変わりました。",
+        CalibrationFailure::SaveFailed if has_calibration => {
+            "結果を保存できませんでした。\n前回のキャリブレーションを使っています。"
+        }
+        CalibrationFailure::SaveFailed => "結果を保存できませんでした。",
     }
 }
 

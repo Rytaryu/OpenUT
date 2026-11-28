@@ -1,6 +1,6 @@
 use std::f64::consts::TAU;
 use std::num::NonZeroU32;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
@@ -18,7 +18,8 @@ use openut_space::{AxisMap, BodyRotation, Calibration, Pose, Quat, Vec3};
 
 const CONTROLLER: u32 = 41;
 const START: Duration = Duration::from_secs(10);
-const SOLVE_AT: Duration = Duration::from_secs(18);
+const SOLVE_DELAY: Duration = Duration::from_secs(8);
+const SOLVE_AT: Duration = START.saturating_add(SOLVE_DELAY);
 const TIMESTAMP: u64 = 1_795_927_800;
 
 struct Scratch(PathBuf);
@@ -205,15 +206,21 @@ fn prior_record() -> CalibrationRecord {
     }
 }
 
-fn solve(flow: &mut CalibrationFlow, pipeline: &mut Pipeline, rig: Rig) -> CalibrationRecord {
+fn solve(
+    flow: &mut CalibrationFlow,
+    pipeline: &mut Pipeline,
+    rig: Rig,
+    start: Duration,
+) -> CalibrationRecord {
+    let previous = flow.active();
     flow.set_fingerprint(Some(fingerprint(31)));
-    assert!(flow.start(START));
+    assert!(flow.start(start));
     assert!(flow.is_collecting());
 
     for index in 0..150_u64 {
         let controller_ms = 200 + index * 32;
         let tracker_ms = controller_ms + 11;
-        let received = START + Duration::from_millis(tracker_ms - 45);
+        let received = start + Duration::from_millis(tracker_ms - 45);
         let raw = tracker_pose(Duration::from_millis(tracker_ms).as_secs_f64());
         let (_, paired_sample) =
             pipeline.apply_event_with_sample(at_us(received), at_us(received), &pose_event(raw));
@@ -226,22 +233,35 @@ fn solve(flow: &mut CalibrationFlow, pipeline: &mut Pipeline, rig: Rig) -> Calib
         flow.add_controller(
             CONTROLLER,
             TimedSample {
-                at: START + controller_at,
+                at: start + controller_at,
                 pose: rig.controller_pose(tracker_pose(controller_at.as_secs_f64())),
             },
         );
     }
 
     let result = flow
-        .tick(SOLVE_AT, TIMESTAMP)
+        .tick(start + SOLVE_DELAY, TIMESTAMP)
         .expect("valid samples finish calibration");
-    assert!(matches!(
+    assert!(!matches!(
         flow.view().status,
         CalibrationStatus::Completed { .. }
     ));
     assert_eq!(result.axis_map, rig.axes);
-    assert_eq!(flow.active(), (result.axis_map, result.calibration));
+    assert_eq!(flow.active(), previous);
     result
+}
+
+fn save_calibration(flow: &mut CalibrationFlow, path: &Path, record: &CalibrationRecord) {
+    calib_file::write(path, record).unwrap();
+    flow.finish_save(true);
+    assert_eq!(
+        flow.view().status,
+        CalibrationStatus::Completed {
+            position_rms_m: record.position_rms_m,
+            sample_count: record.sample_count,
+        },
+    );
+    assert_eq!(flow.active(), (record.axis_map, record.calibration));
 }
 
 #[test]
@@ -270,9 +290,9 @@ fn recalibration_uses_raw_samples_and_applies_the_saved_pair_after_restart() {
         expected_pose(raw, prior.axis_map, prior.calibration),
     );
 
-    let result = solve(&mut flow, &mut before_restart, rig);
+    let result = solve(&mut flow, &mut before_restart, rig, START);
+    save_calibration(&mut flow, &path, &result);
     apply_calibration(&mut before_restart, &flow);
-    calib_file::write(&path, &result).unwrap();
     let saved = calib_file::read(&path)
         .unwrap()
         .expect("saved result loads");
@@ -301,8 +321,13 @@ fn recalibration_uses_raw_samples_and_applies_the_saved_pair_after_restart() {
 
     let mut clean_flow =
         CalibrationFlow::new(CalibrationConfig::default(), AxisMap::IDENTITY, None);
-    let clean = solve(&mut clean_flow, &mut pipeline(AxisMap::IDENTITY), rig);
-    calib_file::write(&path, &clean).unwrap();
+    let clean = solve(
+        &mut clean_flow,
+        &mut pipeline(AxisMap::IDENTITY),
+        rig,
+        START,
+    );
+    save_calibration(&mut clean_flow, &path, &clean);
     let clean = calib_file::read(&path)
         .unwrap()
         .expect("saved clean result loads");
@@ -315,9 +340,11 @@ fn using_the_configured_axis_group_does_not_apply_the_axis_map_twice() {
     let rig = Rig::new(settings);
     let mut flow = CalibrationFlow::new(CalibrationConfig::default(), settings, None);
     let mut pipeline = pipeline(settings);
-    let record = solve(&mut flow, &mut pipeline, rig);
+    let record = solve(&mut flow, &mut pipeline, rig, START);
     assert_eq!(record.axis_map, settings.group().representative());
     assert_ne!(record.axis_map, AxisMap::IDENTITY);
+    let scratch = Scratch::new();
+    save_calibration(&mut flow, &scratch.calibration(), &record);
     apply_calibration(&mut pipeline, &flow);
     for (index, t) in [0.3, 1.8].into_iter().enumerate() {
         let at = SOLVE_AT + Duration::from_millis(32 * (index as u64 + 1));
@@ -327,6 +354,68 @@ fn using_the_configured_axis_group_does_not_apply_the_axis_map_twice() {
             expected_pose(raw, rig.axes, rig.transform),
         );
     }
+}
+
+#[test]
+fn save_failure_preserves_the_previous_bridge_transform_until_retry_succeeds() {
+    let settings = "+x+z-y".parse::<AxisMap>().unwrap();
+    let rig = Rig::new("+z+y+x".parse().unwrap());
+    let scratch = Scratch::new();
+    let path = scratch.calibration();
+    calib_file::write(&path, &prior_record()).unwrap();
+    let old_bytes = std::fs::read(&path).unwrap();
+    let mut flow = CalibrationFlow::new(
+        CalibrationConfig::default(),
+        settings,
+        calib_file::read(&path).unwrap(),
+    );
+    let previous = flow.active();
+    let mut runtime_pipeline = pipeline(settings);
+    apply_calibration(&mut runtime_pipeline, &flow);
+
+    let candidate = solve(&mut flow, &mut runtime_pipeline, rig, START);
+    assert_ne!(candidate.axis_map, previous.0);
+    // The existing calibration file cannot serve as a directory for another file.
+    let save = calib_file::write(&path.join("calibration.json"), &candidate);
+    flow.finish_save(save.is_ok());
+    assert!(save.is_err());
+    assert_eq!(
+        flow.view().status,
+        CalibrationStatus::Failed(CalibrationFailure::SaveFailed),
+    );
+    assert!(flow.view().has_calibration);
+    assert_eq!(flow.active(), previous);
+    assert_eq!(std::fs::read(&path).unwrap(), old_bytes);
+    let restarted = CalibrationFlow::new(
+        CalibrationConfig::default(),
+        settings,
+        calib_file::read(&path).unwrap(),
+    );
+    assert_eq!(restarted.active(), previous);
+    apply_calibration(&mut runtime_pipeline, &flow);
+    let raw = tracker_pose(0.35);
+    assert_pose(
+        bridge_pose(
+            &mut runtime_pipeline,
+            SOLVE_AT + Duration::from_millis(32),
+            raw,
+        ),
+        expected_pose(raw, previous.0, previous.1),
+    );
+
+    let retry_at = SOLVE_AT + Duration::from_secs(1);
+    let retry = solve(&mut flow, &mut runtime_pipeline, rig, retry_at);
+    save_calibration(&mut flow, &path, &retry);
+    assert_ne!(std::fs::read(&path).unwrap(), old_bytes);
+    apply_calibration(&mut runtime_pipeline, &flow);
+    assert_pose(
+        bridge_pose(
+            &mut runtime_pipeline,
+            retry_at + SOLVE_DELAY + Duration::from_millis(32),
+            raw,
+        ),
+        expected_pose(raw, rig.axes, rig.transform),
+    );
 }
 
 #[test]

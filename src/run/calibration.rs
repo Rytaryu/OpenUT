@@ -156,17 +156,18 @@ impl CalibrationRuntime {
             let unix_s = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .map_or(0, |d| d.as_secs());
-            let saved = self.flow.tick(self.origin.elapsed(), unix_s);
+            let candidate = self.flow.tick(self.origin.elapsed(), unix_s);
             set_sampling(client, &mut self.sampling, self.flow.is_collecting());
-            if let Some(record) = saved {
-                let (axis_map, calibration) = self.flow.active();
-                pipeline.set_calibration(axis_map, calibration);
-                match self
+            if let Some(record) = candidate {
+                let stored = self
                     .path
                     .as_deref()
-                    .map(|path| calib_file::write(path, &record))
-                {
+                    .map(|path| calib_file::write(path, &record));
+                self.flow.finish_save(matches!(&stored, Some(Ok(()))));
+                match stored {
                     Some(Ok(())) => {
+                        let (axis_map, calibration) = self.flow.active();
+                        pipeline.set_calibration(axis_map, calibration);
                         log.write(format_args!("キャリブレーションを保存しました。位置の残差 {:.1} mm、サンプル {} 件。",
                             record.position_rms_m * 1_000.0, record.sample_count));
                     }
