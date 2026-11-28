@@ -486,8 +486,13 @@ export async function run({
   // so start it, once per batch. It builds main only. A failure to start it
   // is logged and does not stop the hand-off: the build is not a check.
   if (mergedNow.length > 0 && buildWorkflow) {
-    const r = await gh.call('POST', `/actions/workflows/${buildWorkflow}/dispatches`, { ref: main });
-    log(r.ok ? `build started on ${main}` : `build not started on ${main} (${r.status})`);
+    try {
+      const r = await gh.call('POST', `/actions/workflows/${buildWorkflow}/dispatches`, { ref: main });
+      log(r.ok ? `build started on ${main}` : `build not started on ${main} (${r.status})`);
+    } catch (error) {
+      // A network failure or a reply that is not JSON: the rest of the sweep still runs.
+      log(`build not started on ${main} (${error?.message ?? error})`);
+    }
   }
 
   // Close the Issues that merged PRs complete ("Closes #N" in the PR body).
