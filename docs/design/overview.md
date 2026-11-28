@@ -1,13 +1,16 @@
 # 設計の概要
 
-OpenUT 全体の骨組み。段階ごとの詳しい設計は、それぞれの文書に書く。最終更新: 2026-11-28（D-9〜D-14、D-17 に合わせて書き直した）。
+OpenUT 全体の骨組み。段階ごとの詳しい設計は、それぞれの文書に書く。最終更新: 2026-11-28（通し版〔D-41、Issue #57〕の文書と、クレートの構成を足した）。
 
 | 文書 | 中身 |
 |---|---|
 | この文書 | 位置付け、作る順番と段階ごとの部品、クレートの構成、全段階の決まり |
 | `m1-watcher.md` | M1 見張り役の設計（ログの読み取り、状態、検出の規則、案内、集計、設定、再生テスト） |
-| `implementation-plan.md` | 実装計画（PR 1 本の大きさの項目と、その順序） |
-| M2 の設計（Issue #6） | ドングルの読み取り、命令の一覧 |
+| `walkthrough.md` | 通し版（全体を粗く通す最初の版）の設計: プロセスとクレートの分け方、SteamVR のドライバー、アプリとドライバーのあいだ、VIVE Hub の順序、キャリブレーション、実機で確かめる順序（切れ目 K1〜K6） |
+| `m2-dongle-protocol.md` | ドングルとの通信の調べ書き（M2 と通し版の根拠） |
+| `m2-dongle-reader.md` | ドングルの読み取りの道具（読むだけ。通し版の K1） |
+| `commands.md` | 実機に送る命令の唯一の台帳（D-29） |
+| `implementation-plan.md` | 実装計画（PR 1 本の大きさの項目と、その順序。M1、M2、通し版） |
 
 ## 1. 位置付け
 
@@ -48,6 +51,8 @@ OpenUT は、VIVE Hub の代わりに、VIVE Ultimate Tracker を SteamVR（Wind
 
 「未定」のクレートは、その段階の設計で決める。M3 より先は、M2 の結果を見て PM が要件を書き足してから設計する（PRD の 4 章）。
 
+**通し版（D-41）**: 2026-11-28 から、M3〜M5 を 1 つずつ仕上げるのをやめ、全体（追跡の開始、SteamVR への受け渡し、キャリブレーション、ペアリング、地図の作成、状態の表示）を粗く通してから、使いながら直す。部品の分け方と、実機で確かめる順序（切れ目 K1〜K6）は `walkthrough.md`。上の表の「未定」のクレートは、通し版では次のとおりにする（`walkthrough.md` の 1.7）: ドングル層と記録は `openut-dongle`（読む）と `openut-command`（送る命令の表）、調停役は `openut-runtime`、姿勢の変換と較正は `openut-space`、OpenVR ドライバーは `openut-driver`（とアプリとのあいだの `openut-bridge`）。姿勢フィルタは、通し版では最も粗い形（喪失中に位置を止める）だけを `openut-space` に置く。
+
 ## 3. VIVE Hub の構成（解析メモによる）
 
 ドングル（USB HID）とトラッカーを、`ViveTrackerServer.exe`（トラッカー用サーバー）が受け持つ。SteamVR のドライバー、設定画面、VIVE Hub 本体は、名前付きパイプでこのサーバーと話す。出典は `docs/research/findings-2026-11-27.md` の「先行事例」（vive-ultimate-linux の解析メモ）。
@@ -69,7 +74,7 @@ Cargo のワークスペースにする。レポジトリの直下の `Cargo.tom
 | `openut-anonymize` | `crates/openut-anonymize/` | ログの匿名化（L-1。Issue #8） | 持たない |
 
 - 判定ロジック（ログの読み取り、状態の遷移、検出の規則）は、入出力から分ける（AGENTS.md）。そのため、判定を持つクレートは、ファイル・時計・OS の API を使わない。時刻は引数で受け取る。
-- M2 以降のクレート（ドングル層、調停役、OpenVR ドライバーなど）は、その段階の設計で足す。
+- 通し版で足すクレート（`openut-dongle`、`openut-bridge`、`openut-driver`、`openut-space`、`openut-command`、`openut-runtime`）は、`walkthrough.md` の 1.7。`openut-driver` だけは、SteamVR に読み込ませる DLL（`cdylib`）で、`unsafe` を口の層のモジュールに閉じる（`walkthrough.md` の 1.3.3）。
 
 ## 5. 全段階の決まり
 
