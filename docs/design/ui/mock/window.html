@@ -3,245 +3,273 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>OpenUT 状態の窓</title>
+<title>OpenUT 主の窓</title>
 <link rel="stylesheet" href="tokens.css">
-<script src="glyph.js"></script>
 <script src="wrap.js"></script>
-<script src="names.js"></script>
+<script src="glyph.js"></script>
+<script src="icons.js"></script>
+<script src="text.js"></script>
+<script src="scenarios.js"></script>
 <style>
-  body { padding: 24px; display: flex; flex-direction: column; gap: 32px; align-items: flex-start; }
-  .cap { font-size: 13px; color: #3D4757; margin: 0 0 8px 2px; }
+  /* Values: docs/design/ui/m1.md, chapter 3. Open with ?s=a .. ?s=i (scenes in scenarios.js). */
+  body { padding: 24px; }
+  #win { display: inline-block; border-radius: 8px; overflow: hidden; box-shadow: 0 0 0 1px #3A3F46; }
 
-  /* Window frame. Windows draws the title bar (dark, 3.1); egui draws the client area (.body). */
-  .win { background: var(--bg); color: var(--ink); border-radius: 8px; overflow: hidden;
-         box-shadow: 0 0 0 1px rgba(0,0,0,.35), 0 10px 32px rgba(0,0,0,.28); }
-  .titlebar { height: 32px; display: flex; align-items: center; gap: 8px; padding-left: 12px;
-              font-size: 12px; color: var(--ink); background: #1F242C; }
-  .titlebar .ctl { margin-left: auto; display: flex; }
-  .titlebar .ctl i { width: 46px; height: 32px; display: grid; place-items: center; font-style: normal;
-                     font-size: 12px; color: var(--ink-2); }
-  .body { padding: 20px 24px; display: flex; flex-direction: column; gap: 20px; }
+  /* Windows draws the title bar (dark, 3.1). Shown here only for the frame. */
+  .titlebar { height: 32px; background: #1A1D21; display: flex; align-items: center; padding-left: 12px;
+              font-size: 12px; color: #D0D4D9; gap: 8px; }
+  .titlebar .mk { width: 16px; height: 16px; }
+  .titlebar .btns { margin-left: auto; display: flex; height: 100%; }
+  .titlebar .btns span { width: 46px; display: grid; place-items: center; color: #B8BEC6; font-size: 12px; }
 
-  /* Header: the watcher state on the left, the host's Wi-Fi information on the right */
-  .head { display: flex; align-items: flex-start; gap: 24px; }
-  .state { display: grid; grid-template-columns: 20px auto; column-gap: 10px; align-items: center; min-height: 32px; }
-  .state b { font-size: 16px; font-weight: 700; line-height: 24px; }
-  .state .date { font-size: 13px; color: var(--ink-2); margin-left: 10px; font-weight: 400; }
-  .state .sub { grid-column: 2; font-size: 13px; line-height: 20px; color: var(--ink-2); }
-  .pair { display: flex; align-items: baseline; gap: 8px; white-space: nowrap; }
-  .pair .k { font-size: 13px; color: var(--ink-2); }
-  .pair .v { font-size: 14px; font-weight: 700; }
-  .head .pair { margin-left: auto; min-height: 32px; align-items: center; }
+  .client { background: var(--bg); display: grid; grid-template-rows: 1fr 52px; overflow: hidden; }
+  .scroll { padding: 20px 20px 0; display: flex; flex-direction: column; gap: 16px; overflow: hidden; min-height: 0; position: relative; }
+  .scroll.cut::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 28px;
+                       background: linear-gradient(transparent, var(--bg)); }
+  .scroll > * { flex: none; }
+  .vbar { position: absolute; right: 6px; top: 20px; width: 4px; border-radius: 2px; background: var(--idle); }
 
-  /* Notices: one card each, newest first. Text laid out by wrap.js (4.4). */
-  .notices { display: flex; flex-direction: column; gap: 8px; }
-  .notice { background: var(--tile); border-radius: 8px; padding: 12px 20px 12px 20px;
-            box-shadow: inset 4px 0 0 var(--signal); }
-  .notice.ok { box-shadow: inset 4px 0 0 var(--ok); }
-  .notice .h { margin: 0; font-size: 16px; font-weight: 700; line-height: 24px; }
-  .notice .a { margin: 4px 0 0; font-size: 14px; line-height: 22px; }
+  /* 1. Status band */
+  .band { background: var(--panel); border-radius: 8px; min-height: 76px; display: grid;
+          grid-template-columns: 184px 1fr auto; align-items: center; }
+  .band .overall { display: flex; align-items: center; gap: 12px; padding-left: 20px; height: 100%;
+                   border-right: 1px solid var(--line); font-size: 28px; font-weight: 700; line-height: 36px; }
+  .band .line { padding: 14px 20px; font-size: 18px; line-height: 27px; align-self: center; }
+  .band .others { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 4px; }
+  .band .others .row { display: grid; grid-template-columns: 14px 1fr; column-gap: 8px; font-size: 14px; line-height: 20px; align-items: start; }
+  .band .others .row svg { margin-top: 3px; }
+  .band .others .row .t { display: flex; flex-wrap: wrap; column-gap: 12px; }
+  .band .others .row b { font-weight: 700; }
+  .band .line .head { font-weight: 700; }
+  .band .line .act { font-size: 16px; line-height: 24px; color: var(--ink); margin-top: 2px; }
+  .band .btn { margin-right: 20px; }
 
-  /* Tracker board: a label column, then one tile per tracker. Rows line up across tiles. */
-  .board { display: flex; align-items: flex-start; }
-  .labels { width: 112px; flex: none; margin-right: 16px; }
-  .tiles { display: flex; gap: 12px; }
-  .tile { width: var(--tile-w, 152px); flex: none; background: var(--tile); border-radius: 10px; padding: 12px; }
-  .rows > div { height: 20px; display: flex; align-items: center; }
-  .rows > div + div { margin-top: 6px; }
-  .rows > div.idle-row { margin-top: 10px; }
-  .gap-head { height: 68px; }  /* 12 + 44 + 12: the tile header */
-  .tile .gap-head { height: 44px; margin-bottom: 12px; display: flex; flex-direction: column; gap: 4px; }
-  .labels .rows > div { font-size: 13px; color: var(--ink-2); white-space: nowrap; }
-  .labels .rows > div.on { color: var(--ink); }
+  /* 3. Devices */
+  .devices { display: flex; align-items: stretch; min-height: 269px; }
+  .tile.ghost { background: none; box-shadow: inset 0 0 0 1.5px var(--line); }
+  .tile.ghost .pict { margin-top: 44px; }
+  .devices .sep { width: 1px; background: var(--line); margin: 0 12px; flex: none; }
+  .strip { display: flex; gap: 12px; overflow: hidden; position: relative; flex: 1; min-width: 0; }
+  .strip.more::after { content: ""; position: absolute; right: 0; top: 0; bottom: 8px; width: 40px;
+                       background: linear-gradient(to right, transparent, var(--bg)); }
+  .scrollbar { height: 4px; border-radius: 2px; background: var(--panel-2); margin-top: 6px; position: relative; }
+  .scrollbar i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 2px; background: var(--idle); }
+  .tile { background: var(--panel); border-radius: 8px; flex: none; position: relative; overflow: hidden;
+          padding: 14px 12px 12px; display: flex; flex-direction: column; }
+  .tile .sbar { position: absolute; left: 0; right: 0; top: 0; height: 4px; }
+  .tile .name { font-size: 16px; font-weight: 700; line-height: 22px; text-align: center; white-space: nowrap; }
+  .tile .pict { display: flex; justify-content: center; margin-top: 8px; height: 48px; }
+  .tile .hostrow { height: 20px; margin-top: 4px; display: flex; justify-content: center; align-items: center; }
+  .tag { font-size: 12px; font-weight: 700; line-height: 16px; padding: 1px 8px; border-radius: 10px;
+         color: var(--accent); box-shadow: inset 0 0 0 1.5px var(--accent); }
+  .tile .state { height: 22px; margin-top: 2px; display: flex; justify-content: center; align-items: center; gap: 6px;
+                 font-size: 16px; font-weight: 700; line-height: 22px; }
+  .tile hr { border: 0; border-top: 1px solid var(--line); margin: 8px 0; width: 100%; }
+  .tile .kv { display: flex; align-items: center; gap: 6px; font-size: 13px; line-height: 20px; height: 20px; white-space: nowrap; }
+  .tile .kvs { display: flex; flex-direction: column; }
+  .tile .kvs.one { flex-direction: row; justify-content: space-between; }
+  .tile .kv b { font-weight: 700; }
+  .tile .lbl { font-size: 12px; line-height: 16px; color: var(--ink-2); margin-top: 6px; }
+  .tile .val { font-size: 13px; line-height: 18px; white-space: nowrap; }
+  .tile .val .pre { color: var(--ink-2); }
+  .tile .val .tail { font-weight: 700; }
+  .tile .unk { color: var(--ink-2); }
+  .tile.off .name, .tile.off .state { color: var(--ink-2); }
+  .tile.grey .val, .tile.grey .kv, .tile.grey .name { color: var(--ink-2); }
+  .tile.grey .val .tail { color: var(--ink-2); }
+  .tile.dongle .state { font-size: 16px; }
 
-  .name { font: inherit; font-size: 14px; font-weight: 700; line-height: 20px; height: 20px; color: var(--ink);
-          background: none; border: 0; padding: 0 4px; margin-left: -4px; border-radius: 4px; text-align: left;
-          white-space: nowrap; cursor: text; align-self: flex-start; }
-  .name.hover { background: var(--hover); }
-  .field { font: inherit; font-size: 14px; color: var(--ink); width: 128px; height: 24px; padding: 0 5px;
-           margin: -2px 0 -2px -6px; border: 1px solid var(--stage); border-radius: 4px; background: var(--bg);
-           outline: 2px solid color-mix(in srgb, var(--stage) 35%, transparent); }
-  .field::selection { background: color-mix(in srgb, var(--stage) 40%, transparent); }
-  .tag { align-self: flex-start; font-size: 13px; font-weight: 700; line-height: 18px; height: 20px; color: var(--stage);
-         border: 1px solid var(--stage); border-radius: 4px; padding: 0 6px; white-space: nowrap; }
+  /* 4. Guide frame and operations */
+  .lower { display: grid; grid-template-columns: 1fr 232px; gap: 16px; flex: none; }
+  .frame { background: var(--panel); border-radius: 8px; padding: 16px 20px; display: grid; grid-template-columns: 1fr; }
+  .frame.op { grid-template-columns: 176px 1fr; column-gap: 16px; }
+  .frame .hd { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; }
+  .frame .hd .nm { display: flex; align-items: center; gap: 8px; font-size: 16px; font-weight: 700; line-height: 22px; }
+  .steps { display: grid; position: relative; align-self: start; }
+  .step { display: flex; flex-direction: column; align-items: flex-start; position: relative; padding-right: 8px; }
+  .step .dot { width: 28px; height: 28px; border-radius: 14px; display: grid; place-items: center;
+               font-size: 14px; font-weight: 700; position: relative; z-index: 1; }
+  .step .dot.todo { box-shadow: inset 0 0 0 2px var(--idle); color: var(--ink-2); background: var(--panel); }
+  .step .dot.done { background: var(--panel-2); box-shadow: inset 0 0 0 2px var(--accent); }
+  .step .dot.now { background: var(--accent); color: var(--on-accent); }
+  .step .conn { position: absolute; left: 28px; right: 0; top: 13px; height: 2px; background: var(--idle); }
+  .step .conn.done { background: var(--accent); }
+  .step .lab { margin-top: 8px; font-size: 14px; line-height: 20px; color: var(--ink-2); }
+  .step.now .lab { color: var(--ink); font-weight: 700; }
+  .step.done .lab { color: var(--ink); }
+  .step .prog { display: inline-block; margin-top: 4px; font-size: 13px; font-weight: 700; line-height: 18px;
+                padding: 0 8px; border-radius: 9px; background: var(--panel-2); color: var(--accent); }
+  .step .pbar { width: calc(100% - 8px); height: 6px; border-radius: 3px; background: var(--panel-2); margin-top: 8px; overflow: hidden; }
+  .step .pbar i { display: block; height: 100%; background: var(--accent); }
 
-  .cell { width: 100%; height: 20px; border-radius: 4px; box-shadow: inset 0 0 0 1px var(--track);
-          display: flex; align-items: center; padding: 0 8px; font-size: 13px; font-weight: 700; white-space: nowrap; }
-  .cell.pass { background: var(--reach); box-shadow: none; }
-  .cell.pass.okc { background: var(--ok-reach); }
-  .cell.cur { background: var(--stage); color: var(--on-stage); box-shadow: none; }
-  .cell.cur.okc { background: var(--ok); color: var(--on-ok); }
-  .cell.idle { background: var(--idle); color: var(--ink); box-shadow: none; }
-  .cell.none { box-shadow: none; }
+  .ops { display: flex; flex-direction: column; gap: 8px; }
+  .btn { display: inline-flex; align-items: center; gap: 10px; height: 36px; padding: 0 16px; border-radius: 6px;
+         background: var(--panel-2); color: var(--ink); font-size: 14px; font-weight: 700; white-space: nowrap; }
+  .btn.primary { background: var(--accent); color: var(--on-accent); }
+  .ops .btn { height: 36px; color: var(--ink); }
+  .ops .btn svg { color: var(--accent); }
+  .ops .btn.on { box-shadow: inset 0 0 0 2px var(--accent); color: var(--accent); }
+  .ops .btn.off { color: var(--muted); }
+  .ops .btn.off svg { color: var(--muted); }
+  .ops .btn.focus { box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent); }
 
-  .today-line { height: 25px; display: flex; align-items: center; }
-  .today-line::before { content: ""; flex: 1; height: 1px; background: var(--line); }
-  .labels .today-line::before { display: none; }
-  .labels .today-line b { font-size: 13px; font-weight: 700; color: var(--ink); }
-  .today { margin-top: 0; }
-  .today > div { height: 22px; display: flex; align-items: center; font-size: 14px; }
-  .today > div + div { margin-top: 2px; }
-  .labels .today > div { font-size: 13px; color: var(--ink-2); }
-  .tile .today > div { padding-left: 8px; }
-
-  /* Footer, fixed to the bottom edge: today's faults on the left, notification switches on the right */
-  .foot { display: flex; align-items: center; gap: 24px; min-height: 32px; margin-top: auto; margin-left: -24px; margin-right: -24px; margin-bottom: -20px;
-          padding: 10px 24px; border-top: 1px solid var(--line); }
-  .foot .sw { margin-left: auto; display: flex; align-items: center; gap: 20px; }
-  .check { display: flex; align-items: center; gap: 8px; font-size: 14px; }
-  .box { width: 16px; height: 16px; border-radius: 3px; background: var(--stage); display: grid; place-items: center; }
-  .box svg { width: 12px; height: 12px; }
-  .box.off { background: none; box-shadow: inset 0 0 0 1px var(--ink-2); }
-
-  /* Empty state (log not found): the watcher state and the button, centred */
-  .empty { height: 580px; display: grid; place-content: center; justify-items: center; gap: 14px; text-align: center; }
-  .empty b { font-size: 16px; font-weight: 700; }
-  .btn { font: inherit; font-size: 14px; font-weight: 700; height: 32px; padding: 0 16px; border: 0; border-radius: 6px;
-         background: var(--stage); color: var(--on-stage); }
+  /* 5. Footer: notifications */
+  .foot { padding: 0 20px; display: flex; align-items: center; gap: 20px; font-size: 14px; border-top: 1px solid var(--line); }
+  .foot .lbl { font-size: 12px; color: var(--ink-2); }
+  .chk { display: inline-flex; align-items: center; gap: 8px; }
+  .chk i { width: 16px; height: 16px; border-radius: 4px; background: var(--accent); display: grid; place-items: center; }
+  .chk i.no { background: none; box-shadow: inset 0 0 0 1.5px var(--ink-2); }
 </style>
 </head>
 <body>
-<div id="out"></div>
-
+<div id="win"></div>
 <script>
-"use strict";
-// Stages from the bottom of the board: 0 未接続 (its own row), 1..5 the climb (3.3).
-const STAGES = ["未接続", "接続済み", "Wi-Fi待ち", "地図を同期中", "位置合わせ中", "追跡中"];
-const CHECK = '<svg viewBox="0 0 12 12"><path d="M2.5 6.2l2.3 2.3 4.7-5" fill="none" stroke="#0E1A2C" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+(() => {
+  const I = window.OpenUTIcons, X = window.OpenUTText, W = X.words;
+  const key = new URLSearchParams(location.search).get("s") || "a";
+  const sc = window.OpenUTScenes[key];
+  const [ww, wh] = sc.size || [1120, 640];
+  const col = { ok: "var(--ok)", wait: "var(--wait)", fault: "var(--fault)" };
+  const grey = !!sc.greyed;
+  const c = (k) => (grey ? "var(--muted)" : col[k]);
+  const esc = (s) => s.replace(/[&<>]/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[m]));
 
-const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;");
+  // Tile width (3.3): clamp(floor((avail - 12 * 4) / 5), 152, 176), avail = width - 40 - 120 - 25.
+  const avail = ww - 40 - 120 - 25;
+  const tw = Math.max(152, Math.min(176, Math.floor((avail - 48) / 5)));
 
-function cells(t) {
-  const out = [];
-  for (let k = 5; k >= 1; k--) {
-    let cls = "cell", txt = "";
-    if (t.s === 0 || k > t.s) cls += "";
-    else if (k < t.s) cls += " pass" + (t.s === 5 ? " okc" : "");
-    else { cls += " cur" + (t.s === 5 ? " okc" : ""); txt = t.since; }
-    out.push(`<div><span class="${cls}">${esc(txt)}</span></div>`);
+  function tile(d) {
+    const off = d.link === "none";
+    const st = d.state;
+    const ring = st ? c(st) : "var(--idle)";
+    const bar = st ? `<div class="sbar" style="background:${c(st)}"></div>` : "";
+    // Tile title (3.3): "トラッカー{N}" with the VIVE Hub number, else "トラッカー" (the host is shown by the tag).
+    const name = d.hub ? `${W.tracker}${d.hub}` : W.tracker;
+    const stateRow = st
+      ? `${I.state(st, 14, c(st))}<span style="color:${c(st)}">${W.state[st]}</span>`
+      : `${I.state("none", 14, "var(--idle)")}<span>${W.state.none}</span>`;
+    // Connection row: hidden when the state row already says 未接続 (3.3, rule "未接続の台").
+    const linkRow = off && !st ? "" :
+      `<div class="kv">${I.link(d.link, grey ? "var(--muted)" : "var(--ink-2)")}<span>${W.link[d.link]}</span></div>`;
+    const batRow = off ? "" :
+      `<div class="kv">${I.battery(d.battery, d.charging, grey ? "var(--muted)" : "var(--ink)")}` +
+      (d.battery == null ? `<span class="unk">${W.unknown}</span>` : `<b>${d.battery}%</b>`) + `</div>`;
+    const ser = d.serial
+      ? `<span class="pre">${d.serial.slice(0, d.serial.length - d.tail.length)}</span><span class="tail">${d.tail}</span>`
+      : `<span class="unk">${W.unknown}</span>`;
+    return `<div class="tile${off && !st ? " off" : ""}${grey ? " grey" : ""}" style="width:${tw}px">${bar}
+      <div class="name">${name}</div>
+      <div class="pict">${I.tracker(ring, off ? "outline" : "solid")}</div>
+      <div class="hostrow">${d.host ? `<span class="tag"${grey ? ' style="color:var(--muted);box-shadow:inset 0 0 0 1.5px var(--muted)"' : ""}>${W.host}</span>` : ""}</div>
+      <div class="state">${stateRow}</div>
+      <hr>
+      <div class="kvs${tw - 24 >= 148 ? " one" : ""}">${linkRow}${batRow}</div>
+      <div class="lbl">${W.serial}</div><div class="val">${ser}</div>
+      <div class="lbl">${W.firmware}</div><div class="val">${d.fw ? d.fw : `<span class="unk">${W.unknown}</span>`}</div>
+    </div>`;
   }
-  out.push(t.s === 0 ? `<div class="idle-row"><span class="cell idle">${esc(t.since)}</span></div>`
-                     : `<div class="idle-row"><span class="cell none"></span></div>`);
-  return out.join("");
-}
 
-function tile(t) {
-  const name = t.edit ? `<input class="field" value="${esc(t.edit)}" maxlength="8">`
-                      : `<span class="name${t.hover ? " hover" : ""}">${esc(t.name)}</span>`;
-  const tag = t.host ? `<span class="tag">ホスト</span>` : "";
-  return `<div class="tile"><div class="gap-head">${name}${tag}</div>
-    <div class="rows">${cells(t)}</div>
-    <div class="today-line"></div>
-    <div class="today"><div>${esc(t.ratio ?? "—")}</div><div>${esc(t.losses ?? "—")}</div></div></div>`;
-}
+  function dongleTile() {
+    const k = sc.dongle;
+    return `<div class="tile dongle${grey ? " grey" : ""}" style="width:120px">
+      <div class="name">${W.dongleName}</div>
+      <div class="pict">${I.dongle(grey && k === "on" ? "on" : k)}</div>
+      <div class="hostrow"></div>
+      <div class="state" style="color:${k === "on" && !grey ? "var(--ink)" : "var(--ink-2)"}">${W.dongle[k]}</div>
+    </div>`;
+  }
 
-function labels(trackers) {
-  const on = new Set(trackers.map((t) => t.s));
-  const rows = [];
-  for (let k = 5; k >= 1; k--) rows.push(`<div class="${on.has(k) ? "on" : ""}">${STAGES[k]}</div>`);
-  rows.push(`<div class="idle-row ${on.has(0) ? "on" : ""}">${STAGES[0]}</div>`);
-  return `<div class="labels"><div class="gap-head"></div><div class="rows">${rows.join("")}</div>
-    <div class="today-line"><b>今日</b></div>
-    <div class="today"><div>追跡できた割合</div><div>追跡が途切れた</div></div></div>`;
-}
+  // Band line (3.2): guide / health / fault (headline + action). Text broken with wrap.js (4.4).
+  const lineW = ww - 40 - 184 - 40 - (sc.pickFolder ? 180 : 0);
+  function wrapHtml(s, font, width) {
+    return window.OpenUTWrap.wrap(s, font, width).map(esc).join("<br>");
+  }
+  const fam = getComputedStyle(document.documentElement).getPropertyValue("--font").trim();
+  function bandLine() {
+    const l = sc.line;
+    if (!l) return "";
+    if (l.fault)
+      return `<div class="head">${wrapHtml(l.fault.headline, `700 18px ${fam}`, lineW)}</div>` +
+             `<div class="act">${wrapHtml(l.fault.action, `400 16px ${fam}`, lineW)}</div>`;
+    const s = l.guide ? X.guide[l.guide].line : X.health[l.health];
+    return wrapHtml(s, `400 18px ${fam}`, lineW);
+  }
 
-function glyph(kind, big) {
-  const color = kind === "blind" ? "--ink-2" : "--stage";
-  return `<canvas data-glyph="${kind}" data-size="${big ? 80 : 40}" data-dpr="2" data-color="${color}" data-badge="--signal"></canvas>`;
-}
+  // Other live notices, inside the band under the line: all of faults except the one shown as the line (3.2).
+  const others = sc.faults.filter((f) => !(sc.line && sc.line.fault === f));
+  const othersHtml = others.length
+    ? `<div class="others">${others.map((f) => `<div class="row">${I.state(f.resolved ? "ok" : "fault", 14, f.resolved ? "var(--ok)" : "var(--fault)")}` +
+        `<div class="t"><b>${esc(X.plain(f.headline))}</b>${f.action ? `<span>${esc(X.plain(f.action))}</span>` : ""}</div></div>`).join("")}</div>`
+    : "";
 
-function win(w) {
-  const subs = (w.sub || []).map((s) => `<span class="sub">${esc(s)}</span>`).join("");
-  let main;
-  if (w.empty) {
-    main = `<div class="empty">${glyph("blind", true)}<b>${esc(w.state)}</b><button class="btn">フォルダーを選ぶ</button></div>`;
+  function stepsHtml(items) {
+    const n = items.length;
+    return `<div class="steps" style="grid-template-columns:repeat(${n},1fr)">` + items.map((s, i) => {
+      const k = s.done ? "done" : s.current ? "now" : "todo";
+      const dot = s.done ? I.check(28, "var(--accent)") : String(i + 1);
+      const conn = i < n - 1 ? `<div class="conn${s.done ? " done" : ""}"></div>` : "";
+      const prog = s.progress ? `<span class="prog">${s.progress[0]}/${s.progress[1]}</span>` : "";
+      const bar = s.bar != null ? `<div class="pbar"><i style="width:${s.bar * 100}%"></i></div>` : "";
+      return `<div class="step ${k}"><div class="dot ${k}">${dot}</div>${conn}` +
+             `<div class="lab">${wrapHtml(s.text, `${s.current ? 700 : 400} 14px ${fam}`, stepW)}</div>${prog}${bar}</div>`;
+    }).join("") + `</div>`;
+  }
+
+  // Step column width (3.4): (frame inner width) / number of steps - 8.
+  const frameInner = ww - 40 - 232 - 16 - 40;
+  let stepW = 0;
+  let frame;
+  if (sc.op) {
+    const o = sc.op;
+    stepW = Math.floor((frameInner - 192) / o.steps.length) - 8;
+    frame = `<div class="frame op"><div class="hd"><div class="nm">${I.op(o.kind, "var(--accent)")}<span>${W.ops[o.kind]}</span></div>` +
+      `<span class="btn">${W.stop}</span></div>` +
+      stepsHtml(o.steps.map((t, i) => ({ text: t, done: i < o.current, current: i === o.current, bar: i === o.current ? o.progress : null }))) +
+      `</div>`;
   } else {
-    const head = `<div class="head"><div class="state">${glyph(w.glyph)}<span><b>${esc(w.state)}</b>${w.date ? `<span class="date">${esc(w.date)}</span>` : ""}</span>${subs}</div>
-      <div class="pair"><span class="k">ホストのWi-Fi情報</span><span class="v">${esc(w.wifi)}</span></div></div>`;
-    const notices = (w.notices || []).length ? `<div class="notices">${w.notices.map((n) =>
-      `<div class="notice${n.ok ? " ok" : ""}"><p class="h" data-wrap="${esc(n.h)}"></p>${n.a ? `<p class="a" data-wrap="${esc(n.a)}"></p>` : ""}</div>`).join("")}</div>` : "";
-    const board = `<div class="board" style="--tile-w:${w.tileW || 152}px">${labels(w.trackers)}<div class="tiles">${w.trackers.map(tile).join("")}</div></div>`;
-    const foot = `<div class="foot"><div class="pair"><span class="k">追跡が始まらない</span><span class="v">${w.faults[0]}回</span></div>
-      <div class="pair"><span class="k">予期しない切断</span><span class="v">${w.faults[1]}回</span></div>
-      <div class="sw"><span class="pair"><span class="k">通知</span></span>
-        <span class="check"><span class="box${w.vr === false ? " off" : ""}">${w.vr === false ? "" : CHECK}</span>VR</span>
-        <span class="check"><span class="box">${CHECK}</span>デスクトップ</span></div></div>`;
-    main = head + notices + board + foot;
+    stepW = Math.floor(frameInner / 5) - 8;
+    frame = `<div class="frame">` +
+      stepsHtml(sc.guide.map((g) => ({ text: X.guide[g.id].step, done: g.done, current: g.current, progress: g.progress }))) +
+      `</div>`;
   }
-  return `<div><p class="cap">${esc(w.cap)}</p>
-    <div class="win" id="${w.id}" style="width:${w.width}px">
-      <div class="titlebar"><canvas data-glyph="normal" data-size="32" data-dpr="2" data-color="--icon-normal"></canvas>OpenUT<span class="ctl"><i>─</i><i>☐</i><i>✕</i></span></div>
-      <div class="body" style="min-height:${w.height}px">${main}</div></div></div>`;
-}
+  const opBtn = (k) => {
+    const cls = sc.op ? (sc.op.kind === k ? " on" : " off") : "";
+    return `<span class="btn${cls}">${I.op(k)}${W.ops[k]}</span>`;
+  };
 
-const R1_ACTION = "腰の|電源だけを|入れ直してください。\\nほかの|トラッカーと|ドングルは|そのままにしてください。";
-const W = [
-  { id: "a", cap: "A 案内あり（R1）。ホストは地図を同期中、ほかの2台はWi-Fi待ちで止まっている", width: 1000, height: 620,
-    glyph: "notice", state: "監視中", date: "11/28のログ", wifi: "なし",
-    notices: [{ h: "トラッカーの|追跡が|始まりません", a: R1_ACTION }],
-    trackers: [
-      { name: "腰", host: true, s: 3, since: "4分", ratio: "94%", losses: "2回" },
-      { name: "左足", s: 2, since: "4分", ratio: "91%", losses: "3回" },
-      { name: "右足", s: 2, since: "3分", ratio: "88%", losses: "4回" }],
-    faults: [1, 0] },
-  { id: "b", cap: "B ふつう。2台が追跡中、1台が位置合わせ中", width: 1000, height: 620,
-    glyph: "normal", state: "監視中", date: "11/28のログ", wifi: "あり",
-    trackers: [
-      { name: "腰", host: true, s: 5, since: "1時間12分", ratio: "98%", losses: "1回" },
-      { name: "左足", s: 5, since: "1時間11分", ratio: "96%", losses: "2回" },
-      { name: "右足", s: 4, since: "12秒", ratio: "93%", losses: "3回" }],
-    faults: [0, 0] },
-  { id: "c", cap: "C ログが見つからない（F1、F4）", width: 1000, height: 620, empty: true, state: "ログが見つかりません" },
-  { id: "d", cap: "D ログが更新されていない。最後に分かった状態のまま出す。2行目は想定と違う形式の行の数", width: 1000, height: 620,
-    glyph: "blind", state: "ログが12分更新されていません", sub: ["想定と違う形式の行が120行あります"], wifi: "あり",
-    trackers: [
-      { name: "腰", host: true, s: 5, since: "25分", ratio: "97%", losses: "1回" },
-      { name: "左足", s: 4, since: "14分", ratio: "90%", losses: "5回" },
-      { name: "右足", s: 5, since: "25分", ratio: "95%", losses: "2回" }],
-    faults: [0, 1] },
-  { id: "e", cap: "E 名前を付ける（F3）。ホストの名前を入力中、左足に指を置いている。案内2件（R2と、つながったR4）", width: 1000, height: 620,
-    glyph: "notice", state: "監視中", date: "11/28のログ", wifi: "あり",
-    notices: [
-      { h: "トラッカー3が|地図を|受け取れていません", a: "腰の|近くに|置いて待ってください" },
-      { h: "左足が|つながりました", ok: true }],
-    trackers: [
-      { name: "腰", edit: "腰", host: true, s: 5, since: "8分", ratio: "99%", losses: "0回" },
-      { name: "左足", hover: true, s: 4, since: "5秒", ratio: "97%", losses: "1回" },
-      { name: "トラッカー3", s: 3, since: "42秒", ratio: null, losses: "0回" }],
-    faults: [0, 1] },
-  { id: "f", cap: "F 最小の大きさ（920 × 500）。5台。設定の名前は、1が「腰のトラッカー（ベルトの後ろ）」、2が「腰のトラッカー（ベルトの前）」、3が「トラッカー1」、4が「⸺」8文字、5はなし（6.4）", width: 920, height: 500, tileW: 139.2,
-    glyph: "normal", state: "監視中", date: "11/28のログ", wifi: "不明",
-    trackers: [
-      { n: 1, cfg: "腰のトラッカー（ベルトの後ろ）", host: true, s: 5, since: "99時間59分", ratio: "100%", losses: "12回" },
-      { n: 2, cfg: "腰のトラッカー（ベルトの前）", s: 4, since: "59分", ratio: "87%", losses: "34回" },
-      { n: 3, cfg: "トラッカー1", s: 3, since: "12時間59分", ratio: null, losses: "0回" },
-      { n: 4, cfg: "⸺⸺⸺⸺⸺⸺⸺⸺", s: 1, since: "59秒", ratio: null, losses: "0回" },
-      { n: 5, s: 0, since: "2時間", ratio: null, losses: null }],
-    faults: [12, 3], vr: false, sub: ["日本語のフォントがないため、VRに表示できません"] },
-  { id: "g", cap: "G 同じ名前（6.4）。設定の名前は、1と2が「足」、3が「足（2）」。R1の案内は番号つきの表示名でホストを指す", width: 1000, height: 620,
-    glyph: "notice", state: "監視中", date: "11/28のログ", wifi: "なし",
-    notices: [{ h: "トラッカーの|追跡が|始まりません", a: "{H}の|電源だけを|入れ直してください。\\nほかの|トラッカーと|ドングルは|そのままにしてください。" }],
-    trackers: [
-      { n: 1, cfg: "足", host: true, s: 3, since: "6分", ratio: "95%", losses: "1回" },
-      { n: 2, cfg: "足", s: 2, since: "6分", ratio: "92%", losses: "2回" },
-      { n: 3, cfg: "足（2）", s: 2, since: "5分", ratio: "90%", losses: "2回" }],
-    faults: [1, 0] },
-];
+  // No tracker yet: one empty outline in the place of the first tile (3.3), no words.
+  const strip = sc.devices.length ? sc.devices.map(tile).join("")
+    : `<div class="tile ghost" style="width:${tw}px"><div class="pict">${I.tracker("var(--line)", "outline").replace(/var\(--idle\)/g, "var(--line)")}</div></div>`;
+  const need = sc.devices.length * tw + Math.max(0, sc.devices.length - 1) * 12;
+  const over = need > avail;
+  const overall = sc.overall;
 
-document.fonts.ready.then(() => {
-// Display names (6.4): every window computes them from the names in the settings.
-for (const w of W) {
-  if (!w.trackers) continue;
-  w.trackers.forEach((t, i) => { if (t.n === undefined) t.n = i + 1; if (t.cfg === undefined && !/^トラッカー\d+$/.test(t.name || "")) t.cfg = t.name; });
-  const names = OpenUTNames.displayNames(w.trackers.map((t) => ({ n: t.n, name: t.cfg })));
-  w.trackers.forEach((t, i) => { t.name = names[i]; });
-  const host = w.trackers.find((t) => t.host);
-  for (const n of w.notices || []) for (const k of ["h", "a"]) if (n[k]) n[k] = n[k].replaceAll("{H}", host ? host.name : "ホストのトラッカー");
-}
-  document.getElementById("out").innerHTML = W.map(win).join("");
-  OpenUTGlyph.paintAll();
-  OpenUTWrap.apply();
-});
+  document.getElementById("win").innerHTML =
+    `<div class="titlebar"><canvas class="mk" data-glyph="${overall}" data-size="32" data-dpr="2" data-color="--icon-${overall}"></canvas><span>OpenUT</span><div class="btns"><span>—</span><span>☐</span><span>✕</span></div></div>` +
+    `<div class="client" style="width:${ww}px;height:${wh}px"><div class="scroll">` +
+      `<div class="band"><div class="overall" style="color:${col[overall]}">${I.state(overall, 28, col[overall])}<span>${W.overall[overall]}</span></div>` +
+        `<div class="line">${bandLine()}${othersHtml}</div>` +
+        (sc.pickFolder ? `<span class="btn primary">${W.pickFolder}</span>` : "<span></span>") + `</div>` +
+      `<div><div class="devices">${dongleTile()}<div class="sep"></div><div class="strip${over ? " more" : ""}">${strip}</div></div>` +
+        (over ? `<div class="scrollbar" style="margin-left:${120 + 25}px"><i style="width:${(avail / need) * 100}%"></i></div>` : "") + `</div>` +
+      `<div class="lower">${frame}<div class="ops">${opBtn("pair")}${opBtn("map")}${opBtn("cal")}</div></div>` +
+      `<div style="height:4px;flex:none"></div></div>` +
+      `<div class="foot"><span class="lbl">${W.notify}</span>` +
+        `<span class="chk"><i>${I.check(16, "var(--on-accent)")}</i>${W.notifyVr}</span>` +
+        `<span class="chk"><i>${I.check(16, "var(--on-accent)")}</i>${W.notifyDesktop}</span></div>` +
+    `</div>`;
+  document.title = "OpenUT 主の窓 " + key + " " + sc.title;
+  // Vertical overflow: the content scrolls, the footer stays (3.1). Show the scroll bar of egui.
+  const sc_ = document.querySelector(".scroll");
+  if (sc_.scrollHeight > sc_.clientHeight + 1) {
+    sc_.classList.add("cut");
+    const vb = document.createElement("div");
+    vb.className = "vbar";
+    vb.style.height = Math.round(((sc_.clientHeight - 24) * sc_.clientHeight) / sc_.scrollHeight) + "px";
+    sc_.appendChild(vb);
+  }
+  window.OpenUTLayout = { tw, avail, need, lineW, stepW, contentH: sc_.scrollHeight };
+})();
 </script>
 </body>
 </html>

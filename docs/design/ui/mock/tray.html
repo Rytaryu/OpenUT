@@ -33,78 +33,25 @@
 </style>
 </head>
 <body>
-<div id="tray">
-  <div>
-    <div class="cap">明るいタスクバー（16、20、24、32）</div>
-    <div class="bar light">
-      <canvas data-glyph="normal" data-size="16" data-dpr="2" data-color="--icon-normal"></canvas>
-      <canvas data-glyph="normal" data-size="20" data-dpr="2" data-color="--icon-normal"></canvas>
-      <canvas data-glyph="normal" data-size="24" data-dpr="2" data-color="--icon-normal"></canvas>
-      <canvas data-glyph="normal" data-size="32" data-dpr="2" data-color="--icon-normal"></canvas>
-    </div>
-    <div class="bar light" style="margin-top:10px">
-      <canvas data-glyph="notice" data-size="16" data-dpr="2" data-color="--icon-normal" data-badge="--icon-badge"></canvas>
-      <canvas data-glyph="notice" data-size="20" data-dpr="2" data-color="--icon-normal" data-badge="--icon-badge"></canvas>
-      <canvas data-glyph="notice" data-size="24" data-dpr="2" data-color="--icon-normal" data-badge="--icon-badge"></canvas>
-      <canvas data-glyph="notice" data-size="32" data-dpr="2" data-color="--icon-normal" data-badge="--icon-badge"></canvas>
-    </div>
-    <div class="bar light" style="margin-top:10px">
-      <canvas data-glyph="blind" data-size="16" data-dpr="2" data-color="--icon-blind"></canvas>
-      <canvas data-glyph="blind" data-size="20" data-dpr="2" data-color="--icon-blind"></canvas>
-      <canvas data-glyph="blind" data-size="24" data-dpr="2" data-color="--icon-blind"></canvas>
-      <canvas data-glyph="blind" data-size="32" data-dpr="2" data-color="--icon-blind"></canvas>
-    </div>
-  </div>
-  <div>
-    <div class="cap">暗いタスクバー（16、20、24、32）</div>
-    <div class="bar dark">
-      <canvas data-glyph="normal" data-size="16" data-dpr="2" data-color="--icon-normal"></canvas>
-      <canvas data-glyph="normal" data-size="20" data-dpr="2" data-color="--icon-normal"></canvas>
-      <canvas data-glyph="normal" data-size="24" data-dpr="2" data-color="--icon-normal"></canvas>
-      <canvas data-glyph="normal" data-size="32" data-dpr="2" data-color="--icon-normal"></canvas>
-    </div>
-    <div class="bar dark" style="margin-top:10px">
-      <canvas data-glyph="notice" data-size="16" data-dpr="2" data-color="--icon-normal" data-badge="--icon-badge"></canvas>
-      <canvas data-glyph="notice" data-size="20" data-dpr="2" data-color="--icon-normal" data-badge="--icon-badge"></canvas>
-      <canvas data-glyph="notice" data-size="24" data-dpr="2" data-color="--icon-normal" data-badge="--icon-badge"></canvas>
-      <canvas data-glyph="notice" data-size="32" data-dpr="2" data-color="--icon-normal" data-badge="--icon-badge"></canvas>
-    </div>
-    <div class="bar dark" style="margin-top:10px">
-      <canvas data-glyph="blind" data-size="16" data-dpr="2" data-color="--icon-blind"></canvas>
-      <canvas data-glyph="blind" data-size="20" data-dpr="2" data-color="--icon-blind"></canvas>
-      <canvas data-glyph="blind" data-size="24" data-dpr="2" data-color="--icon-blind"></canvas>
-      <canvas data-glyph="blind" data-size="32" data-dpr="2" data-color="--icon-blind"></canvas>
-    </div>
-  </div>
-  <div>
-    <div class="cap">指を置いたとき</div>
-    <div class="tips">
-      <span class="tip">OpenUT 追跡中 2/3台</span>
-      <span class="tip">OpenUT 案内1件</span>
-      <span class="tip dark">OpenUT ログが12分更新されていません</span>
-    </div>
-  </div>
-
-  <div>
-    <div class="cap">16の拡大（1マスが1画素）</div>
-    <div class="zoom">
-      <canvas data-glyph="normal" data-size="16" data-scale="8" data-dpr="2" data-color="--icon-normal"></canvas>
-      <canvas data-glyph="notice" data-size="16" data-scale="8" data-dpr="2" data-color="--icon-normal" data-badge="--icon-badge"></canvas>
-      <canvas data-glyph="blind" data-size="16" data-scale="8" data-dpr="2" data-color="--icon-blind"></canvas>
-    </div>
-  </div>
-  <div>
-    <div class="cap">&nbsp;</div>
-    <div class="zoom dark">
-      <canvas data-glyph="normal" data-size="16" data-scale="8" data-dpr="2" data-color="--icon-normal"></canvas>
-      <canvas data-glyph="notice" data-size="16" data-scale="8" data-dpr="2" data-color="--icon-normal" data-badge="--icon-badge"></canvas>
-      <canvas data-glyph="blind" data-size="16" data-scale="8" data-dpr="2" data-color="--icon-blind"></canvas>
-    </div>
-  </div>
-  <div>
-    <div class="cap">右クリック</div>
-    <div class="menu"><div class="on">状態を開く</div><hr><div>終了</div></div>
-  </div>
-</div>
+<div id="tray"></div>
+<script>
+  // Three looks (2.1): ok, wait, fault. Each in one colour that works on both taskbars (1.2).
+  const looks = ["ok", "wait", "fault"];
+  const sizes = [16, 20, 24, 32];
+  const icon = (v, n, extra) => `<canvas data-glyph="${v}" data-size="${n}" data-dpr="2" data-color="--icon-${v}"${extra || ""}></canvas>`;
+  const bars = (cls) => looks.map((v, i) =>
+    `<div class="bar ${cls}"${i ? ' style="margin-top:10px"' : ""}>${sizes.map((n) => icon(v, n)).join("")}</div>`).join("");
+  const zoom = (cls) => `<div class="zoom ${cls}">${looks.map((v) => icon(v, 16, ' data-scale="8"')).join("")}</div>`;
+  document.getElementById("tray").innerHTML =
+    `<div><div class="cap">明るいタスクバー（16、20、24、32）</div>${bars("light")}</div>` +
+    `<div><div class="cap">暗いタスクバー（16、20、24、32）</div>${bars("dark")}</div>` +
+    `<div><div class="cap">指を置いたとき</div><div class="tips">` +
+      `<span class="tip">正常 3/3</span><span class="tip">待機中 2/3</span>` +
+      `<span class="tip">異常：トラッカーの追跡が始まりません</span>` +
+      `<span class="tip dark">待機中：VIVE Hubを起動してください</span><span class="tip dark">待機中</span></div></div>` +
+    `<div><div class="cap">16の拡大（1マスが1画素）</div>${zoom("")}</div>` +
+    `<div><div class="cap">&nbsp;</div>${zoom("dark")}</div>` +
+    `<div><div class="cap">右クリック</div><div class="menu"><div class="on">状態を開く</div><hr><div>終了</div></div></div>`;
+</script>
 </body>
 </html>

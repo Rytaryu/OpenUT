@@ -1,6 +1,7 @@
 // OpenUT glyph renderer for the mockups.
 // It follows the procedure in docs/design/ui/m1.md (section 2.2) pixel by pixel,
 // so the implementation in Rust can reproduce the same RGBA image without image files.
+// The tray, the window icon and the toast logo use it (4th version: one look per overall state).
 
 (function () {
   "use strict";
@@ -14,10 +15,7 @@
     badgeY: 0.24,
     badgeRadius: 0.22,
     badgeGap: 0.07, // transparent gap around the badge
-    slashFrom: 0.2, // slash from (0.2 S, 0.2 S) to (0.8 S, 0.8 S)
-    slashTo: 0.8,
-    slashHalf: 0.06,
-    slashGap: 0.08,
+    cutDeg: 90, // "wait": one gap of 90 degrees in the ring, centred on 315 degrees (upper right; clockwise from the right)
   };
 
   // Coverage of a pixel from a signed distance in pixels (negative = inside).
@@ -25,19 +23,13 @@
     return Math.min(1, Math.max(0, 0.5 - d));
   }
 
-  function segDist(px, py, ax, ay, bx, by) {
-    const vx = bx - ax, vy = by - ay;
-    const t = Math.min(1, Math.max(0, ((px - ax) * vx + (py - ay) * vy) / (vx * vx + vy * vy)));
-    return Math.hypot(px - (ax + t * vx), py - (ay + t * vy));
-  }
-
   function hex(c) {
     const n = parseInt(c.slice(1), 16);
     return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
   }
 
-  // variant: "normal" (ring + dot), "notice" (ring + dot + badge), "blind" (ring + slash).
-  // color: glyph colour. badge: badge colour (notice only).
+  // variant (2.2): "ok" (ring + dot), "wait" (ring with one gap + dot), "fault" (ring + dot + badge).
+  // color: glyph colour. badge: badge colour (fault only; the same colour as the glyph when omitted).
   function render(size, variant, color, badge) {
     const S = size;
     const c = hex(color);
@@ -48,15 +40,17 @@
         const px = x + 0.5, py = y + 0.5;
         const r = Math.hypot(px - 0.5 * S, py - 0.5 * S);
         let a = cover(Math.abs(r - G.ringRadius * S) - G.ringHalf * S);
-        if (variant !== "blind") {
-          a = Math.max(a, cover(r - G.dotRadius * S));
-        } else {
-          const ds = segDist(px, py, G.slashFrom * S, G.slashFrom * S, G.slashTo * S, G.slashTo * S);
-          a *= 1 - cover(ds - (G.slashHalf + G.slashGap) * S);
-          a = Math.max(a, cover(ds - G.slashHalf * S));
+        if (variant === "wait") {
+          // Distance (in px, along the ring's centre line) from the pixel's angle to the nearest gap edge.
+          const ang = ((Math.atan2(py - 0.5 * S, px - 0.5 * S) * 180) / Math.PI + 360) % 360;
+          let off = 180;
+          for (const g of [315]) off = Math.min(off, Math.abs(((ang - g + 540) % 360) - 180));
+          const edge = ((off - G.cutDeg / 2) * Math.PI / 180) * G.ringRadius * S;
+          a *= cover(-edge);
         }
+        a = Math.max(a, cover(r - G.dotRadius * S));
         let rgb = c, alpha = a;
-        if (variant === "notice") {
+        if (variant === "fault") {
           const db = Math.hypot(px - G.badgeX * S, py - G.badgeY * S);
           alpha = a * (1 - cover(db - (G.badgeRadius + G.badgeGap) * S));
           const ab = cover(db - G.badgeRadius * S);

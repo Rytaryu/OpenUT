@@ -3,24 +3,22 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>OpenUT VR の案内</title>
+<title>OpenUT VR の板</title>
 <link rel="stylesheet" href="tokens.css">
-<script src="glyph.js"></script>
 <script src="wrap.js"></script>
-<script src="names.js"></script>
+<script src="icons.js"></script>
+<script src="text.js"></script>
 <style>
-  body { padding: 24px; }
-  .cap { font-size: 13px; color: #4D5768; margin: 0 0 8px 2px; }
+  body { padding: 24px; background: #6F7A86; }
+  .cap { font-size: 13px; color: #F2F4F7; margin: 0 0 8px 2px; }
 
-  /* The panel is laid out in texture pixels (1280 wide). zoom maps it to the page:
-     0.5 = one texture pixel per device pixel in a deviceScaleFactor 2 screenshot.
-     The text is broken into lines by wrap.js (section 4.4), with no limit on the number of lines (4.1). */
+  /* Notice panel (4.1), laid out in texture pixels (1280 wide). zoom 0.5 = one texture pixel per device pixel
+     in a deviceScaleFactor 2 screenshot. Text broken with wrap.js (4.4), no limit on the number of lines. */
   .panel { width: 1280px; display: grid; grid-template-columns: 80px 1fr; column-gap: 36px; align-items: start;
            padding: 52px 64px 56px 56px; border-radius: 28px; background: var(--vr-panel);
            box-shadow: inset 0 0 0 3px var(--vr-edge); font-family: var(--font); }
   .panel .h { margin: 0; font-size: 64px; line-height: 80px; font-weight: 700; color: var(--vr-ink); }
   .panel .a { margin: 12px 0 0; font-size: 54px; line-height: 73px; font-weight: 400; color: var(--vr-ink-2); }
-
   #vr-panels, #vr-long { display: inline-grid; gap: 20px; padding: 24px; background: #8A949E; align-items: start; }
   #vr-panels .panel, #vr-long .panel { zoom: 0.5; }
 
@@ -29,8 +27,7 @@
   .view { position: relative; width: 800px; height: 450px; overflow: hidden; border-radius: 6px; }
   .view .anchor { position: absolute; left: 50%; top: calc(50% + 85px); transform: translate(-50%, -50%); z-index: 1; }
   .view .panel { zoom: 0.1508; }
-  .room { background:
-      linear-gradient(to bottom, #3B3F47 0%, #565A60 52%, #2C2A28 52%, #46403A 100%); }
+  .room { background: linear-gradient(to bottom, #3B3F47 0%, #565A60 52%, #2C2A28 52%, #46403A 100%); }
   .room::before { content: ""; position: absolute; inset: 52% 0 0; background:
       repeating-linear-gradient(90deg, rgba(255,255,255,.05) 0 2px, transparent 2px 80px); }
   .room::after { content: ""; position: absolute; left: 140px; top: 70px; width: 220px; height: 150px;
@@ -41,75 +38,132 @@
   .cross { position: absolute; left: 50%; top: 50%; width: 14px; height: 14px; transform: translate(-50%, -50%);
            border: 1.5px solid rgba(255,255,255,.7); border-radius: 50%; z-index: 1; }
   .day .cross { border-color: rgba(0,0,0,.45); }
+
+  /* Dashboard board (4.6, provisional): the main window's parts, twice the size, in texture pixels (1600 x 960). */
+  #vr-board-wrap { display: inline-block; padding: 24px; background: #3A4048; }
+  .board { zoom: 0.5; width: 1600px; height: 960px; background: var(--bg); border-radius: 24px; padding: 48px;
+           display: flex; flex-direction: column; gap: 24px; font-family: var(--font); color: var(--ink); }
+  .b-band { background: var(--panel); border-radius: 16px; height: 140px; display: grid; grid-template-columns: 340px 1fr; align-items: center; }
+  .b-band .ov { display: flex; align-items: center; gap: 20px; padding-left: 36px; height: 100%; border-right: 2px solid var(--line);
+                font-size: 56px; font-weight: 700; }
+  .b-band .ln { padding: 0 36px; font-size: 36px; line-height: 52px; }
+  .b-dev { display: flex; gap: 16px; }
+  .b-tile { background: var(--panel); border-radius: 16px; width: 248px; height: 330px; position: relative; overflow: hidden;
+            display: flex; flex-direction: column; align-items: center; padding-top: 28px; }
+  .b-tile .sbar { position: absolute; left: 0; right: 0; top: 0; height: 8px; }
+  .b-tile .nm { font-size: 32px; font-weight: 700; line-height: 44px; }
+  .b-tile .tl { font-size: 28px; line-height: 38px; color: var(--ink-2); }
+  .b-tile .tl b { color: var(--ink); }
+  .b-tile .pc { margin-top: 12px; height: 96px; }
+  .b-tile .pc svg { width: 120px; height: 96px; }
+  .b-tile .st { margin-top: 12px; display: flex; align-items: center; gap: 12px; font-size: 32px; font-weight: 700; }
+  .b-tile .st svg { width: 28px; height: 28px; }
+  .b-tile .hostrow { height: 36px; margin-top: 8px; display: flex; align-items: center; }
+  .b-tag { font-size: 24px; font-weight: 700; line-height: 32px; padding: 2px 14px; border-radius: 18px; color: var(--accent);
+           box-shadow: inset 0 0 0 3px var(--accent); }
+  .b-dongle { width: 160px; }
+  .b-dongle .pc svg { width: 100px; height: 80px; }
+  .b-sep { width: 2px; background: var(--line); margin: 0 4px; }
+  .b-low { display: grid; grid-template-columns: 1fr; gap: 24px; flex: 1; }
+  .b-frame { background: var(--panel); border-radius: 16px; padding: 28px 36px; display: grid; grid-template-columns: 380px 1fr; column-gap: 28px; }
+  .b-frame .hd { display: flex; flex-direction: column; gap: 20px; align-items: flex-start; }
+  .b-frame .nm { display: flex; align-items: center; gap: 14px; font-size: 32px; font-weight: 700; }
+  .b-frame .nm svg { width: 40px; height: 40px; }
+  .b-steps { display: grid; grid-template-columns: repeat(3, 1fr); }
+  .b-step { position: relative; padding-right: 16px; }
+  .b-step .dot { width: 56px; height: 56px; border-radius: 28px; display: grid; place-items: center; font-size: 28px; font-weight: 700;
+                 position: relative; z-index: 1; }
+  .b-step .dot svg { width: 56px; height: 56px; }
+  .b-step .dot.todo { box-shadow: inset 0 0 0 4px var(--idle); color: var(--ink-2); background: var(--panel); }
+  .b-step .dot.done { background: var(--panel-2); box-shadow: inset 0 0 0 4px var(--accent); }
+  .b-step .dot.now { background: var(--accent); color: var(--on-accent); }
+  .b-step .conn { position: absolute; left: 56px; right: 0; top: 26px; height: 4px; background: var(--idle); }
+  .b-step .conn.done { background: var(--accent); }
+  .b-step .lab { margin-top: 14px; font-size: 28px; line-height: 38px; color: var(--ink-2); }
+  .b-step.now .lab { color: var(--ink); font-weight: 700; }
+  .b-step.done .lab { color: var(--ink); }
+  .b-step .pbar { height: 12px; border-radius: 6px; background: var(--panel-2); margin-top: 14px; margin-right: 16px; overflow: hidden; }
+  .b-step .pbar i { display: block; height: 100%; background: var(--accent); }
+  .b-btn { display: inline-flex; align-items: center; justify-content: center; gap: 16px; height: 88px; padding: 0 36px; border-radius: 12px;
+           background: var(--panel-2); font-size: 32px; font-weight: 700; color: var(--ink); white-space: nowrap; }
+  .b-btn svg { width: 40px; height: 40px; color: var(--accent); }
+  .b-ops { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  .b-ops .b-btn.on { box-shadow: inset 0 0 0 4px var(--accent); color: var(--accent); }
+  .b-ops .b-btn.off { color: var(--muted); }
+  .b-ops .b-btn.off svg { color: var(--muted); }
 </style>
 </head>
 <body>
-
-<p class="cap">板（テクスチャーの画素のまま。幅1280）</p>
-<div id="vr-panels">
-  <div class="panel" id="vr-r1">
-    <canvas data-glyph="normal" data-size="80" data-color="--vr-signal"></canvas>
-    <div><p class="h" data-wrap="トラッカーの|追跡が|始まりません"></p><p class="a" data-wrap="腰の|電源だけを|入れ直してください。\nほかの|トラッカーと|ドングルは|そのままにしてください。"></p></div>
-  </div>
-  <div class="panel" id="vr-r1-more">
-    <canvas data-glyph="normal" data-size="80" data-color="--vr-signal"></canvas>
-    <div><p class="h" data-wrap="トラッカーの|追跡が|まだ|始まりません|（ほか1件）"></p><p class="a" data-wrap="腰の|電源だけを|入れ直してください。\nほかの|トラッカーと|ドングルは|そのままにしてください。"></p></div>
-  </div>
-  <div class="panel" id="vr-r3">
-    <canvas data-glyph="normal" data-size="80" data-color="--vr-signal"></canvas>
-    <div><p class="h" data-wrap="トラッカー3の|位置合わせが|終わりません"></p><p class="a" data-wrap="手に持って、|部屋の中を|見回すように|ゆっくり動かしてください"></p></div>
-  </div>
-  <div class="panel" id="vr-r1-ok">
-    <canvas data-glyph="normal" data-size="80" data-color="--vr-ok"></canvas>
-    <div><p class="h" data-wrap="追跡が|始まらない|問題が|直りました"></p></div>
-  </div>
-</div>
-
-<p class="cap" style="margin-top:28px">長い名前と長いしきい値（名前は8文字に縮める。6.4）</p>
-<div id="vr-long">
-  <!-- Host named in config.toml "腰のトラッカー（ベルトの後ろ、古いほう）" (20 characters): shortened to 7 characters + "…" (6.4) -->
-  <div class="panel">
-    <canvas data-glyph="normal" data-size="80" data-color="--vr-signal"></canvas>
-    <div><p class="h" data-wrap="トラッカーの|追跡が|まだ|始まりません|（ほか2件）"></p><p class="a" data-wrap="腰のトラッカー…の|電源だけを|入れ直してください。\nほかの|トラッカーと|ドングルは|そのままにしてください。"></p></div>
-  </div>
-  <!-- Host not known yet: the fixed words from the design (6.2) -->
-  <div class="panel">
-    <canvas data-glyph="normal" data-size="80" data-color="--vr-signal"></canvas>
-    <div><p class="h" data-wrap="左足のトラッカーが|地図を|受け取れていません|（ほか1件）"></p><p class="a" data-wrap="ホストのトラッカーの|近くに|置いて待ってください"></p></div>
-  </div>
-  <!-- R5 with r5.wait_s = 90 -->
-  <div class="panel">
-    <canvas data-glyph="normal" data-size="80" data-color="--vr-signal"></canvas>
-    <div><p class="h" data-wrap="左足のトラッカーの|追跡が|1分30秒以上|途切れています"></p><p class="a" data-wrap="カメラの前の|物を|どけて、|明るい方へ向けてください"></p></div>
-  </div>
-  <!-- R5 with r5.wait_s = 5400, merged with 2 more: the tallest headline (3 lines) -->
-  <div class="panel">
-    <canvas data-glyph="normal" data-size="80" data-color="--vr-signal"></canvas>
-    <div><p class="h" data-wrap="左足のトラッカーの|追跡が|1時間30分以上|途切れています|（ほか2件）"></p><p class="a" data-wrap="カメラの前の|物を|どけて、|明るい方へ向けてください"></p></div>
-  </div>
-</div>
-
+<p class="cap">案内の板（テクスチャーの画素のまま。幅1280）</p>
+<div id="vr-panels"></div>
+<p class="cap" style="margin-top:28px">長い呼び名、まとめた案内、長いしきい値</p>
+<div id="vr-long"></div>
 <p class="cap" style="margin-top:28px">視野の中（横100°。板は幅24°、中心は10.6°下）</p>
-<div id="vr-view">
-  <div class="view room"><span class="cross"></span>
-    <div class="anchor"><div class="panel">
-      <canvas data-glyph="normal" data-size="80" data-color="--vr-signal"></canvas>
-      <div><p class="h" data-wrap="トラッカーの|追跡が|始まりません"></p><p class="a" data-wrap="腰の|電源だけを|入れ直してください。\nほかの|トラッカーと|ドングルは|そのままにしてください。"></p></div>
-    </div></div>
-  </div>
-  <div class="view day"><span class="cross"></span>
-    <div class="anchor"><div class="panel">
-      <canvas data-glyph="normal" data-size="80" data-color="--vr-signal"></canvas>
-      <div><p class="h" data-wrap="左足が|地図を|受け取れていません"></p><p class="a" data-wrap="腰の|近くに|置いて待ってください"></p></div>
-    </div></div>
-  </div>
-</div>
-
+<div id="vr-view"></div>
+<p class="cap" style="margin-top:28px">ダッシュボードの板（仮。1600×960）</p>
+<div id="vr-board-wrap"><div class="board" id="vr-board"></div></div>
 <script>
-  // Panel text in texture pixels, independent of the zoom used to show the panel on this page (4.1).
-  const family = getComputedStyle(document.documentElement).getPropertyValue("--font");
-  document.querySelectorAll(".panel .h").forEach((el) => { el.dataset.wrapWidth = "1044"; el.dataset.wrapFont = `700 64px ${family}`; });
-  document.querySelectorAll(".panel .a").forEach((el) => { el.dataset.wrapWidth = "1044"; el.dataset.wrapFont = `400 54px ${family}`; });
+(() => {
+  const I = window.OpenUTIcons, X = window.OpenUTText, W = X.words;
+  const fam = getComputedStyle(document.documentElement).getPropertyValue("--font").trim();
+  const esc = (s) => s.replace(/[&<>]/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[m]));
+  const wrapH = (s, font, w) => window.OpenUTWrap.wrap(s, font, w).map(esc).join("<br>");
+  const L = (hub, tail, host) => X.label({ hub, tail, host });
+
+  // One notice panel: glyph 80 (fault or ok), headline 64 Bold, action 54 Regular, width 1044 (4.1).
+  function panel(n, ok) {
+    const g = I.state(ok ? "ok" : "fault", 80, ok ? "var(--ok)" : "var(--fault)");
+    return `<div class="panel">${g}<div><p class="h">${wrapH(n.headline, `700 64px ${fam}`, 1044)}</p>` +
+      (n.action ? `<p class="a">${wrapH(n.action, `400 54px ${fam}`, 1044)}</p>` : "") + `</div></div>`;
+  }
+  const H = L(2, "0001"), T = L(1, "0002");
+  document.getElementById("vr-panels").innerHTML =
+    panel(X.notice("R1", "Raised", "", H)) +
+    panel(X.notice("R4", "Raised", L(null, "0003"), "")) +
+    panel(X.notice("R2", "Raised", T, H)) +
+    panel(X.notice("R1", "Resolved", "", ""), true);
+
+  // Long: a tail of the whole serial (13 characters), the unknown host, 99 merged notices, r5.wait_s = 86399.
+  const longT = L(5, "00XX0000A0001"), noHost = L(null, null, true);
+  document.getElementById("vr-long").innerHTML =
+    panel(X.notice("R1", "Escalated", "", longT, { more: 99 })) +
+    panel(X.notice("R2", "Raised", longT, noHost, { more: 99 })) +
+    panel(X.notice("R5", "Raised", longT, "", { wait: 86399, more: 99 })) +
+    panel(X.notice("R4", "Resolved", longT, "", { more: 99 }), true);
+
+  const v = (cls, n) => `<div class="view ${cls}"><span class="cross"></span><div class="anchor">${panel(n)}</div></div>`;
+  document.getElementById("vr-view").innerHTML = v("room", X.notice("R1", "Raised", "", H)) + v("day", X.notice("R2", "Raised", T, H));
+
+  // Dashboard board (4.6, provisional): status band, devices, the guide frame and the three operations.
+  const devs = [
+    { hub: 3, tail: "0001", st: "ok" }, { hub: 1, tail: "0002", st: "ok", host: true }, { hub: 2, tail: "0003", st: "ok" },
+    { hub: 5, tail: "0004", st: "ok" }, { hub: 4, tail: "0005", st: "ok" },
+  ];
+  const col = { ok: "var(--ok)", wait: "var(--wait)", fault: "var(--fault)" };
+  const tiles = devs.map((d) =>
+    `<div class="b-tile"><div class="sbar" style="background:${col[d.st]}"></div>` +
+    `<div class="nm">${W.tracker}${d.hub}</div><div class="tl">…<b>${d.tail}</b></div>` +
+    `<div class="pc">${I.tracker(col[d.st], "solid")}</div>` +
+    `<div class="hostrow">${d.host ? `<span class="b-tag">${W.host}</span>` : ""}</div>` +
+    `<div class="st">${I.state(d.st, 28, col[d.st])}<span style="color:${col[d.st]}">${W.state[d.st]}</span></div></div>`).join("");
+  const steps = ["トラッカーと|コントローラーを|重ねて持つ", "8の字を描いて|手首を回す", "終わり"];
+  const stepsH = steps.map((t, i) => {
+    const k = i < 1 ? "done" : i === 1 ? "now" : "todo";
+    const dot = k === "done" ? I.check(56, "var(--accent)") : String(i + 1);
+    return `<div class="b-step ${k}"><div class="dot ${k}">${dot}</div>${i < 2 ? `<div class="conn${k === "done" ? " done" : ""}"></div>` : ""}` +
+      `<div class="lab">${wrapH(t, `${k === "now" ? 700 : 400} 28px ${fam}`, 300)}</div>` +
+      (k === "now" ? `<div class="pbar"><i style="width:60%"></i></div>` : "") + `</div>`;
+  }).join("");
+  document.getElementById("vr-board").innerHTML =
+    `<div class="b-band"><div class="ov" style="color:var(--ok)">${I.state("ok", 56, "var(--ok)")}<span>${W.overall.ok}</span></div>` +
+      `<div class="ln">${esc(X.plain(X.guide.G5.line))}</div></div>` +
+    `<div class="b-dev"><div class="b-tile b-dongle"><div class="nm">${W.dongleName}</div><div class="tl">&nbsp;</div>` +
+      `<div class="pc">${I.dongle("on")}</div><div class="hostrow"></div><div class="st" style="font-size:28px">${W.dongle.on}</div></div><div class="b-sep"></div>${tiles}</div>` +
+    `<div class="b-low"><div class="b-frame"><div class="hd"><div class="nm">${I.op("cal", "var(--accent)")}<span>${W.ops.cal}</span></div>` +
+      `<span class="b-btn" style="height:72px">${W.stop}</span></div><div class="b-steps">${stepsH}</div></div>` +
+      `<div class="b-ops"><span class="b-btn off">${I.op("pair")}${W.ops.pair}</span><span class="b-btn off">${I.op("map")}${W.ops.map}</span>` +
+      `<span class="b-btn on">${I.op("cal")}${W.ops.cal}</span></div></div>`;
+})();
 </script>
 </body>
 </html>

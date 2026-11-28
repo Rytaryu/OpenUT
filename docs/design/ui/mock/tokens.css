@@ -1,4 +1,4 @@
-/* OpenUT M1 design tokens (mirrors docs/design/ui/m1.md, section 1).
+/* OpenUT design tokens, 4th version (mirrors docs/design/ui/m1.md, section 1).
    The app is drawn with egui / fontdue, not with this CSS. This file only feeds the mockups. */
 
 :root {
@@ -6,36 +6,34 @@
      The screenshots in shots/ were taken on Linux with Noto Sans JP standing in. */
   --font: "Yu Gothic UI", "Meiryo UI", "Noto Sans JP", sans-serif;
 
-  /* Status window: one dark theme, whatever the Windows setting (1.2) */
-  --bg: #141A22;
-  --tile: #1C2430;
-  --line: #2A3441;
-  --ink: #E8EDF3;
-  --ink-2: #9AA6B5;
-  --track: #66748A;     /* 1 px outline of a stage not reached yet */
-  --reach: #4D79B8;     /* stage passed */
-  --stage: #8DB6F5;     /* current stage, buttons, host tag, focus */
-  --on-stage: #0E1A2C;
-  --ok-reach: #2E8F6C;  /* stage passed, when the tracker is tracking */
-  --ok: #5FD3A6;        /* current stage when tracking; strip of a "connected again" notice */
-  --on-ok: #0B2A1F;
-  --idle: #475263;      /* current cell of a tracker that is not connected */
-  --signal: #F2A33A;    /* notice strip, notice dot of the mark */
-  --hover: #263142;
+  /* Main window: one dark theme (1.2) */
+  --bg: #1E2228;        /* window ground */
+  --panel: #282D34;     /* status band, tiles, guide frame */
+  --panel-2: #333941;   /* buttons at rest, list rows, hover */
+  --line: #3B424B;      /* dividers */
+  --ink: #EEF1F4;       /* text */
+  --ink-2: #A9B2BC;     /* labels, the part of a serial before the tail, values shown greyed */
+  --muted: #8D96A1;     /* marks shown greyed (last values, not current) */
+  --idle: #727B86;      /* outline of a tracker that is not connected, steps not reached */
+  --accent: #9DB2FF;    /* buttons, focus, host tag, the current step of a guide */
+  --on-accent: #15181C;
 
-  /* Mark on Windows surfaces (taskbar, toast): one colour that works on light and dark */
-  --icon-normal: #3A6FB8;
-  --icon-badge: #C8650F;
-  --icon-blind: #7D8794;
-  --icon-ok: #2E9E77;
+  /* The three states of W-10 (the only strong colours on the screen) */
+  --ok: #5BC98B;        /* 正常 */
+  --wait: #E8B547;      /* 待機中 */
+  --fault: #FF7B6E;     /* 異常 */
+  --on-state: #15181C;  /* text on a filled state colour */
 
-  /* SteamVR panel */
-  --vr-panel: rgba(20, 26, 34, 0.94);
+  /* Tray, toast logo, window icon: one colour each that works on light and dark Windows surfaces */
+  --icon-ok: #2F9466;
+  --icon-wait: #B07A12;
+  --icon-fault: #D64A3C;
+
+  /* SteamVR panels */
+  --vr-panel: rgba(30, 34, 40, 0.94);
   --vr-edge: rgba(255, 255, 255, 0.14);
   --vr-ink: #F3F6FA;
   --vr-ink-2: #C3CEDC;
-  --vr-signal: #F2A33A;
-  --vr-ok: #5FD3A6;
 }
 
 * { box-sizing: border-box; }
@@ -43,6 +41,6 @@
 html, body {
   margin: 0;
   font-family: var(--font);
-  color: #1B2230;
-  background: #C9D0D8;
+  color: var(--ink);
+  background: #101317;
 }
