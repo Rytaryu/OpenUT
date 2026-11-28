@@ -1,4 +1,4 @@
-//! User-facing view of the watcher state (design §7.4).
+//! Typed watcher state for status rendering (design §7.4).
 
 mod hub_gate;
 
@@ -13,8 +13,7 @@ use crate::event::Battery;
 use crate::notice::Notice;
 use crate::rules::{RuleId, Step};
 use crate::state::{Connection, DeviceView, DongleState, HubState, Identity, Phase, Snapshot};
-use crate::text::{TrackerLabel, device_label, fill_notice, serial_tail_length};
-use crate::tracker::Serial;
+use crate::tracker::{Serial, TrackerLabel, device_label, serial_tail_length};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum WatchHealth {
@@ -39,34 +38,21 @@ pub enum UserState {
     Fault,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum GuideStepId {
-    G1,
-    G2,
-    G3,
-    G4,
-    G5,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct GuideStep {
-    pub id: GuideStepId,
-    pub done: bool,
-    pub progress: Option<(u16, u16)>,
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Line {
-    Fault { headline: String, action: String },
-    Guide(GuideStepId),
+    Fault(FaultRow),
+    HubStopped,
     Health(WatchHealth),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FaultRow {
-    pub headline: String,
-    pub action: String,
-    pub resolved: bool,
+    pub rule: RuleId,
+    pub step: Step,
+    pub target: TrackerLabel,
+    /// Host identified when the R2 notice was created, if known.
+    pub host: Option<TrackerLabel>,
+    pub repetitions: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -74,8 +60,6 @@ pub struct DisplayModel {
     pub overall: Overall,
     pub line: Option<Line>,
     pub faults: Vec<FaultRow>,
-    /// Setup progress for the watcher. The production UI follows D-46 and omits a checklist.
-    pub guide: Vec<GuideStep>,
     pub dongle: DongleState,
     pub devices: Vec<DeviceRow>,
     pub greyed: bool,
@@ -144,16 +128,6 @@ pub fn view(
         .iter()
         .map(|source| device_row(source, notices, tail_length))
         .collect();
-    let (ready, connected) = tracker_counts(&devices);
-    let hub_stopped =
-        hub == HubLive::Stopped || hub == HubLive::Unknown && snapshot.hub == HubState::Stopped;
-    let guide = guide_steps(
-        health != WatchHealth::NotFound && !hub_stopped,
-        dongle,
-        ready,
-        connected,
-    );
-
     let mut ordered_notices: Vec<_> = notices
         .iter()
         .filter(|notice| {
@@ -169,19 +143,19 @@ pub fn view(
                 .zip(&devices)
                 .find(|(source, _)| targets(notice, source))
                 .map_or(&notice.target, |(_, row)| &row.label);
-            let (headline, action) = fill_notice(&notice.text, target);
             FaultRow {
-                headline,
-                action,
-                resolved: notice.step == Step::Resolved,
+                rule: notice.rule,
+                step: notice.step,
+                target: target.clone(),
+                host: notice.host.clone(),
+                repetitions: notice.repetitions,
             }
         })
         .collect();
 
     let (overall, line, greyed) = match availability {
-        Availability::Stopped | Availability::NotFound => {
-            (Overall::Waiting, Some(Line::Guide(GuideStepId::G1)), false)
-        }
+        Availability::Stopped => (Overall::Waiting, Some(Line::HubStopped), false),
+        Availability::NotFound => (Overall::Waiting, Some(Line::Health(health)), false),
         Availability::Starting => (
             Overall::Waiting,
             (health != WatchHealth::Ok).then_some(Line::Health(health)),
@@ -196,19 +170,11 @@ pub fn view(
                 .filter(|(notice, _)| is_active(notice))
                 .max_by_key(|(notice, _)| (notice.priority, notice.at, notice.episode));
             if let Some((_, fault)) = top_fault {
-                let line = Line::Fault {
-                    headline: fault.headline.clone(),
-                    action: fault.action.clone(),
-                };
-                (Overall::Fault, Some(line), false)
-            } else if connected > 0 && ready == connected {
-                (Overall::Ok, Some(Line::Guide(GuideStepId::G5)), false)
+                (Overall::Fault, Some(Line::Fault(fault.clone())), false)
+            } else if all_connected_tracking(&devices) {
+                (Overall::Ok, None, false)
             } else {
-                let line = guide
-                    .iter()
-                    .find(|step| !step.done)
-                    .map(|step| Line::Guide(step.id));
-                (Overall::Waiting, line, false)
+                (Overall::Waiting, None, false)
             }
         }
     };
@@ -217,7 +183,6 @@ pub fn view(
         overall,
         line,
         faults,
-        guide,
         dongle,
         devices,
         greyed,
@@ -278,46 +243,10 @@ fn targets(notice: &Notice, device: &DeviceView) -> bool {
     }
 }
 
-fn tracker_counts(devices: &[DeviceRow]) -> (usize, usize) {
-    devices
+fn all_connected_tracking(devices: &[DeviceRow]) -> bool {
+    let mut connected = devices
         .iter()
         .filter(|row| row.connection != Connection::Disconnected)
-        .fold((0, 0), |(ready, connected), row| {
-            (
-                ready + usize::from(row.state == Some(UserState::Ok)),
-                connected + 1,
-            )
-        })
-}
-
-fn guide_steps(
-    hub_ready: bool,
-    dongle: DongleState,
-    ready: usize,
-    connected: usize,
-) -> Vec<GuideStep> {
-    use GuideStepId::{G1, G2, G3, G4, G5};
-    let mut all_done = true;
-    [
-        (G1, hub_ready),
-        (G2, dongle != DongleState::Disconnected),
-        (G3, connected > 0),
-        (G4, ready == connected),
-        (G5, false),
-    ]
-    .into_iter()
-    .map(|(id, done)| {
-        all_done &= done;
-        GuideStep {
-            id,
-            done: all_done,
-            progress: (id == G4 && !all_done).then(|| {
-                (
-                    u16::try_from(ready).unwrap_or(u16::MAX),
-                    u16::try_from(connected).unwrap_or(u16::MAX),
-                )
-            }),
-        }
-    })
-    .collect()
+        .peekable();
+    connected.peek().is_some() && connected.all(|row| row.state == Some(UserState::Ok))
 }

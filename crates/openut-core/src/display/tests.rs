@@ -1,7 +1,6 @@
 use super::*;
 use crate::event::{Event, Timed};
 use crate::state::{ConnId, State};
-use crate::text::notice_text;
 use crate::time::{LogTime, UtcOffset};
 use crate::tracker::{HubNumber, TrackerKey};
 
@@ -70,8 +69,10 @@ fn notice(
         conn,
         step,
         at: LogTime(i64::from(time)),
-        text: notice_text(rule, step, 60, &target),
         target,
+        host: None,
+        repetitions: 1,
+        other_count: 0,
         push: true,
         priority: match rule {
             RuleId::R1 => 5,
@@ -87,11 +88,16 @@ fn current(snapshot: &Snapshot, live: &[Notice]) -> DisplayModel {
     view(snapshot, live, WatchHealth::Ok, HubLive::Running, false)
 }
 
-fn labels(model: &DisplayModel) -> Vec<String> {
+fn labels(model: &DisplayModel) -> Vec<(Option<u16>, Option<&str>)> {
     model
         .devices
         .iter()
-        .map(|row| row.label.to_string())
+        .map(|row| {
+            (
+                row.label.hub_number.map(|number| number.0),
+                row.label.serial_tail.as_deref(),
+            )
+        })
         .collect()
 }
 
@@ -143,7 +149,7 @@ fn tracking_waiting_and_disconnected_rows_use_only_public_states() {
     let model = current(&source, &[r4]);
     assert_eq!(model.overall, Overall::Waiting);
     assert_eq!(model.devices[2].state, None);
-    assert!(model.faults[0].resolved);
+    assert_eq!(model.faults[0].step, Step::Resolved);
 
     let unassigned = notice(RuleId::R1, Step::Raised, 4, None, None);
     let model = current(&source, &[unassigned]);
@@ -181,7 +187,8 @@ fn a_notice_follows_a_provisional_connection_into_the_roster_but_not_to_a_new_co
     let model = current(&before, std::slice::from_ref(&r1));
     assert!(model.devices[0].serial.is_none());
     assert_eq!(model.devices[0].state, Some(UserState::Fault));
-    assert!(model.faults[0].action.starts_with("ホストのトラッカー"));
+    assert!(model.faults[0].target.host);
+    assert_eq!(model.faults[0].target.serial_tail, None);
 
     apply(
         &mut state,
@@ -195,12 +202,8 @@ fn a_notice_follows_a_provisional_connection_into_the_roster_but_not_to_a_new_co
     let known = current(&state.snapshot(LogTime(1_000)), std::slice::from_ref(&r1));
     assert_eq!(known.devices.len(), 1);
     assert_eq!(known.devices[0].state, Some(UserState::Fault));
-    assert_eq!(known.devices[0].label.to_string(), "トラッカー 7（…0001）");
-    assert!(
-        known.faults[0]
-            .action
-            .starts_with(&known.devices[0].label.to_string())
-    );
+    assert_eq!(labels(&known), [(Some(7), Some("0001"))]);
+    assert_eq!(known.faults[0].target, known.devices[0].label);
 
     apply(
         &mut state,
@@ -222,12 +225,13 @@ fn a_notice_follows_a_provisional_connection_into_the_roster_but_not_to_a_new_co
     let reconnected = state.snapshot(LogTime(4_000));
     let mut anonymous_r4 = notice(RuleId::R4, Step::Raised, 2, None, conn);
     anonymous_r4.target.serial_tail = Some("SYNTH".into());
+    let fallback = anonymous_r4.target.clone();
     let model = current(&reconnected, &[r1.clone(), anonymous_r4]);
     assert_eq!(model.overall, Overall::Fault);
     assert_eq!(model.devices[0].state, None);
     assert_eq!(model.devices[1].state, Some(UserState::Waiting));
     assert!(!model.devices[0].host);
-    assert!(model.faults[0].headline.starts_with("トラッカー（…SYNTH）"));
+    assert_eq!(model.faults[0].target, fallback);
 
     let mut escalated = notice(
         RuleId::R1,
@@ -266,9 +270,9 @@ fn assert_inactive_devices(model: &DisplayModel) {
     assert_eq!(
         labels(model),
         [
-            "トラッカー（…0001）",
-            "トラッカー（…0002）",
-            "トラッカー（…0003）"
+            (None, Some("0001")),
+            (None, Some("0002")),
+            (None, Some("0003"))
         ]
     );
     for row in &model.devices {
@@ -287,8 +291,7 @@ fn stopped_hub_overrides_catch_up_and_health_and_uses_only_the_roster() {
     let (mut source, live) = current_with_faults();
     let stopped = view(&source, &live, WatchHealth::Ok, HubLive::Stopped, false);
     assert_inactive_devices(&stopped);
-    assert_eq!(stopped.line, Some(Line::Guide(GuideStepId::G1)));
-    assert!(stopped.guide.iter().all(|step| !step.done));
+    assert_eq!(stopped.line, Some(Line::HubStopped));
     assert!(!stopped.pick_folder);
     for health in [WatchHealth::Ok, WatchHealth::Stalled] {
         assert_eq!(
@@ -334,10 +337,6 @@ fn starting_hub_hides_the_previous_session_even_during_catch_up() {
     assert_inactive_devices(&starting);
     assert!(!starting.pick_folder);
     assert_eq!(starting.line, None);
-    assert_eq!(
-        starting.guide.iter().find(|step| !step.done).unwrap().id,
-        GuideStepId::G3
-    );
     assert_eq!(
         view(&source, &live, WatchHealth::Ok, HubLive::Starting, true),
         starting
@@ -404,7 +403,7 @@ fn missing_and_unconfirmed_logs_have_their_own_lines_and_visibility() {
         true,
     );
     assert_eq!(missing.overall, Overall::Waiting);
-    assert_eq!(missing.line, Some(Line::Guide(GuideStepId::G1)));
+    assert_eq!(missing.line, Some(Line::Health(WatchHealth::NotFound)));
     assert!(missing.pick_folder);
     assert!(!missing.greyed);
     assert!(missing.devices.is_empty());
@@ -412,38 +411,39 @@ fn missing_and_unconfirmed_logs_have_their_own_lines_and_visibility() {
 }
 
 #[test]
-fn guide_uses_the_first_undone_step_and_reports_tracking_progress() {
+fn tracking_summary_is_ready_only_when_all_connected_trackers_are_ready() {
     let mut source = snapshot(vec![
         device(1, Some(S1), Phase::Tracking),
         device(2, Some(S2), Phase::Tracking),
         device(3, Some(S3), Phase::Relocalizing),
+        device(4, Some(S4), Phase::Disconnected),
     ]);
     let running = current(&source, &[]);
-    assert_eq!(running.line, Some(Line::Guide(GuideStepId::G4)));
-    assert_eq!(
-        running
-            .guide
-            .iter()
-            .map(|step| step.done)
-            .collect::<Vec<_>>(),
-        [true, true, true, false, false]
-    );
-    assert_eq!(running.guide[3].progress, Some((2, 3)));
-    source.dongle = DongleState::Disconnected;
-    let unplugged = current(&source, &[]);
-    assert_eq!(unplugged.line, Some(Line::Guide(GuideStepId::G2)));
-    assert!(unplugged.guide[1..].iter().all(|step| !step.done));
+    assert_eq!(running.overall, Overall::Waiting);
+    assert_eq!(running.line, None);
 
     source.dongle = DongleState::Connected;
     source.devices[2].phase = Phase::Tracking;
     let tracking = current(&source, &[]);
     assert_eq!(tracking.overall, Overall::Ok);
-    assert_eq!(tracking.line, Some(Line::Guide(GuideStepId::G5)));
-    assert!(tracking.guide[..4].iter().all(|step| step.done));
-    assert_eq!(tracking.guide[3].progress, None);
+    assert_eq!(tracking.line, None);
     let empty = current(&snapshot(vec![]), &[]);
     assert_eq!(empty.overall, Overall::Waiting);
-    assert_eq!(empty.line, Some(Line::Guide(GuideStepId::G3)));
+    assert_eq!(empty.line, None);
+}
+
+#[test]
+fn r2_fault_keeps_the_original_host_and_current_target() {
+    let source = snapshot(vec![device(1, Some(S1), Phase::MapSyncing)]);
+    let mut r2 = notice(RuleId::R2, Step::Raised, 1, Some(S1), None);
+    r2.host = Some(TrackerLabel {
+        hub_number: Some(HubNumber(2)),
+        serial_tail: Some("0002".into()),
+        host: true,
+    });
+    let model = current(&source, std::slice::from_ref(&r2));
+    assert_eq!(model.faults[0].host, r2.host);
+    assert_eq!(model.faults[0].target, model.devices[0].label);
 }
 
 #[test]
@@ -451,6 +451,7 @@ fn top_line_prioritizes_notices_before_time_and_list_orders_newest_first() {
     let (source, mut live) = current_with_faults();
     live[0].at = LogTime(1);
     live[1].at = LogTime(10);
+    live[1].repetitions = 2;
     let escalated = notice(RuleId::R1, Step::Escalated, 5, Some(S3), None);
     let recovery = notice(RuleId::R4, Step::Resolved, 11, Some(S1), None);
     let model = current(
@@ -462,23 +463,17 @@ fn top_line_prioritizes_notices_before_time_and_list_orders_newest_first() {
         model
             .faults
             .iter()
-            .map(|row| row.headline.as_str())
+            .map(|row| (row.rule, row.step, row.target.hub_number))
             .collect::<Vec<_>>(),
         [
-            "トラッカー 1（…0001）がつながりました",
-            "トラッカー 2（…0002）の接続が切れました",
-            "まだ追跡が始まりません",
-            "トラッカーの追跡が始まりません",
+            (RuleId::R4, Step::Resolved, Some(HubNumber(1))),
+            (RuleId::R4, Step::Raised, Some(HubNumber(2))),
+            (RuleId::R1, Step::Escalated, Some(HubNumber(3))),
+            (RuleId::R1, Step::Raised, Some(HubNumber(1))),
         ]
     );
-    let priority = &model.faults[2];
-    assert_eq!(
-        model.line,
-        Some(Line::Fault {
-            headline: priority.headline.clone(),
-            action: priority.action.clone()
-        })
-    );
+    assert_eq!(model.faults[1].repetitions, 2);
+    assert_eq!(model.line, Some(Line::Fault(model.faults[2].clone())));
 }
 
 #[test]
@@ -492,9 +487,9 @@ fn labels_stay_in_serial_order_across_number_host_and_tail_changes() {
     assert_eq!(
         labels(&model(&rows)),
         [
-            "トラッカー 1（…0001）",
-            "トラッカー 2（…0002）",
-            "トラッカー 3（…0003）"
+            (Some(1), Some("0001")),
+            (Some(2), Some("0002")),
+            (Some(3), Some("0003"))
         ]
     );
 
@@ -502,21 +497,22 @@ fn labels_stay_in_serial_order_across_number_host_and_tail_changes() {
     assert_eq!(
         labels(&model(&rows)),
         [
-            "トラッカー（…0001）",
-            "トラッカー 2（…0002）",
-            "トラッカー 3（…0003）"
+            (None, Some("0001")),
+            (Some(2), Some("0002")),
+            (Some(3), Some("0003"))
         ]
     );
     rows[1] = device(3, Some(S1), Phase::Tracking);
     rows[0] = device(1, Some(S3), Phase::Tracking);
     rows[2].host = true;
-    let swapped = labels(&model(&rows));
+    let swapped_model = model(&rows);
+    let swapped = labels(&swapped_model);
     assert_eq!(
         swapped,
         [
-            "トラッカー 3（…0001）",
-            "トラッカー 2（…0002）",
-            "トラッカー 1（…0003）"
+            (Some(3), Some("0001")),
+            (Some(2), Some("0002")),
+            (Some(1), Some("0003"))
         ]
     );
     rows[2].host = false;
@@ -532,18 +528,14 @@ fn labels_stay_in_serial_order_across_number_host_and_tail_changes() {
     assert_eq!(
         labels(&extended),
         [
-            "トラッカー 3（…A0001）",
-            "トラッカー 2（…A0002）",
-            "トラッカー 1（…A0003）",
-            "トラッカー 5（…A0005）",
-            "トラッカー 4（…B0001）",
+            (Some(3), Some("A0001")),
+            (Some(2), Some("A0002")),
+            (Some(1), Some("A0003")),
+            (Some(5), Some("A0005")),
+            (Some(4), Some("B0001")),
         ]
     );
-    assert!(
-        extended.faults[0]
-            .action
-            .starts_with(&extended.devices[0].label.to_string())
-    );
+    assert_eq!(extended.faults[0].target, extended.devices[0].label);
     rows.insert(0, device(6, None, Phase::WaitingWifi));
     rows.insert(0, device(7, None, Phase::Tracking));
     let provisional = model(&rows);

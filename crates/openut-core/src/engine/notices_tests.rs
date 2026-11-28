@@ -37,24 +37,28 @@ fn apply(engine: &mut Engine, seconds: i64, event: Event) {
 }
 
 fn connect(engine: &mut Engine, seconds: i64, tracker: TrackerKey, serial: &str) {
-    apply(
-        engine,
-        seconds,
+    connect_at(engine, at(seconds), tracker, serial);
+}
+
+fn connect_at(engine: &mut Engine, at: LogTime, tracker: TrackerKey, serial: &str) {
+    for event in [
         Event::TrackerAdded {
             tracker,
             usb: false,
         },
-    );
-    apply(
-        engine,
-        seconds,
         Event::SerialKnown {
             tracker,
             serial: Serial(serial.to_owned()),
             hub_number: None,
             firmware: None,
         },
-    );
+    ] {
+        engine.apply(Timed {
+            at,
+            offset: UtcOffset(0),
+            event,
+        });
+    }
 }
 
 fn cut(engine: &mut Engine, seconds: i64, tracker: TrackerKey) {
@@ -229,16 +233,20 @@ fn keeps_r2_and_r4_deadlines_and_r1_escalation_during_a_hub_stop() {
     assert_eq!(engine.stats().pushes, 1);
 }
 
-fn engine_with_waiting_r4() -> Engine {
+fn engine_after_first_push() -> Engine {
     let mut engine = engine();
     connect(&mut engine, 0, A, SERIAL_A);
     connect(&mut engine, 0, HOST, SERIAL_B);
     cut(&mut engine, 40, A);
     unanswered_requests(&mut engine, 40, HOST);
-    assert_eq!(
-        pushes(&engine.drain()),
-        [(RuleId::R1, Step::Raised, Some(HOST))]
-    );
+    let output = engine.drain();
+    assert_eq!(pushes(&output), [(RuleId::R1, Step::Raised, Some(HOST))]);
+    assert!(notices(&output).any(|n| n.push && n.at == at(42)));
+    engine
+}
+
+fn engine_with_waiting_r4() -> Engine {
+    let mut engine = engine_after_first_push();
     engine.advance_to(at(46));
     let output = engine.drain();
     assert!(
@@ -293,6 +301,57 @@ fn recovery_at_the_notice_deadline_cancels_the_waiting_push() {
     );
     assert!(pushes(&output).is_empty());
     assert_eq!(engine.stats().pushes, 1);
+}
+
+#[test]
+fn recovery_cancels_a_ready_push_before_drain_without_recording_delivery() {
+    let mut engine = engine_after_first_push();
+    engine.advance_to(at(46));
+    let recovered_at = LogTime(52_001);
+    // Advancing beyond the gap prepares the push at 52.000. The caller has only
+    // received the R1 push when the same tracker reconnects.
+    engine.advance_to(recovered_at);
+    connect_at(&mut engine, recovered_at, A, SERIAL_A);
+
+    let output = engine.drain();
+    assert_eq!(
+        detections(&output)
+            .map(|d| (d.rule, d.step, d.tracker, d.at))
+            .collect::<Vec<_>>(),
+        [
+            (RuleId::R4, Step::Raised, Some(A), at(45)),
+            (RuleId::R4, Step::Resolved, Some(A), recovered_at),
+        ],
+    );
+    assert!(pushes(&output).is_empty());
+    assert!(notices(&output).any(|n| {
+        (n.rule, n.step, n.tracker, n.at) == (RuleId::R4, Step::Resolved, Some(A), recovered_at)
+    }));
+    assert_eq!(
+        engine
+            .live_notices()
+            .iter()
+            .filter(|notice| notice.rule == RuleId::R4)
+            .map(|notice| (notice.step, notice.at))
+            .collect::<Vec<_>>(),
+        [(Step::Resolved, recovered_at)],
+    );
+    assert_eq!(engine.stats().pushes, 1);
+
+    // The cancelled push neither delays another rule nor suppresses a later
+    // disconnect of the same tracker within the cooldown.
+    apply(&mut engine, 53, Event::HostWifiObtained { host: None });
+    assert_eq!(
+        pushes(&engine.drain()),
+        [(RuleId::R1, Step::Resolved, Some(HOST))],
+    );
+    cut(&mut engine, 83, A);
+    engine.advance_to(at(89));
+    assert_eq!(
+        pushes(&engine.drain()),
+        [(RuleId::R4, Step::Raised, Some(A))],
+    );
+    assert_eq!(engine.stats().pushes, 3);
 }
 
 #[test]

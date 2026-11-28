@@ -7,6 +7,5 @@ pub mod notice;
 pub mod rules;
 pub mod state;
 pub mod summary;
-pub mod text;
 pub mod time;
 pub mod tracker;
