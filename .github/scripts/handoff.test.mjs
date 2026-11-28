@@ -4,12 +4,10 @@ import {
   authorRole,
   ciState,
   closingIssues,
-  confirmationLinks,
   isApprovalOf,
   isHeld,
   isImplementationPr,
   latestReview,
-  linkedCommentIds,
   mergeMethod,
   parseBacklog,
   run,
@@ -22,7 +20,13 @@ const WAKE_PR = 1;
 const SHA = 'abcdef1234567890';
 const viaClaude = { slug: 'claude' };
 const viaChatgpt = { slug: 'chatgpt-codex-connector' };
-const comment = (body, app = null, login = OWNER) => ({ body, user: { login }, performed_via_github_app: app });
+// Every comment made here is a second later than the one before, like comments on GitHub.
+let clock = Date.parse('2026-11-28T00:00:00Z');
+const tick = () => new Date((clock += 1000)).toISOString();
+const comment = (body, app = null, login = OWNER) => {
+  const created_at = tick();
+  return { body, user: { login }, performed_via_github_app: app, created_at, updated_at: created_at };
+};
 
 test('merge method and author role follow the changed paths', () => {
   assert.equal(mergeMethod(['docs/design/a.md', 'docs/research/b.md']), 'squash');
@@ -69,50 +73,72 @@ test('only the reviewer (or the owner) can approve, and only the head commit', (
   assert.equal(latestReview([comment(`上の REVIEW: APPROVE は ${SHA}`, viaChatgpt)], OWNER), null);
 });
 
-test('a マージの条件 line holds the merge until it is confirmed', () => {
-  const ctx = { owner: OWNER, repo: REPO };
-  const held = (body, comments, extra = {}) => isHeld({ body, created_at: '2026-11-28T00:00:00Z' }, comments, { ...ctx, ...extra });
-  assert.equal(held('説明', []), false);
-  assert.equal(held('マージの条件: 設計の PR #5 が先に入っていること', []), true);
-  assert.equal(held('', [comment('前置き\nマージの条件： #5 のあと', viaChatgpt)]), true);
-  assert.equal(held('', [comment('マージの条件: A', viaChatgpt), comment('確認しました。\nマージの条件を確認: OK', viaClaude)]), false);
-  assert.equal(held('', [comment('マージの条件を確認: OK', viaClaude), comment('マージの条件: B', viaClaude)]), true);
-  assert.equal(held('', [comment('- `マージの条件:` の行はない'), comment('| `マージの条件:` | OK |')]), false);
+test('a マージの条件 line in a comment holds the merge until a later comment confirms it', () => {
+  const held = (comments, body = '説明') => isHeld({ body }, comments, { owner: OWNER });
+  assert.equal(held([]), false);
+  assert.equal(held([comment('前置き\nマージの条件： #5 のあと', viaChatgpt)]), true);
+  assert.equal(held([comment('マージの条件: A', viaChatgpt), comment('確認しました。\nマージの条件を確認: OK', viaClaude)]), false);
+  assert.equal(held([comment('- `マージの条件:` の行はない'), comment('| `マージの条件:` | OK |')]), false);
+  // A confirmation written before the hold lifts nothing, in whatever order the list comes.
+  const early = comment('マージの条件を確認: OK', viaClaude);
+  const late = comment('マージの条件: B', viaClaude);
+  assert.equal(held([early, late]), true);
+  assert.equal(held([late, early]), true);
+  // Two holds need a confirmation after the later one.
+  const first = comment('マージの条件: A', viaChatgpt);
+  const ok = comment('マージの条件を確認: OK', viaClaude);
+  const second = comment('マージの条件: B', viaChatgpt);
+  assert.equal(held([first, ok, second]), true);
+  assert.equal(held([first, ok, second, comment('マージの条件を確認: OK', viaClaude)]), false);
 });
 
-test('only the owner\'s account sets or lifts a hold, and a hold on the owner\'s consent needs the owner\'s own word', () => {
-  const ctx = { owner: OWNER, repo: REPO };
-  const at = (c, created_at, id) => ({ ...c, created_at, id });
-  const pr = { body: '説明', created_at: '2026-11-28T00:00:00Z' };
-  const ownerHold = { body: 'マージの条件: オーナーの了承（公開の範囲）', created_at: '2026-11-28T00:00:00Z' };
-  const link = (id, n = 7) => `https://github.com/${REPO}/issues/${n}#issuecomment-${id}`;
+test('a hold in the PR body lasts as long as the line is there', () => {
+  const body = '## 目的\nマージの条件: 設計の PR #5 が先に入っていること';
+  // The time of an edit of the body cannot be read, so no comment lifts it: not a role's, not the owner's.
+  assert.equal(isHeld({ body }, [], { owner: OWNER }), true);
+  assert.equal(isHeld({ body }, [comment('マージの条件を確認: OK', viaClaude)], { owner: OWNER }), true);
+  assert.equal(isHeld({ body }, [comment('マージの条件を確認: OK')], { owner: OWNER }), true);
+  assert.equal(isHeld({ body: '## 目的\n（条件は確認済みで、行を消した）' }, [comment('マージの条件を確認: OK', viaClaude)], { owner: OWNER }), false);
+});
+
+test('only the owner\'s account sets or lifts a hold, and a hold on the owner\'s consent needs the owner in person', () => {
+  const held = (comments) => isHeld({ body: '説明' }, comments, { owner: OWNER });
+  const plain = () => comment('マージの条件: #5 のあと', viaChatgpt);
+  const consent = () => comment('マージの条件: オーナーの了承（公開の範囲）', viaChatgpt);
+  const ok = (app, login) => comment('マージの条件を確認: OK', app, login);
 
   // Someone else's comment neither holds nor lifts (the repository is public).
-  assert.equal(isHeld(pr, [comment('マージの条件: 止めて', null, 'stranger')], ctx), false);
-  assert.equal(isHeld({ ...pr, body: 'マージの条件: A' }, [comment('マージの条件を確認: OK', null, 'stranger')], ctx), true);
-  assert.equal(isHeld(ownerHold, [comment('マージの条件を確認: OK', null, 'stranger')], ctx), true);
+  assert.equal(held([comment('マージの条件: 止めて', null, 'stranger')]), false);
+  assert.equal(held([plain(), ok(null, 'stranger')]), true);
+  assert.equal(held([consent(), ok(null, 'stranger')]), true);
 
-  // A role (any app) cannot lift a hold on the owner's consent by saying OK...
-  assert.equal(isHeld(ownerHold, [comment('マージの条件を確認: OK', viaChatgpt)], ctx), true);
-  assert.equal(isHeld(ownerHold, [comment('マージの条件を確認: OK', viaClaude)], ctx), true);
-  // ...nor by linking to a comment that is not the owner's own word.
-  const confirm = comment(`マージの条件を確認: OK\n${link(501)}`, viaChatgpt);
-  assert.equal(isHeld(ownerHold, [confirm], ctx), true);
-  assert.deepEqual(confirmationLinks([confirm, comment(`参考: ${link(777)}`, viaClaude)], ctx), [501]);
-  // The owner's own word, given after the hold, lifts it; an older one does not.
-  const after = new Map([[501, '2026-11-28T03:00:00Z']]);
-  const before = new Map([[501, '2026-11-27T03:00:00Z']]);
-  assert.equal(isHeld(ownerHold, [confirm], { ...ctx, ownerWords: after }), false);
-  assert.equal(isHeld(ownerHold, [confirm], { ...ctx, ownerWords: before }), true);
-  // The owner writing the confirmation without an app lifts it directly.
-  assert.equal(isHeld(ownerHold, [comment('マージの条件を確認: OK')], ctx), false);
-  // A hold set in a comment is timed from that comment.
-  const later = at(comment('マージの条件: オーナーの了承', viaChatgpt), '2026-11-28T05:00:00Z', 9);
-  assert.equal(isHeld(pr, [later, confirm], { ...ctx, ownerWords: after }), true);
-  assert.equal(isHeld(pr, [later, confirm], { ...ctx, ownerWords: new Map([[501, '2026-11-28T06:00:00Z']]) }), false);
+  // No role can lift a hold on the owner's consent, with or without a link to the owner's words elsewhere.
+  assert.equal(held([consent(), ok(viaChatgpt)]), true);
+  assert.equal(held([consent(), ok(viaClaude)]), true);
+  const relayed = `マージの条件を確認: OK\nhttps://github.com/${REPO}/issues/7#issuecomment-501`;
+  assert.equal(held([consent(), comment(relayed, viaChatgpt)]), true);
+  // What the owner says about something else lifts nothing: only the confirmation line does.
+  assert.equal(held([consent(), comment('了承します（別の件）')]), true);
+  assert.equal(held([consent(), comment('LGTM')]), true);
+  // The owner in person, on this PR, after the hold.
+  assert.equal(held([consent(), ok(null)]), false);
+  assert.equal(held([ok(null), consent()]), true);
+  // The owner's confirmation also covers an ordinary hold; a role's covers only the ordinary one.
+  assert.equal(held([plain(), consent(), ok(null)]), false);
+  assert.equal(held([plain(), consent(), ok(viaClaude)]), true);
 
-  // Links count only when they point into this repository.
-  assert.deepEqual(linkedCommentIds(`${link(1)} https://github.com/other/repo/issues/7#issuecomment-2 https://github.com/${REPO.toUpperCase()}/pull/3#issuecomment-3`, REPO), [1, 3]);
+  // A hold that was edited after the confirmation (the condition changed) holds again.
+  const changed = consent();
+  const confirmed = ok(null);
+  changed.updated_at = tick();
+  assert.equal(held([changed, confirmed]), true);
+  assert.equal(held([changed, confirmed, ok(null)]), false);
+  // A comment that was edited into a confirmation does not count (anyone with write access can edit a comment).
+  const doctored = comment('マージの条件を確認: OK');
+  const h = consent();
+  doctored.created_at = tick();
+  doctored.updated_at = tick();
+  assert.equal(held([h, doctored]), true);
 });
 
 test('the newest CI run on a commit decides', () => {
@@ -158,7 +184,7 @@ test('closing keywords in a PR body', () => {
 
 // An in-memory GitHub with just what the sweep touches.
 function fakeGitHub({ pulls = [], issues = [], paused = false, mainConclusion = 'success', failMerge = [] } = {}) {
-  const state = { pulls, issues, wakes: [], dispatched: 0, mainTip: 'tip0', ciTips: new Set(['tip0']), mainRunId: 1, mainConclusion, failWakes: 0 };
+  const state = { pulls, issues, wakes: [], dispatched: 0, mainTip: 'tip0', ciTips: new Set(['tip0']), mainRunId: 1, mainConclusion, failWakes: 0, failLabels: 0, failComments: 0 };
   const find = (n) => [...state.pulls, ...state.issues].find((x) => x.number === Number(n));
   const asIssue = (x) => ({ ...x, user: { login: x.author ?? OWNER }, labels: x.labels.map((name) => ({ name })) });
   const asPull = (p) => ({
@@ -232,12 +258,15 @@ function fakeGitHub({ pulls = [], issues = [], paused = false, mainConclusion = 
       if (method === 'PATCH') return Object.assign(p, body) && {};
       return asPull(p);
     }
-    if ((m = path.match(/^\/issues\/comments\/(\d+)$/))) {
-      return [...state.pulls, ...state.issues].flatMap((x) => x.comments).find((c) => c.id === Number(m[1])) ?? null;
-    }
     if ((m = path.match(/^\/issues\/(\d+)\/comments/))) {
       const x = find(m[1]);
-      if (method === 'POST') return void x.comments.push(comment(body.body, { slug: 'github-actions' }, 'github-actions[bot]')) ?? {};
+      if (method === 'POST') {
+        if (state.failComments > 0) {
+          state.failComments--;
+          throw new Error(`POST /issues/${m[1]}/comments -> 502`);
+        }
+        return void x.comments.push(comment(body.body, { slug: 'github-actions' }, 'github-actions[bot]')) ?? {};
+      }
       return x.comments;
     }
     if ((m = path.match(/^\/issues\/(\d+)\/labels\/(.+)$/))) {
@@ -247,7 +276,16 @@ function fakeGitHub({ pulls = [], issues = [], paused = false, mainConclusion = 
       x.labels = x.labels.filter((l) => l !== name);
       return {};
     }
-    if ((m = path.match(/^\/issues\/(\d+)\/labels$/))) return void find(m[1]).labels.push(...body.labels) ?? {};
+    if ((m = path.match(/^\/issues\/(\d+)\/labels$/))) {
+      const x = find(m[1]);
+      if (state.failLabels > 0) {
+        state.failLabels--;
+        throw new Error(`POST /issues/${m[1]}/labels -> 502`);
+      }
+      x.labels.push(...body.labels);
+      x.events = [...(x.events ?? []), ...body.labels.map((name) => ({ event: 'labeled', label: { name }, actor: { login: 'github-actions[bot]' }, created_at: tick() }))];
+      return {};
+    }
     if ((m = path.match(/^\/issues\/(\d+)\/events/))) return find(m[1]).events ?? [];
     if ((m = path.match(/^\/issues\/(\d+)$/))) {
       const x = find(m[1]);
@@ -492,30 +530,30 @@ test('a stacked PR is retargeted only when its base branch is exactly what was m
   assert.deepEqual([upper.base, upper.merged], ['main', true]);
 });
 
-test('a hold on the owner\'s consent is lifted in a sweep only through the owner\'s own comment', async () => {
-  const hold = { body: 'マージの条件: オーナーの了承', created_at: '2026-11-28T00:00:00Z' };
-  const link = (id) => `https://github.com/${REPO}/issues/200#issuecomment-${id}`;
-  const stamped = (c, id, created_at) => ({ ...c, id, created_at });
-  const byStranger = approved(201, hold);
-  byStranger.comments.push(comment('マージの条件を確認: OK', null, 'stranger'));
-  const byRoleAlone = approved(202, hold);
-  byRoleAlone.comments.push(comment('マージの条件を確認: OK', viaChatgpt));
-  const linkedToRole = approved(203, hold);
-  linkedToRole.comments.push(comment(`マージの条件を確認: OK\n${link(902)}`, viaChatgpt));
-  const linkedToOwner = approved(204, hold);
-  linkedToOwner.comments.push(comment(`マージの条件を確認: OK\n${link(901)}`, viaChatgpt));
-  const linkedToStranger = approved(205, hold);
-  linkedToStranger.comments.push(comment(`マージの条件を確認: OK\n${link(903)}`, viaChatgpt));
+test('in a sweep, a hold on the owner\'s consent is lifted only by the owner in person, on that PR', async () => {
+  const hold = () => comment('マージの条件: オーナーの了承', viaChatgpt);
+  const make = (number, ...after) => {
+    const p = pull(number);
+    p.comments.push(hold());
+    p.comments.push(approveBy(viaChatgpt, p.sha), ...after.map((f) => f()));
+    return p;
+  };
+  const link = `https://github.com/${REPO}/issues/200#issuecomment-901`;
+  const none = make(201);
+  const byStranger = make(202, () => comment('マージの条件を確認: OK', null, 'stranger'));
+  const byRole = make(203, () => comment('マージの条件を確認: OK', viaChatgpt));
+  const relayed = make(204, () => comment(`マージの条件を確認: OK\n${link}`, viaChatgpt));
+  const otherTopic = make(205, () => comment('了承します'));
+  const inPerson = make(206, () => comment('マージの条件を確認: OK'));
+  // The owner's consent on the needs-human Issue is not a confirmation on the PR.
   const ask = issue(200, 'オーナーへの確認', ['needs-human']);
-  ask.comments.push(
-    stamped(comment('了承します'), 901, '2026-11-28T02:00:00Z'),
-    stamped(comment('了承が出ました', viaClaude), 902, '2026-11-28T02:05:00Z'),
-    stamped(comment('了承します', null, 'stranger'), 903, '2026-11-28T02:06:00Z'),
-  );
-  const all = [byStranger, byRoleAlone, linkedToRole, linkedToOwner, linkedToStranger];
+  ask.comments.push({ ...comment('マージの条件を確認: OK'), id: 901 });
+  const bodyHold = approved(207, { body: 'マージの条件: オーナーの了承' });
+  bodyHold.comments.push(comment('マージの条件を確認: OK'));
+  const all = [none, byStranger, byRole, relayed, otherTopic, inPerson, bodyHold];
   const world = fakeGitHub({ pulls: all, issues: [ask] });
   await sweep(world);
-  assert.deepEqual(all.map((p) => p.merged), [false, false, false, true, false]);
+  assert.deepEqual(all.map((p) => p.merged), [false, false, false, false, false, true, false]);
 });
 
 test('CI that passes when it is run again on the same commit lets the merge go on', async () => {
@@ -610,4 +648,82 @@ test('the red-main Issue is closed when CI on main passes again, and the next fa
   await sweep(world);
   assert.equal(raised().length, 2);
   assert.equal(raised()[1].state, 'open');
+});
+
+test('taking a cut-short release up again never gives the label a second time', async () => {
+  // The design role starts on its label, so it can work although the wake failed:
+  // it opened a PR and took its label off the Issue before the next sweep.
+  let world = fakeGitHub({ issues: [issue(300, '担当: role:design\n着手の条件: なし')] });
+  world.state.failWakes = 1;
+  await assert.rejects(sweep(world), /502/);
+  assert.deepEqual(world.find(300).labels, ['backlog', 'role:design']);
+  world.find(300).labels = ['backlog']; // handed on by the role
+  await sweep(world);
+  await sweep(world);
+  assert.deepEqual(world.find(300).labels, []);
+  assert.deepEqual(world.state.wakes, []);
+  assert.equal(world.find(300).comments.filter((c) => /担当に渡しました/.test(c.body)).length, 1);
+
+  // The role has started (its comment is there) but still holds the Issue: the wake is sent, the label is left alone.
+  world = fakeGitHub({ issues: [issue(301, '担当: role:design\n着手の条件: なし')] });
+  world.state.failWakes = 1;
+  await assert.rejects(sweep(world), /502/);
+  world.find(301).comments.push(comment('着手: 設計担当', viaClaude));
+  await sweep(world);
+  assert.deepEqual(world.find(301).labels, ['role:design']);
+  assert.deepEqual(world.state.wakes, ['1: WAKE role:design #301']);
+  assert.equal(world.find(301).events.filter((e) => e.event === 'labeled').length, 1);
+
+  // The label could not be given at all: nothing was handed over, and the next sweep does all of it once.
+  world = fakeGitHub({ issues: [issue(302, '担当: role:impl\n着手の条件: なし')] });
+  world.state.failLabels = 1;
+  await assert.rejects(sweep(world), /502/);
+  assert.deepEqual([world.find(302).labels, world.state.wakes], [['backlog'], []]);
+  await sweep(world);
+  assert.deepEqual([world.find(302).labels, world.state.wakes], [['role:impl'], ['1: WAKE role:impl #302']]);
+
+  // An Issue the PM put back into the backlog later is a new request.
+  const again = issue(303, '担当: role:impl\n着手の条件: なし', ['backlog']);
+  again.events = [
+    { event: 'labeled', label: { name: 'role:impl' }, actor: { login: 'github-actions[bot]' }, created_at: tick() },
+    { event: 'labeled', label: { name: 'backlog' }, actor: { login: OWNER }, created_at: tick() },
+  ];
+  world = fakeGitHub({ issues: [again] });
+  await sweep(world);
+  assert.deepEqual([again.labels, world.state.wakes], [['role:impl'], ['1: WAKE role:impl #303']]);
+});
+
+test('taking a cut-short notice up again does not move a label the role has moved on', async () => {
+  // CI failed on an approved design PR; the label was given, the wake failed.
+  const p = approved(310, { ci: 'failure', files: ['docs/design/a.md'], labels: [] });
+  let world = fakeGitHub({ pulls: [p] });
+  world.state.failWakes = 1;
+  await assert.rejects(sweep(world), /502/);
+  assert.deepEqual(p.labels, ['role:design']);
+  // The design role started on the label and passed the PR to the PM with a question, without a new commit.
+  p.labels = ['role:pm'];
+  await sweep(world);
+  await sweep(world);
+  assert.deepEqual(p.labels, ['role:pm']);
+  assert.deepEqual(world.state.wakes, []);
+  assert.equal(p.comments.filter((c) => /CI が通っていません/.test(c.body)).length, 1);
+
+  // The notice itself could not be posted: it is posted by the next sweep, and the role is not woken twice for nothing.
+  const q = approved(311, { ci: 'failure', labels: [] });
+  world = fakeGitHub({ pulls: [q] });
+  world.state.failComments = 1;
+  await assert.rejects(sweep(world), /502/);
+  assert.deepEqual([q.labels, world.state.wakes], [['role:impl'], ['1: WAKE role:impl #311']]);
+  q.labels = ['role:review']; // fixed nothing yet, but moved on
+  await sweep(world);
+  assert.deepEqual([q.labels, world.state.wakes.length], [['role:review'], 1]);
+  assert.equal(q.comments.filter((c) => /CI が通っていません/.test(c.body)).length, 1);
+
+  // A label given before this approval (an earlier round) does not count as given now.
+  const r = pull(312, { ci: 'failure', labels: [] });
+  r.events = [{ event: 'labeled', label: { name: 'role:impl' }, actor: { login: 'github-actions[bot]' }, created_at: tick() }];
+  r.comments.push(approveBy(viaChatgpt, r.sha));
+  world = fakeGitHub({ pulls: [r] });
+  await sweep(world);
+  assert.deepEqual([r.labels, world.state.wakes], [['role:impl'], ['1: WAKE role:impl #312']]);
 });
