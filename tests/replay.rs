@@ -118,9 +118,11 @@ fn utf16_matches_utf8_contents_and_record_counts() {
         panic!("expected a single UTF-8 fixture file");
     };
     let text = std::str::from_utf8(plain).expect("normal-start fixture is UTF-8");
+    // A Windows checkout can already have CRLF in the text fixture.
+    let expected = text.replace("\r\n", "\n").replace('\n', "\r\n");
     assert_eq!(
         decode_utf16le_text(encoded).expect("UTF-16 fixture must have a LE BOM"),
-        text.replace('\n', "\r\n"),
+        expected,
     );
     assert_eq!(replay(&utf16.inputs()), replay(&utf8.inputs()));
 }
