@@ -43,7 +43,10 @@ fn detections(engine: &mut Engine) -> Vec<Detection> {
     engine
         .drain()
         .into_iter()
-        .map(|Output::Detection(detection)| detection)
+        .filter_map(|output| match output {
+            Output::Detection(detection) => Some(detection),
+            Output::Notice(_) => None,
+        })
         .collect()
 }
 
@@ -264,5 +267,5 @@ fn regressions_use_current_time_and_rebuild_matches_fresh_engine() {
     run(&mut fresh);
     assert_eq!(engine.snapshot(), fresh.snapshot());
     assert_eq!(engine.stats(), fresh.stats());
-    assert_eq!(engine.drain(), fresh.drain());
+    assert_eq!(detections(&mut engine), detections(&mut fresh));
 }

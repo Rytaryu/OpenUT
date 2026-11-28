@@ -1,12 +1,15 @@
-//! Drives tracker state and detection from ordered log records without I/O.
+//! Drives tracker state, detection, and notices from ordered log records without I/O.
 
 use std::collections::BTreeMap;
 
 use crate::event::{Event, Timed};
+use crate::notice::{Notice, NoticeConfig, NoticeScheduler};
 use crate::rules::{Detection, Rules, RulesConfig};
 use crate::state::{DEFAULT_DUP_MS, Snapshot, State};
 use crate::time::{LogDate, LogTime, UtcOffset};
 
+#[cfg(test)]
+mod notices_tests;
 #[cfg(test)]
 mod tests;
 
@@ -16,6 +19,7 @@ const DAY_MS: i64 = 86_400_000;
 pub struct EngineConfig {
     pub rules: RulesConfig,
     pub state: StateConfig,
+    pub notice: NoticeConfig,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -76,6 +80,8 @@ impl LineCounts {
 pub struct EngineStats {
     pub time_regressions: u64,
     pub power_offs: u64,
+    /// Notification deliveries committed by `Engine::drain`.
+    pub pushes: u64,
     pub server: LineCounts,
     pub driver: LineCounts,
     pub driver_days: BTreeMap<LogDate, LineCounts>,
@@ -86,6 +92,7 @@ impl EngineStats {
     pub fn merge(&mut self, other: Self) {
         self.time_regressions = self.time_regressions.saturating_add(other.time_regressions);
         self.power_offs = self.power_offs.saturating_add(other.power_offs);
+        self.pushes = self.pushes.saturating_add(other.pushes);
         self.server.merge(other.server);
         self.driver.merge(other.driver);
         for (day, counts) in other.driver_days {
@@ -97,6 +104,7 @@ impl EngineStats {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Output {
     Detection(Detection),
+    Notice(Notice),
 }
 
 pub struct Engine {
@@ -106,6 +114,7 @@ pub struct Engine {
     now: Option<LogTime>,
     offset: UtcOffset,
     detections: Vec<Detection>,
+    notices: NoticeScheduler,
     stats: EngineStats,
 }
 
@@ -113,6 +122,7 @@ impl Engine {
     pub fn new(cfg: EngineConfig) -> Self {
         Self {
             state: State::new(cfg.state.dup_ms),
+            notices: NoticeScheduler::new(cfg.notice.clone()),
             cfg,
             rules: Rules::default(),
             now: None,
@@ -132,23 +142,29 @@ impl Engine {
         if self.now.is_some_and(|now| now >= at) {
             return;
         }
+        let first = self.detections.len();
         let power_offs = self
             .rules
             .advance(at, &self.state, &self.cfg.rules, &mut self.detections);
         self.stats.power_offs = self.stats.power_offs.saturating_add(power_offs);
+        self.notice_detections(first);
+        self.notices.advance_to(at);
         self.now = Some(at);
     }
 
     pub fn apply(&mut self, mut timed: Timed) {
         if matches!(timed.event, Event::PowerOffNotice { .. }) {
             self.record_driver_line(Some((timed.at, timed.offset)), None);
+            let first = self.detections.len();
             self.rules
                 .remember_driver_event(&timed, &self.cfg.rules, &mut self.detections);
+            self.notice_detections(first);
             return;
         }
         self.stats.server.record(None);
         timed.at = self.server_time(timed.at, timed.offset);
         let update = self.state.apply(&timed);
+        let first = self.detections.len();
         self.rules.apply(
             &timed,
             &update.connections,
@@ -156,6 +172,7 @@ impl Engine {
             &self.cfg.rules,
             &mut self.detections,
         );
+        self.notice_detections(first);
     }
 
     pub fn note_line(&mut self, file: FileKind, at: Option<LogTime>, quality: LineQuality) {
@@ -197,15 +214,49 @@ impl Engine {
     }
 
     pub fn next_deadline(&self) -> Option<LogTime> {
-        self.rules.next_deadline()
+        self.rules
+            .next_deadline()
+            .into_iter()
+            .chain(self.notices.next_deadline())
+            .min()
+    }
+
+    pub fn set_catching_up(&mut self, on: bool) {
+        self.notices
+            .set_catching_up(on, self.now.unwrap_or(LogTime(0)));
+    }
+
+    /// Suppresses delivery while the app considers Hub stopped or starting.
+    pub fn set_hub_down(&mut self, on: bool) {
+        self.notices.set_hub_down(on);
     }
 
     pub fn rebuild(&mut self) {
-        *self = Self::new(self.cfg.clone());
+        self.state = State::new(self.cfg.state.dup_ms);
+        self.rules = Rules::default();
+        self.now = None;
+        self.offset = UtcOffset(0);
+        self.detections.clear();
+        self.notices.rebuild();
+        self.stats = EngineStats {
+            pushes: self.stats.pushes,
+            ..EngineStats::default()
+        };
     }
 
     pub fn drain(&mut self) -> Vec<Output> {
-        self.detections.drain(..).map(Output::Detection).collect()
+        let notices = self.notices.drain();
+        let pushes = notices.iter().filter(|notice| notice.push).count() as u64;
+        self.stats.pushes = self.stats.pushes.saturating_add(pushes);
+        self.detections
+            .drain(..)
+            .map(Output::Detection)
+            .chain(notices.into_iter().map(Output::Notice))
+            .collect()
+    }
+
+    pub fn live_notices(&self) -> Vec<Notice> {
+        self.notices.live()
     }
 
     pub fn snapshot(&self) -> Snapshot {
@@ -214,6 +265,14 @@ impl Engine {
 
     pub fn stats(&self) -> &EngineStats {
         &self.stats
+    }
+
+    fn notice_detections(&mut self, first: usize) {
+        for detection in &self.detections[first..] {
+            self.notices.advance_to(detection.at);
+            let snapshot = self.state.snapshot(detection.at);
+            self.notices.apply(detection, &snapshot);
+        }
     }
 
     fn server_time(&mut self, at: LogTime, offset: UtcOffset) -> LogTime {
