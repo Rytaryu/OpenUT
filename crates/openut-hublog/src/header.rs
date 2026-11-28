@@ -2,10 +2,13 @@
 
 use openut_core::time::{LogDate, LogTime, UtcOffset};
 
-/// A line with a readable header, or its original text if the header is absent or malformed.
+pub use crate::offset_fill::{FileKind, FilledEntry, OffsetFill};
+
+/// A log record, a metadata line, or the original text of a malformed record.
 #[derive(Debug, PartialEq, Eq)]
 pub enum ParsedLine<'a> {
     Entry(Entry<'a>),
+    Meta(&'a str),
     NoHeader(&'a str),
 }
 
@@ -13,6 +16,8 @@ pub enum ParsedLine<'a> {
 pub struct Entry<'a> {
     pub at: LogTime,
     pub offset: UtcOffset,
+    /// Whether the header supplied a readable UTC offset. The parser uses zero otherwise.
+    pub offset_known: bool,
     pub level: &'a str,
     pub func: &'a str,
     pub thread: Option<&'a str>,
@@ -20,6 +25,9 @@ pub struct Entry<'a> {
 }
 
 pub fn parse_line(line: &str) -> ParsedLine<'_> {
+    if line.starts_with('#') {
+        return ParsedLine::Meta(line);
+    }
     match parse_entry(line) {
         Some(entry) => ParsedLine::Entry(entry),
         None => ParsedLine::NoHeader(line),
@@ -33,27 +41,42 @@ fn parse_entry(line: &str) -> Option<Entry<'_>> {
     }
     let (date, rest) = take_token(header);
     let (clock, rest) = take_token(rest);
-    let (offset, rest) = take_token(rest);
-    let offset = parse_offset(offset)?;
+    let (offset_token, after_offset) = take_token(rest);
+    let (offset, rest) = if offset_token.starts_with(['+', '-']) {
+        (parse_offset(offset_token), after_offset)
+    } else {
+        (None, rest)
+    };
+    let offset_known = offset.is_some();
+    let offset = offset.unwrap_or(UtcOffset(0));
     let at = parse_timestamp(date, clock, offset)?;
     let (_, rest) = take_token(rest); // Skip the opaque identifier.
     let (level, func) = take_token(rest);
 
-    let thread_and_body = tail
-        .strip_prefix(char::is_whitespace)
-        .and_then(|text| text.trim_start().strip_prefix('['))
-        .and_then(|text| text.split_once(']'));
-    let (thread, body) =
-        thread_and_body.map_or((None, tail), |(thread, body)| (Some(thread), body));
+    // Consume only the field separator, leaving the body's own leading whitespace.
+    let (thread, body) = match tail.strip_prefix([' ', '\t']) {
+        Some(after_header) => take_thread(after_header)
+            .map_or((None, after_header), |(thread, body)| {
+                (Some(thread), body.strip_prefix([' ', '\t']).unwrap_or(body))
+            }),
+        None => (None, tail),
+    };
 
     Some(Entry {
         at,
         offset,
+        offset_known,
         level,
         func: func.trim_end(),
         thread,
-        body: body.trim_start(),
+        body,
     })
+}
+
+fn take_thread(text: &str) -> Option<(&str, &str)> {
+    let (thread, rest) = text.strip_prefix('[')?.split_once(']')?;
+    (!thread.is_empty() && thread.bytes().all(|byte| byte.is_ascii_digit()))
+        .then_some((thread, rest))
 }
 
 fn take_token(text: &str) -> (&str, &str) {
@@ -132,6 +155,7 @@ mod tests {
             Entry {
                 at: LogTime(1_795_787_590_123),
                 offset: UtcOffset(540),
+                offset_known: true,
                 level: "INFO",
                 func: "SomeFunc",
                 thread: Some("12"),
@@ -166,6 +190,7 @@ mod tests {
         ] {
             let line = format!("[2026-11-27 22:53:10.123 {offset}]");
             let parsed = entry(&line);
+            assert!(parsed.offset_known);
             assert_eq!(parsed.offset, UtcOffset(minutes));
             assert_eq!(parsed.at.to_string(), utc);
         }
@@ -187,6 +212,122 @@ mod tests {
     }
 
     #[test]
+    fn preserves_body_prefixes_when_the_thread_field_is_missing() {
+        for body in [
+            "[ServiceStatusToVHServer] status",
+            "  [2] OET OVERSPEED!",
+            "\n.",
+        ] {
+            let line = format!("[2026-11-27 22:53:10.123 +9 0x0 INFO f] {body}");
+            let parsed = entry(&line);
+            assert_eq!(parsed.thread, None);
+            assert_eq!(parsed.body, body);
+        }
+    }
+
+    #[test]
+    fn preserves_sample_header_fields_and_body_whitespace() {
+        let examples = [
+            (
+                "[2026-11-28 00:00:53.613 +9 0x3410 INFO ] [13328] ==================== Log Start ====================",
+                "INFO",
+                "",
+                Some("13328"),
+                "==================== Log Start ====================",
+            ),
+            (
+                "[2026-11-27 22:53:34.900 +9 0xF88 ERROR BiCollector::GetPcSerialNumber] [3976] ",
+                "ERROR",
+                "BiCollector::GetPcSerialNumber",
+                Some("3976"),
+                "",
+            ),
+            (
+                "[2026-11-27 22:53:34.900 +9 0xF88 INFO bisender::BiSender::Init] [3976] init",
+                "INFO",
+                "bisender::BiSender::Init",
+                Some("3976"),
+                "init",
+            ),
+            (
+                "[2026-11-27 22:53:34.900 +9 0xF88 INFO CSocketAccept::~CSocketAccept] [3976] end",
+                "INFO",
+                "CSocketAccept::~CSocketAccept",
+                Some("3976"),
+                "end",
+            ),
+            (
+                "[2026-11-27 22:53:34.900 +9 0xF88 ERROR OETServer::OnTrackerStatusIndicatorUpdate] [3976] [2] OET OVERSPEED!",
+                "ERROR",
+                "OETServer::OnTrackerStatusIndicatorUpdate",
+                Some("3976"),
+                "[2] OET OVERSPEED!",
+            ),
+            (
+                "[2026-11-27 00:00:06.739 +9 0x813C INFO dumpPUMRFDropRate] [33084]   - D[1] ",
+                "INFO",
+                "dumpPUMRFDropRate",
+                Some("33084"),
+                "  - D[1] ",
+            ),
+            (
+                "[2026-11-27 19:07:28.939 +9 0x3410 INFO TrackerDongleHID::DataDispatchThreadProc] [13328] Wait for HID data got timeout.\n",
+                "INFO",
+                "TrackerDongleHID::DataDispatchThreadProc",
+                Some("13328"),
+                "Wait for HID data got timeout.\n",
+            ),
+        ];
+        for (line, level, func, thread, body) in examples {
+            let parsed = entry(line);
+            assert_eq!(
+                (parsed.level, parsed.func, parsed.thread, parsed.body),
+                (level, func, thread, body)
+            );
+        }
+    }
+
+    #[test]
+    fn classifies_startup_settings_and_rotation_as_metadata() {
+        for line in [
+            "# Log begin at 2026-11-28 00:00:53.613",
+            "# WriteTimeInterval=5000",
+            "# Log rotate by date at 2026-11-27 00:01:03.40",
+        ] {
+            assert_eq!(parse_line(line), ParsedLine::Meta(line));
+        }
+    }
+
+    #[test]
+    fn falls_back_to_zero_for_missing_or_unreadable_offsets() {
+        for offset in ["+5.5 ", "+5:60 ", ""] {
+            let line = format!("[2026-11-27 22:53:10.123 {offset}0xF88 INFO f] [1] x");
+            let parsed = entry(&line);
+            assert!(!parsed.offset_known);
+            assert_eq!(parsed.offset, UtcOffset(0));
+            assert_eq!(parsed.at.to_string(), "2026-11-27 22:53:10.123");
+            assert_eq!(
+                (parsed.level, parsed.func, parsed.thread, parsed.body),
+                ("INFO", "f", Some("1"), "x")
+            );
+        }
+        for line in [
+            "[2026-11-27 22:53:10.123 +5:60]",
+            "[2026-11-27 22:53:10.123 9]",
+            "[2026-11-27 22:53:10.123]",
+        ] {
+            let parsed = entry(line);
+            assert!(!parsed.offset_known);
+            assert_eq!(parsed.offset, UtcOffset(0));
+            assert_eq!(parsed.at.to_string(), "2026-11-27 22:53:10.123");
+            assert_eq!((parsed.level, parsed.func), ("", ""));
+        }
+        let known_zero = entry("[2026-11-27 22:53:10.123 +0]");
+        assert!(known_zero.offset_known);
+        assert_eq!(known_zero.offset, UtcOffset(0));
+    }
+
+    #[test]
     fn returns_original_text_for_malformed_headers() {
         for line in [
             "",
@@ -196,8 +337,6 @@ mod tests {
             "[2026-02-29 22:53:10.123 +9]",
             "[2026-11-27 24:53:10.123 +9]",
             "[2026-11-27 22:53:10.1234567 +9]",
-            "[2026-11-27 22:53:10.123 +5:60]",
-            "[2026-11-27 22:53:10.123 9]",
             "[2026-11-27 22:53:10.123 +9",
             "[２０２６-11-27 22:53:10.123 +9]",
         ] {
