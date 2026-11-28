@@ -116,7 +116,7 @@ impl<R: BufRead> Replay<R> {
                 time_reversed,
                 ..
             } => {
-                self.stats.estimated_lost = Some(estimated_lost);
+                self.stats.estimated_lost = estimated_lost;
                 self.stats.time_reversed = self.stats.time_reversed.max(time_reversed);
                 (wall_ms, None, None, self.table.advance(mono_us))
             }

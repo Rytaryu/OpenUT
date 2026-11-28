@@ -624,6 +624,59 @@ fn probe_reads_and_releases_the_device_while_startup_display_is_blocked() {
 }
 
 #[test]
+fn probe_records_sequence_bytes_without_inventing_a_loss_estimate() {
+    let items = collect_items([
+        (100_000, ReadOutcome::Report(pose(1, 36_946))),
+        (110_000, ReadOutcome::Report(pose(2, u16::MAX))),
+        (120_000, ReadOutcome::Report(pose(2, 0))),
+        (130_000, ReadOutcome::Report(pose(2, 2))),
+        (1_000_000, ReadOutcome::Idle),
+    ]);
+    let (recording, _, result) = run_queued(
+        items,
+        RunOptions {
+            start: stamp(0),
+            duration: Duration::from_secs(1),
+            mode: Mode::ProbeSharing,
+        },
+    );
+    assert_eq!(result.stats.reports, 4);
+    assert_eq!(result.stats.malformed, 0);
+    let recorded = rows(&recording);
+    let sequence_bytes: Vec<_> = recorded
+        .iter()
+        .filter_map(|row| match row {
+            Record::Input(raw) => Some(u16::from_le_bytes([raw.bytes[1], raw.bytes[2]])),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(sequence_bytes, [36_946, u16::MAX, 0, 2]);
+    assert!(matches!(
+        recorded.last(),
+        Some(Record::Footer {
+            reports: 4,
+            malformed: 0,
+            estimated_lost: None,
+            ..
+        })
+    ));
+    let mut lines = std::str::from_utf8(&recording)
+        .expect("recording is UTF-8")
+        .lines();
+    let header: serde_json::Value = serde_json::from_str(lines.next().expect("recording header"))
+        .expect("header is valid JSON");
+    assert_eq!(header["version"], 2);
+    let footer: serde_json::Value = serde_json::from_str(lines.last().expect("recording footer"))
+        .expect("footer is valid JSON");
+    assert!(footer.get("estimated_lost").is_none());
+
+    let mut replay = Replay::new(Cursor::new(recording)).expect("open replay");
+    while replay.read_step().expect("read replay step").is_some() {}
+    assert_eq!(replay.stats().reports, 4);
+    assert_eq!(replay.stats().estimated_lost, None);
+}
+
+#[test]
 fn a_probe_backlog_ends_at_the_deadline_and_counts_only_reports_in_the_window() {
     let settings = RunOptions {
         start: stamp(0),
@@ -694,7 +747,7 @@ fn a_probe_backlog_ends_at_the_deadline_and_counts_only_reports_in_the_window() 
                     wall_ms: Some(wall_ms(deadline)),
                     reports: expected_reports.len() as u64,
                     malformed: 0,
-                    estimated_lost: 0,
+                    estimated_lost: None,
                     reason: EndReason::Duration,
                     time_reversed: 0,
                 },
@@ -760,7 +813,7 @@ fn a_probe_skips_opening_if_the_server_stops_during_baseline() {
                 wall_ms: Some(wall_ms(baseline_end)),
                 reports: 0,
                 malformed: 0,
-                estimated_lost: 0,
+                estimated_lost: None,
                 reason: EndReason::ServerNotRunning,
                 time_reversed: 0,
             },

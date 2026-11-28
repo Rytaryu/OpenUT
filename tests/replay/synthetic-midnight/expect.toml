@@ -1,0 +1,27 @@
+check_rules = ["R1", "R2", "R3", "R4", "R5"]
+
+[summary."2026-11-27"]
+final = true
+observed_until = "2026-11-28 00:00:00.000"
+"trackers.0.serial" = "00XX000000001"
+"trackers.0.slots" = [1]
+"trackers.0.connected_s" = 601.0
+"trackers.0.in_use_s" = 600.0
+"trackers.0.tracking_s" = 600.0
+"trackers.0.tracking_ratio" = 1.0
+"trackers.0.sessions" = 1
+"trackers.0.first_pose_s" = [1.0]
+"source.meta" = 14
+
+[summary."2026-11-28"]
+final = false
+observed_until = "2026-11-28 00:30:00.000"
+unobserved_s = 0.0
+"trackers.0.serial" = "00XX000000001"
+"trackers.0.slots" = [1]
+"trackers.0.connected_s" = 1800.0
+"trackers.0.in_use_s" = 1800.0
+"trackers.0.tracking_s" = 1770.0
+"trackers.0.losses" = 1
+"trackers.0.long_losses" = 0
+"source.meta" = 1

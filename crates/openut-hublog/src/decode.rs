@@ -80,6 +80,12 @@ pub struct DecodeStats {
     pub long_lines: u64,
 }
 
+pub(crate) struct PositionedLine {
+    pub text: String,
+    pub end: u64,
+    pub stats: DecodeStats,
+}
+
 /// Decodes one file, retaining partial character and record data between reads.
 #[derive(Default)]
 pub struct Decoder {
@@ -90,12 +96,22 @@ pub struct Decoder {
     line: String,
     pending_cr: bool,
     discarding_line_tail: bool,
+    position: u64,
+    wait_for_record_end: bool,
     stats: DecodeStats,
+    previous_stats: DecodeStats,
 }
 
 impl Decoder {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub(crate) fn positioned() -> Self {
+        Self {
+            wait_for_record_end: true,
+            ..Self::default()
+        }
     }
 
     pub fn stats(&self) -> DecodeStats {
@@ -108,7 +124,14 @@ impl Decoder {
     }
 
     /// Emits complete records or the retained prefix of each overlong record.
-    pub fn push(&mut self, mut bytes: &[u8]) -> Vec<String> {
+    pub fn push(&mut self, bytes: &[u8]) -> Vec<String> {
+        self.push_positioned(bytes)
+            .into_iter()
+            .map(|line| line.text)
+            .collect()
+    }
+
+    pub(crate) fn push_positioned(&mut self, mut bytes: &[u8]) -> Vec<PositionedLine> {
         let mut lines = Vec::new();
         if self.encoding.is_none() {
             let prefix_len = bytes.len().min(ENCODING_PREFIX_BYTES - self.pending.len());
@@ -123,6 +146,13 @@ impl Decoder {
 
     /// Flushes incomplete data at EOF, including an unterminated final record.
     pub fn finish(&mut self) -> Vec<String> {
+        self.finish_positioned()
+            .into_iter()
+            .map(|line| line.text)
+            .collect()
+    }
+
+    pub(crate) fn finish_positioned(&mut self) -> Vec<PositionedLine> {
         let mut lines = Vec::new();
         if self.encoding.is_none() {
             self.select_encoding(true, &mut lines);
@@ -131,6 +161,7 @@ impl Decoder {
             self.replace(&mut lines);
         }
         if !self.pending.is_empty() {
+            self.position = self.position.saturating_add(self.pending.len() as u64);
             self.pending.clear();
             self.replace(&mut lines);
         }
@@ -138,13 +169,13 @@ impl Decoder {
             self.push_content('\r', &mut lines);
         }
         if !self.line.is_empty() {
-            lines.push(std::mem::take(&mut self.line));
+            self.emit(&mut lines);
         }
         self.discarding_line_tail = false;
         lines
     }
 
-    fn select_encoding(&mut self, eof: bool, lines: &mut Vec<String>) {
+    fn select_encoding(&mut self, eof: bool, lines: &mut Vec<PositionedLine>) {
         let (encoding, bom_bytes) = match self.pending.as_slice() {
             [0xff, 0xfe, ..] => (Encoding::Utf16Le, 2),
             [0xfe, 0xff, ..] => (Encoding::Utf16Be, 2),
@@ -158,11 +189,12 @@ impl Decoder {
             _ => return,
         };
         self.encoding = Some(encoding);
+        self.position = bom_bytes as u64;
         let prefix = std::mem::take(&mut self.pending);
         self.decode(&prefix[bom_bytes..], lines);
     }
 
-    fn decode(&mut self, bytes: &[u8], lines: &mut Vec<String>) {
+    fn decode(&mut self, bytes: &[u8], lines: &mut Vec<PositionedLine>) {
         if bytes.is_empty() {
             return;
         }
@@ -174,7 +206,7 @@ impl Decoder {
         }
     }
 
-    fn decode_utf8(&mut self, bytes: &[u8], lines: &mut Vec<String>) {
+    fn decode_utf8(&mut self, bytes: &[u8], lines: &mut Vec<PositionedLine>) {
         let input = if self.pending.is_empty() {
             Cow::Borrowed(bytes)
         } else {
@@ -198,6 +230,7 @@ impl Decoder {
                         self.pending.extend_from_slice(rest);
                         break;
                     };
+                    self.position = self.position.saturating_add(invalid_bytes as u64);
                     self.replace(lines);
                     bytes = &rest[invalid_bytes..];
                 }
@@ -209,7 +242,7 @@ impl Decoder {
         &mut self,
         mut bytes: &[u8],
         to_unit: fn([u8; 2]) -> u16,
-        lines: &mut Vec<String>,
+        lines: &mut Vec<PositionedLine>,
     ) {
         if let (Some(first), Some((&second, rest))) =
             (self.pending.first().copied(), bytes.split_first())
@@ -226,7 +259,8 @@ impl Decoder {
         }
     }
 
-    fn push_unit(&mut self, unit: u16, lines: &mut Vec<String>) {
+    fn push_unit(&mut self, unit: u16, lines: &mut Vec<PositionedLine>) {
+        self.position = self.position.saturating_add(2);
         if let Some(high) = self.high_surrogate.take() {
             if let Some(Ok(character)) = char::decode_utf16([high, unit]).next() {
                 self.push_char(character, lines);
@@ -244,18 +278,19 @@ impl Decoder {
         }
     }
 
-    fn replace(&mut self, lines: &mut Vec<String>) {
+    fn replace(&mut self, lines: &mut Vec<PositionedLine>) {
         self.stats.replaced_chars = self.stats.replaced_chars.saturating_add(1);
         self.push_char(char::REPLACEMENT_CHARACTER, lines);
     }
 
-    fn push_text(&mut self, text: &str, lines: &mut Vec<String>) {
+    fn push_text(&mut self, text: &str, lines: &mut Vec<PositionedLine>) {
         for character in text.chars() {
+            self.position = self.position.saturating_add(character.len_utf8() as u64);
             self.push_char(character, lines);
         }
     }
 
-    fn push_char(&mut self, character: char, lines: &mut Vec<String>) {
+    fn push_char(&mut self, character: char, lines: &mut Vec<PositionedLine>) {
         if character == '\n' {
             let ending = self
                 .line_ending
@@ -264,7 +299,7 @@ impl Decoder {
                 self.pending_cr = false;
                 // A truncated first record still has its prefix buffered.
                 if !std::mem::take(&mut self.discarding_line_tail) || !self.line.is_empty() {
-                    lines.push(std::mem::take(&mut self.line));
+                    self.emit(lines);
                 }
                 return;
             }
@@ -284,18 +319,30 @@ impl Decoder {
         }
     }
 
-    fn push_content(&mut self, character: char, lines: &mut Vec<String>) {
+    fn push_content(&mut self, character: char, lines: &mut Vec<PositionedLine>) {
         // Keep a valid UTF-8 prefix. The first record waits for detection
         // of its delimiter before being emitted.
         if self.line.len() + character.len_utf8() > MAX_LINE_BYTES {
-            if self.line_ending.is_some() {
-                lines.push(std::mem::take(&mut self.line));
+            if self.line_ending.is_some() && !self.wait_for_record_end {
+                self.emit(lines);
             }
             self.stats.long_lines = self.stats.long_lines.saturating_add(1);
             self.discarding_line_tail = true;
         } else {
             self.line.push(character);
         }
+    }
+
+    fn emit(&mut self, lines: &mut Vec<PositionedLine>) {
+        lines.push(PositionedLine {
+            text: std::mem::take(&mut self.line),
+            end: self.position,
+            stats: DecodeStats {
+                replaced_chars: self.stats.replaced_chars - self.previous_stats.replaced_chars,
+                long_lines: self.stats.long_lines - self.previous_stats.long_lines,
+            },
+        });
+        self.previous_stats = self.stats;
     }
 }
 
@@ -305,6 +352,82 @@ mod tests {
 
     fn utf16le(text: &str) -> Vec<u8> {
         text.encode_utf16().flat_map(u16::to_le_bytes).collect()
+    }
+
+    fn positioned_lines(bytes: &[u8], chunk_size: usize) -> Vec<(String, u64)> {
+        let mut decoder = Decoder::positioned();
+        let mut lines = Vec::new();
+        for chunk in bytes.chunks(chunk_size) {
+            lines.extend(decoder.push_positioned(chunk));
+        }
+        lines.extend(decoder.finish_positioned());
+        lines
+            .into_iter()
+            .map(|line| (line.text, line.end))
+            .collect()
+    }
+
+    #[test]
+    fn records_report_original_utf16_bytes_including_crlf_and_bom() {
+        let mut bytes = vec![0xff, 0xfe];
+        bytes.extend(utf16le("# 初😀\r\n"));
+        let first = bytes.len() as u64;
+        bytes.extend(utf16le("本文\n"));
+        bytes.extend([0x00, 0xd8]); // Unpaired high surrogate.
+        bytes.extend(utf16le("\r\n"));
+        let second = bytes.len() as u64;
+        bytes.extend(utf16le("終"));
+        bytes.push(0x01); // Incomplete last code unit.
+        let last = bytes.len() as u64;
+
+        for chunk in [1, 3, bytes.len()] {
+            assert_eq!(
+                positioned_lines(&bytes, chunk),
+                [
+                    ("# 初😀".into(), first),
+                    ("本文\n�".into(), second),
+                    ("終�".into(), last),
+                ]
+            );
+        }
+    }
+
+    #[test]
+    fn records_report_original_utf8_bytes_even_for_replacement_characters() {
+        for prefix in [&[][..], &[0xef, 0xbb, 0xbf][..]] {
+            let bytes = [prefix, b"\xc3\xa9\nbad\xff\nend\xef"].concat();
+            let bom = prefix.len() as u64;
+            for chunk in [1, 3, bytes.len()] {
+                assert_eq!(
+                    positioned_lines(&bytes, chunk),
+                    [
+                        ("é".into(), bom + 3),
+                        ("bad�".into(), bom + 8),
+                        ("end�".into(), bytes.len() as u64),
+                    ]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn positioned_overlong_rows_wait_for_their_real_end() {
+        let mut decoder = Decoder::positioned();
+        let first = decoder.push_positioned(b"# Meta\r\n");
+        assert_eq!(first[0].end, 8);
+        let prefix = "x".repeat(MAX_LINE_BYTES);
+        assert!(decoder.push_positioned(prefix.as_bytes()).is_empty());
+        assert!(
+            decoder
+                .push_positioned(b"tail\nnot a delimiter\r")
+                .is_empty()
+        );
+        let records = decoder.push_positioned(b"\nthird\r\n");
+        assert_eq!(records[0].text, prefix);
+        let second_end = 8 + MAX_LINE_BYTES as u64 + b"tail\nnot a delimiter\r\n".len() as u64;
+        assert_eq!(records[0].end, second_end);
+        assert_eq!(records[1].end, second_end + 7);
+        assert_eq!(decoder.stats().long_lines, 1);
     }
 
     #[test]

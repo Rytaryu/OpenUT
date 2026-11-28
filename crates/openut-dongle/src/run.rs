@@ -183,7 +183,6 @@ impl RunOptions {
 pub struct RunStats {
     pub reports: u64,
     pub malformed: u64,
-    pub estimated_lost: u64,
     pub report_types: BTreeMap<u8, u64>,
 }
 
@@ -199,7 +198,6 @@ pub enum Notice<'a> {
     Tick {
         at: Stamp,
         reports_per_second: u64,
-        estimated_lost: u64,
         table: &'a TrackerTable,
         decoder: &'a Decoder,
     },
@@ -430,7 +428,6 @@ struct Capture<'a, W, F> {
     last: Stamp,
     last_tick: u64,
     reports_at_tick: u64,
-    sequence: Option<u16>,
 }
 
 impl<W: Write, F: FnMut(Notice<'_>) -> io::Result<()>> Capture<'_, W, F> {
@@ -450,7 +447,6 @@ impl<W: Write, F: FnMut(Notice<'_>) -> io::Result<()>> Capture<'_, W, F> {
             last: start,
             last_tick: start.mono_us,
             reports_at_tick: 0,
-            sequence: None,
         }
     }
 
@@ -515,18 +511,6 @@ impl<W: Write, F: FnMut(Notice<'_>) -> io::Result<()>> Capture<'_, W, F> {
         let raw = normalize(bytes);
         let Some(&kind) = raw.first() else { return };
         *self.stats.report_types.entry(kind).or_default() += 1;
-        if let [0x28, low, high, ..] = raw {
-            let sequence = u16::from_le_bytes([*low, *high]);
-            if let Some(previous) = self.sequence {
-                let distance = sequence.wrapping_sub(previous);
-                if distance >= 0x8000 {
-                    // Do not advance the baseline on an apparent older report.
-                    return;
-                }
-                self.stats.estimated_lost += u64::from(distance.saturating_sub(1));
-            }
-            self.sequence = Some(sequence);
-        }
     }
 
     fn write_tick(&mut self) -> io::Result<()> {
@@ -545,7 +529,6 @@ impl<W: Write, F: FnMut(Notice<'_>) -> io::Result<()>> Capture<'_, W, F> {
         (self.display)(Notice::Tick {
             at: self.last,
             reports_per_second: u64::try_from(rate).unwrap_or(u64::MAX),
-            estimated_lost: self.stats.estimated_lost,
             table: &self.table,
             decoder: &self.decoder,
         })?;
@@ -580,7 +563,7 @@ fn write_footer<W: Write>(writer: &mut RecordWriter<W>, result: &RunResult) -> i
         wall_ms: Some(result.end.wall_ms),
         reports: result.stats.reports,
         malformed: result.stats.malformed,
-        estimated_lost: result.stats.estimated_lost,
+        estimated_lost: None,
         reason: result.reason,
         time_reversed: result.time_reversed,
     })?;

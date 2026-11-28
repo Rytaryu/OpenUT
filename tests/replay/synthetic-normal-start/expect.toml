@@ -1,1 +1,8 @@
 check_rules = ["R1", "R2", "R3", "R4", "R5"]
+
+[summary."2026-11-28"]
+observed_until = "2026-11-28 12:00:11.000"
+"faults.wifi_info_missing" = 0
+"faults.unexpected_disconnects" = 0
+"host_starts" = 1
+"source.meta" = 14

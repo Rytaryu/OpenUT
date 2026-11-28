@@ -4,10 +4,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::event::{Event, Timed};
 use crate::state::{ConnectionChange, ConnectionChangeKind, DisconnectReason};
-use crate::time::LogTime;
+use crate::time::{LogTime, UtcOffset};
 use crate::tracker::{Serial, TrackerKey};
 
-use super::{Detection, R4Config, RuleId, Step, Target, after, new_episode};
+use super::{Detection, PowerOffCut, R4Config, RuleId, Step, Target, after, new_episode};
 
 #[derive(Default)]
 pub(super) struct R4 {
@@ -32,6 +32,7 @@ struct ConnectionStart {
 struct Pending {
     start: ConnectionStart,
     cut_at: LogTime,
+    cut_offset: UtcOffset,
     next_start: Option<LogTime>,
     target: Target,
     back_at: LogTime,
@@ -111,7 +112,7 @@ impl R4 {
                         && matches!(ev.event, Event::TrackerRemoved { usb: false, .. })
                         && let Some(start) = start
                     {
-                        self.consider_cut(change, start, cfg);
+                        self.consider_cut(change, ev.offset, start, cfg);
                     }
                 }
             }
@@ -149,7 +150,13 @@ impl R4 {
         }
     }
 
-    fn consider_cut(&mut self, change: &ConnectionChange, start: ConnectionStart, cfg: &R4Config) {
+    fn consider_cut(
+        &mut self,
+        change: &ConnectionChange,
+        offset: UtcOffset,
+        start: ConnectionStart,
+        cfg: &R4Config,
+    ) {
         let at = change.at;
         let tracker = change.tracker.key;
         let command_from = before(at, cfg.cmd_window_s);
@@ -181,6 +188,7 @@ impl R4 {
             Pending {
                 start,
                 cut_at: at,
+                cut_offset: offset,
                 next_start: None,
                 target: Target {
                     tracker: Some(tracker),
@@ -260,7 +268,7 @@ impl R4 {
         cfg: &R4Config,
         output: &mut Vec<Detection>,
         next_episode: &mut u64,
-    ) -> Option<LogTime> {
+    ) -> Option<PowerOffCut> {
         let ((deadline, tracker, _), decide) = self.next_timer()?;
         debug_assert_eq!(at, deadline);
         if !decide {
@@ -275,7 +283,13 @@ impl R4 {
 
         let (_, cut) = self.pending.pop_first()?;
         if cfg.exclude_power_off && self.has_notice(tracker, &cut, cfg) {
-            return Some(cut.cut_at);
+            return Some(PowerOffCut {
+                at: cut.cut_at,
+                offset: cut.cut_offset,
+                tracker,
+                conn: cut.target.conn,
+                serial: cut.target.serial,
+            });
         }
 
         let episode = new_episode(next_episode);
@@ -352,7 +366,7 @@ mod tests {
                     &mut self.output,
                     &mut self.next_episode,
                 ) {
-                    self.power_offs.push(cut);
+                    self.power_offs.push(cut.at);
                 }
             }
         }

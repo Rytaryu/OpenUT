@@ -11,7 +11,7 @@ mod reader;
 pub use reader::{ReadError, ReadStats, RecordReader};
 
 pub const FORMAT: &str = "openut.dongle-record";
-pub const VERSION: u64 = 1;
+pub const VERSION: u64 = 2;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Header {
@@ -97,7 +97,9 @@ pub enum Record {
         wall_ms: Option<i64>,
         reports: u64,
         malformed: u64,
-        estimated_lost: u64,
+        /// Historical estimate from recordings made before #94.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        estimated_lost: Option<u64>,
         reason: EndReason,
         #[serde(default, skip_serializing_if = "is_zero")]
         time_reversed: u64,

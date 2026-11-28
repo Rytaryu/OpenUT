@@ -190,36 +190,49 @@ impl Tailer {
         source: &S,
         files: &[LogFile],
     ) -> Result<Option<RebuildReason>, S::Error> {
+        Ok(self
+            .rebuild_details(source, files)?
+            .map(|(reason, _)| reason))
+    }
+
+    pub(super) fn rebuild_details<S: LogSource + ?Sized>(
+        &self,
+        source: &S,
+        files: &[LogFile],
+    ) -> Result<Option<(RebuildReason, String)>, S::Error> {
         let newest = newest_file(self.kind, files);
         if self.kind == FileKind::Driver && newest.is_none() {
             // A completely missing driver stream is allowed without a rebuild.
             return Ok(None);
         }
-        if self.kind == FileKind::Server && self.found == Some(false) && newest.is_some() {
-            return Ok(Some(RebuildReason::Restored));
+        if self.kind == FileKind::Server
+            && self.found == Some(false)
+            && let Some(newest) = newest
+        {
+            return Ok(Some((RebuildReason::Restored, newest.file.name.clone())));
         }
         let Some(cursor) = &self.cursor else {
             return Ok(None);
         };
         let Some(file) = find_file(files, &cursor.name) else {
-            return Ok(Some(RebuildReason::Disappeared));
+            return Ok(Some((RebuildReason::Disappeared, cursor.name.clone())));
         };
-        if self
+        if let Some(target) = self
             .caught_up_target
             .as_ref()
-            .is_some_and(|target| find_file(files, &target.name).is_none())
+            .filter(|target| find_file(files, &target.name).is_none())
         {
-            return Ok(Some(RebuildReason::Disappeared));
+            return Ok(Some((RebuildReason::Disappeared, target.name.clone())));
         }
         if file.len < cursor.offset {
-            return Ok(Some(RebuildReason::Truncated));
+            return Ok(Some((RebuildReason::Truncated, cursor.name.clone())));
         }
         if file.len != cursor.observed_len
             && !cursor.prefix.is_empty()
             && let Some(prefix) = source.read_at(&cursor.name, 0, cursor.prefix.len())?
             && prefix != cursor.prefix
         {
-            return Ok(Some(RebuildReason::Replaced));
+            return Ok(Some((RebuildReason::Replaced, cursor.name.clone())));
         }
         Ok(None)
     }

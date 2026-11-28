@@ -1,7 +1,7 @@
 use super::*;
 use crate::event::PoseStatus;
 use crate::rules::{RuleId, Step};
-use crate::tracker::TrackerKey;
+use crate::tracker::{Serial, TrackerKey};
 
 fn timed(ms: i64, event: Event) -> Timed {
     Timed {
@@ -45,9 +45,185 @@ fn detections(engine: &mut Engine) -> Vec<Detection> {
         .into_iter()
         .filter_map(|output| match output {
             Output::Detection(detection) => Some(detection),
-            Output::Notice(_) => None,
+            Output::Notice(_) | Output::DayClosed(_) => None,
         })
         .collect()
+}
+
+#[test]
+fn summaries_count_handed_off_pushes_and_keep_the_run_total_after_rebuild() {
+    let mut config = EngineConfig::default();
+    config.rules.r2.wait_s = 1;
+    let mut engine = Engine::new(config);
+    engine.apply(timed(0, add(1)));
+    engine.apply(timed(1, link(1)));
+    engine.advance_to(LogTime(1_002));
+    assert_eq!(engine.open_summaries()[0].pushes, 0);
+    assert_eq!(detections(&mut engine).len(), 1);
+    assert_eq!(engine.open_summaries()[0].pushes, 1);
+
+    engine.rebuild();
+    engine.set_hub_down(true);
+    engine.apply(timed(0, add(1)));
+    engine.apply(timed(1, link(1)));
+    engine.advance_to(LogTime(1_002));
+    assert_eq!(detections(&mut engine).len(), 1);
+    let summaries = engine.open_summaries();
+    assert_eq!(summaries[0].detections.r2, 1);
+    assert_eq!(summaries[0].pushes, 1);
+}
+
+#[test]
+fn summary_deadline_clamps_to_rule_windows_and_closes_without_a_row() {
+    let offset = UtcOffset(540);
+    let midnight = LogTime::from_local(
+        LogDate {
+            year: 2026,
+            month: 11,
+            day: 29,
+        },
+        0,
+        0,
+        0,
+        0,
+        offset,
+    )
+    .unwrap();
+    for (configured, notice, burst, server, r5, expected) in [
+        (10, 2, 3, 4, 5, 10),
+        (1, 6, 3, 4, 5, 6),
+        (1, 2, 7, 4, 5, 7),
+        (1, 2, 3, 8, 5, 8),
+        (1, 2, 3, 4, 9, 9),
+    ] {
+        let mut cfg = EngineConfig::default();
+        cfg.summary.finalize_delay_s = configured;
+        cfg.rules.r4.notice_after_s = notice;
+        cfg.rules.r4.burst_s = burst;
+        cfg.rules.r4.server_s = server;
+        cfg.rules.r5.wait_s = r5;
+        let mut engine = Engine::new(cfg);
+        engine.apply(Timed {
+            at: LogTime(midnight.0 - 1),
+            offset,
+            event: add(1),
+        });
+
+        let cutoff = LogTime(midnight.0 + expected * 1_000);
+        assert_eq!(engine.next_deadline(), Some(LogTime(cutoff.0 + 1)));
+        engine.advance_to(LogTime(cutoff.0 - 1));
+        assert!(engine.drain().is_empty());
+        engine.advance_to(cutoff);
+        assert!(engine.drain().is_empty());
+        engine.advance_to(LogTime(cutoff.0 + 1));
+        let [Output::DayClosed(closed)]: [Output; 1] = engine.drain().try_into().unwrap() else {
+            panic!("expected one closed day")
+        };
+        assert_eq!(closed.observed_until, "2026-11-28 23:59:59.999");
+        assert!(closed.is_final);
+        assert!(engine.open_summaries().is_empty());
+        assert_eq!(engine.next_deadline(), None);
+        engine.advance_to(LogTime(cutoff.0 + 2));
+        assert!(engine.drain().is_empty());
+    }
+}
+
+#[test]
+fn cutoff_row_finishes_interval_before_freezing_event_facts() {
+    for (clock_cutoff, delay_ms, unobserved_s) in
+        [(false, 0, 600.0), (true, 0, 600.0), (false, 1, 600.001)]
+    {
+        let mut engine = Engine::new(EngineConfig::default());
+        engine.apply(timed(DAY_MS - 1_000, add(1)));
+        let cutoff = DAY_MS + 600_000;
+        if clock_cutoff {
+            engine.advance_to(LogTime(cutoff));
+        }
+        assert!(engine.drain().is_empty());
+
+        let serial = Serial("SYNTHETIC-A".to_owned());
+        engine.apply(timed(
+            cutoff + delay_ms,
+            Event::SerialKnown {
+                tracker: TrackerKey(1),
+                serial: serial.clone(),
+                hub_number: None,
+                firmware: None,
+            },
+        ));
+        let [Output::DayClosed(closed)]: [Output; 1] = engine.drain().try_into().unwrap() else {
+            panic!("expected one closed prior day")
+        };
+        assert_eq!(closed.observed_until, "1970-01-02 00:00:00.000");
+        assert_eq!(closed.unobserved_s, 86_400.0);
+        assert_eq!(closed.trackers[0].serial, None);
+        assert_eq!(closed.source.lines, 1);
+        let [current]: [Summary; 1] = engine.open_summaries().try_into().unwrap();
+        assert_eq!(
+            current.trackers[0].serial.as_deref(),
+            Some(serial.0.as_str())
+        );
+        assert_eq!(current.unobserved_s, unobserved_s);
+    }
+}
+
+#[test]
+fn server_row_does_not_reopen_day_already_closed_by_the_clock() {
+    let mut engine = Engine::new(EngineConfig::default());
+    let last = LogTime(DAY_MS - 60_000);
+    let first = LogTime(DAY_MS + 600_001);
+    engine.note_line(FileKind::Server, Some(last), LineQuality::Other);
+
+    engine.advance_to(first);
+    let [Output::DayClosed(prior)]: [Output; 1] = engine.drain().try_into().unwrap() else {
+        panic!("expected one closed prior day")
+    };
+    assert_eq!(prior.observed_until, "1970-01-01 23:59:00.000");
+    assert_eq!(prior.unobserved_s, 86_340.0);
+
+    engine.note_line(FileKind::Server, Some(first), LineQuality::Other);
+    assert!(engine.drain().is_empty());
+    let [current]: [Summary; 1] = engine.open_summaries().try_into().unwrap();
+    assert_eq!(current.observed_until, "1970-01-02 00:10:00.001");
+    assert_eq!(current.unobserved_s, 600.001);
+}
+
+#[test]
+fn eof_closes_prior_day_without_firing_timers_or_moving_observed_time() {
+    let mut engine = Engine::new(EngineConfig::default());
+    engine.apply(timed(DAY_MS - 20, add(1)));
+    engine.apply(timed(DAY_MS - 10, tracking(1)));
+    engine.apply(timed(
+        DAY_MS - 1,
+        Event::Pose {
+            tracker: TrackerKey(1),
+            status: PoseStatus::Lost,
+        },
+    ));
+    engine.note_line(
+        FileKind::Server,
+        Some(LogTime(DAY_MS + 1)),
+        LineQuality::Other,
+    );
+
+    engine.finish_summaries();
+    assert_eq!(engine.now(), Some(LogTime(DAY_MS + 1)));
+    let [Output::DayClosed(prior)]: [Output; 1] = engine.drain().try_into().unwrap() else {
+        panic!("expected one closed prior day")
+    };
+    assert_eq!(prior.trackers[0].losses, 1);
+    assert_eq!(prior.trackers[0].long_losses, 0);
+    assert_eq!(engine.stats().long_losses, 0);
+    let [current]: [Summary; 1] = engine.open_summaries().try_into().unwrap();
+    assert_eq!(current.observed_until, "1970-01-02 00:00:00.001");
+    assert!(!current.is_final);
+
+    // Maturation after finalization survives only in the overall count.
+    engine.advance_to(LogTime(DAY_MS + 60_000));
+    assert_eq!(engine.stats().long_losses, 1);
+    assert_eq!(engine.open_summaries()[0].trackers[0].long_losses, 0);
+    engine.finish_summaries();
+    assert!(engine.drain().is_empty());
 }
 
 #[test]
@@ -190,6 +366,55 @@ fn driver_lines_count_their_own_day_without_advancing_or_regressing() {
     engine.advance_to(LogTime(cut.0 + 5_001));
     assert_eq!(engine.stats().power_offs, 1);
     assert!(engine.drain().is_empty());
+}
+
+#[test]
+fn power_off_retains_the_disconnect_date_across_an_offset_change() {
+    let before = UtcOffset(540);
+    let after = UtcOffset(600);
+    let day = LogDate {
+        year: 2026,
+        month: 11,
+        day: 29,
+    };
+    let midnight = LogTime::from_local(day, 0, 0, 0, 0, before).unwrap().0;
+    let mut engine = Engine::new(EngineConfig::default());
+    for (at, offset, event) in [
+        (midnight - 60_000, before, add(1)),
+        (midnight - 500, before, remove(1)),
+        (
+            midnight + 100,
+            after,
+            Event::PowerOffNotice {
+                tracker: TrackerKey(1),
+            },
+        ),
+    ] {
+        engine.apply(Timed {
+            at: LogTime(at),
+            offset,
+            event,
+        });
+    }
+    engine.note_line_at(
+        FileKind::Server,
+        Some((LogTime(midnight + 200), after)),
+        LineQuality::Other,
+    );
+    engine.advance_to(LogTime(midnight + 600_001));
+
+    let [Output::DayClosed(closed)]: [Output; 1] = engine.drain().try_into().unwrap() else {
+        panic!("expected one closed prior day")
+    };
+    assert_eq!(closed.date, "2026-11-28");
+    assert_eq!(closed.trackers[0].power_offs, 1);
+    assert_eq!(engine.stats().power_offs, 1);
+    assert!(
+        engine.open_summaries()[0]
+            .trackers
+            .iter()
+            .all(|tracker| tracker.power_offs == 0)
+    );
 }
 
 #[test]

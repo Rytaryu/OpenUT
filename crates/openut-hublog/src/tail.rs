@@ -14,7 +14,7 @@ use openut_core::time::LogTime;
 use crate::header::FileKind;
 
 pub use file::{FileEvent, LogFile, LogName, LogSource, RebuildReason, Tailer, parse_log_name};
-pub use records::{OwnedEntry, Record, RecordData};
+pub use records::{OwnedEntry, Record, RecordData, RecordPosition};
 pub use watermark::Watermark;
 
 use records::RecordDecoder;
@@ -25,6 +25,7 @@ pub enum FollowEvent {
     Rebuild {
         file: FileKind,
         reason: RebuildReason,
+        name: Option<String>,
     },
     /// Both initial snapshots have been read. Buffered server records may still be waiting.
     ReadComplete,
@@ -32,6 +33,7 @@ pub enum FollowEvent {
     File { file: FileKind, event: FileEvent },
     Record {
         record: Record,
+        position: Option<RecordPosition>,
         /// A driver record arrived earlier than the previous driver watermark.
         late: bool,
     },
@@ -53,11 +55,13 @@ pub struct LogFollower {
     server_queue: VecDeque<Queued>,
     driver_queue: VecDeque<Queued>,
     sequence: u64,
-    rebuild: Option<(FileKind, RebuildReason)>,
+    rebuild: Option<(FileKind, RebuildReason, String)>,
     read_complete: bool,
     report_read_complete: bool,
     driver_needs_read: bool,
     previous_driver_time: Option<LogTime>,
+    last_server_time: Option<LogTime>,
+    server_grew: bool,
 }
 
 impl Default for LogFollower {
@@ -82,6 +86,8 @@ impl LogFollower {
             report_read_complete: false,
             driver_needs_read: false,
             previous_driver_time: None,
+            last_server_time: None,
+            server_grew: false,
         }
     }
 
@@ -93,12 +99,13 @@ impl LogFollower {
         now: LogTime,
         driver_needed_through: Option<LogTime>,
     ) -> Result<bool, S::Error> {
+        self.server_grew = false;
         let files = source.list()?;
-        let server_reason = self.server.rebuild_reason(source, &files)?;
-        let driver_reason = self.driver.rebuild_reason(source, &files)?;
+        let server_reason = self.server.rebuild_details(source, &files)?;
+        let driver_reason = self.driver.rebuild_details(source, &files)?;
         let rebuild = server_reason
-            .map(|reason| (FileKind::Server, reason))
-            .or_else(|| driver_reason.map(|reason| (FileKind::Driver, reason)));
+            .map(|(reason, name)| (FileKind::Server, reason, name))
+            .or_else(|| driver_reason.map(|(reason, name)| (FileKind::Driver, reason, name)));
 
         // Commit both cursors only after the reads succeed. An I/O error can then be retried
         // without losing a successfully read chunk from the other stream.
@@ -133,6 +140,12 @@ impl LogFollower {
         if let Some(rebuild) = rebuild {
             self.reset_pipeline(rebuild);
         }
+        self.server_grew = batches.iter().any(|(file, events)| {
+            *file == FileKind::Server
+                && events
+                    .iter()
+                    .any(|event| matches!(event, FileEvent::Bytes { .. }))
+        });
         for (file, events) in batches {
             self.ingest(file, events, now);
         }
@@ -159,8 +172,12 @@ impl LogFollower {
         driver_needed_through: Option<LogTime>,
     ) -> Option<FollowEvent> {
         self.previous_driver_time = self.driver_watermark(now);
-        if let Some((file, reason)) = self.rebuild.take() {
-            return Some(FollowEvent::Rebuild { file, reason });
+        if let Some((file, reason, name)) = self.rebuild.take() {
+            return Some(FollowEvent::Rebuild {
+                file,
+                reason,
+                name: Some(name),
+            });
         }
         let driver = self.driver_queue.front();
         // A new driver batch can move the watermark past D. Its records must reach
@@ -211,6 +228,31 @@ impl LogFollower {
         self.driver.found()
     }
 
+    /// Whether the server stream is available in the latest file listing.
+    pub fn server_found(&self) -> bool {
+        self.server.found()
+    }
+
+    /// Whether the most recent poll read any server bytes, even without a timed record.
+    pub fn server_grew(&self) -> bool {
+        self.server_grew
+    }
+
+    /// The final parsed timestamp in the latest read batch from this stream.
+    pub fn last_log_time(&self, file: FileKind) -> Option<LogTime> {
+        match file {
+            FileKind::Server => self.last_server_time,
+            FileKind::Driver => self.clock.driver_logged_time(),
+        }
+    }
+
+    /// Whether timed server rows remain undelivered, even if catch-up has read all bytes.
+    pub fn has_pending_server_records(&self) -> bool {
+        self.server_queue.iter().any(|queued| {
+            matches!(&queued.event, FollowEvent::Record { record, .. } if record.at().is_some())
+        })
+    }
+
     /// Whether all initially available bytes in both streams have been read.
     pub fn read_complete(&self) -> bool {
         self.read_complete
@@ -253,7 +295,7 @@ impl LogFollower {
         }
     }
 
-    fn reset_pipeline(&mut self, rebuild: (FileKind, RebuildReason)) {
+    fn reset_pipeline(&mut self, rebuild: (FileKind, RebuildReason, String)) {
         self.decoder = RecordDecoder::default();
         self.clock = Watermark::new(self.lateness_ms);
         self.server_queue.clear();
@@ -264,6 +306,7 @@ impl LogFollower {
         self.report_read_complete = false;
         self.driver_needs_read = false;
         self.previous_driver_time = None;
+        self.last_server_time = None;
     }
 
     fn ingest(&mut self, file: FileKind, events: Vec<FileEvent>, now: LogTime) {
@@ -271,8 +314,14 @@ impl LogFollower {
         let mut last_driver = None;
         for event in events {
             let records = match event {
-                FileEvent::Bytes { bytes, .. } => self.decoder.push(file, &bytes),
-                FileEvent::Finished { .. } => self.decoder.finish_file(file),
+                FileEvent::Bytes {
+                    name,
+                    generation,
+                    bytes,
+                } => self.decoder.push_at(file, &name, generation, &bytes),
+                FileEvent::Finished { name, generation } => {
+                    self.decoder.finish_at(file, &name, generation)
+                }
                 event => {
                     if file == FileKind::Driver && matches!(event, FileEvent::Missing) {
                         self.decoder.clear_driver_file();
@@ -282,7 +331,7 @@ impl LogFollower {
                     continue;
                 }
             };
-            for record in records {
+            for records::PositionedRecord { record, position } in records {
                 let mut late = false;
                 if let Some(at) = record.at() {
                     match record.file {
@@ -295,10 +344,18 @@ impl LogFollower {
                         }
                     }
                 }
-                self.enqueue(record.file, FollowEvent::Record { record, late });
+                self.enqueue(
+                    record.file,
+                    FollowEvent::Record {
+                        record,
+                        position,
+                        late,
+                    },
+                );
             }
         }
         if let Some(last) = last_server {
+            self.last_server_time = Some(last);
             self.clock.observe_server_batch(now, last);
         }
         if let Some(last) = last_driver {

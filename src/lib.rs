@@ -3,10 +3,17 @@
 
 pub mod bridge_out;
 pub mod config;
+pub mod discover;
 pub mod driver_reg;
+pub mod hub_process;
+pub mod notify;
+pub mod paths;
 pub mod replay;
 pub mod run;
 pub mod source_fs;
+pub mod steamvr;
+pub mod summary_io;
+pub mod watcher;
 
 /// The version of this build, from `Cargo.toml`.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
