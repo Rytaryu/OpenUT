@@ -81,35 +81,13 @@ impl Collector {
             return Err(more_motion);
         }
 
-        let best = best_match(&trackers, &controllers, config)
-            .filter(|best| best.correlation >= config.min_correlation)
-            .ok_or(CalibrationError::Uncorrelated)?;
-        let pairs: Vec<_> = best
-            .controller
-            .poses
-            .iter()
-            .filter_map(|sample| {
-                let at = tracker_time(sample.at, best.offset_ms)?;
-                let tracker = pose_at(best.tracker.poses, at, config.max_sample_gap)?;
-                Some(SamplePair {
-                    tracker,
-                    controller: sample.pose,
-                })
-            })
-            .collect();
-        if !sufficient_motion(
-            pairs.iter().map(|pair| pair.tracker.rotation),
-            config.min_motion_rad,
-            config.min_axis_separation_rad,
-        ) {
-            return Err(more_motion);
-        }
+        let best = best_match(&trackers, &controllers, config, more_motion)?;
         Ok(PairSelection {
             tracker: best.tracker.id,
             controller: best.controller.id,
             offset_ms: best.offset_ms,
             correlation: best.correlation,
-            pairs,
+            pairs: best.pairs(config.max_sample_gap).collect(),
         })
     }
 }
@@ -197,6 +175,17 @@ struct Match<'a> {
 }
 
 impl Match<'_> {
+    fn pairs(&self, max_gap: Duration) -> impl Iterator<Item = SamplePair> + '_ {
+        self.controller.poses.iter().filter_map(move |sample| {
+            let at = tracker_time(sample.at, self.offset_ms)?;
+            let tracker = pose_at(self.tracker.poses, at, max_gap)?;
+            Some(SamplePair {
+                tracker,
+                controller: sample.pose,
+            })
+        })
+    }
+
     fn tie_break(&self) -> (u32, i32, u32, u32) {
         (
             self.offset_ms.unsigned_abs(),
@@ -216,8 +205,10 @@ fn best_match<'a>(
     trackers: &'a [Stream<'a>],
     controllers: &'a [Stream<'a>],
     config: &CalibrationConfig,
-) -> Option<Match<'a>> {
+    more_motion: CalibrationError,
+) -> Result<Match<'a>, CalibrationError> {
     let mut best = None;
+    let mut correlated = false;
     for tracker in trackers {
         for controller in controllers {
             for offset_ms in offsets(&tracker.speeds, &controller.speeds, config) {
@@ -226,25 +217,39 @@ fn best_match<'a>(
                     &controller.speeds,
                     offset_ms,
                     config.max_sample_gap,
-                ) else {
+                )
+                .filter(|&score| score >= config.min_correlation) else {
                     continue;
                 };
+                correlated = true;
                 let candidate = Match {
                     tracker,
                     controller,
                     offset_ms,
                     correlation,
                 };
+                // A short overlap can correlate without covering both axes.
                 if best
                     .as_ref()
                     .is_none_or(|previous| candidate.better_than(previous))
+                    && sufficient_motion(
+                        candidate
+                            .pairs(config.max_sample_gap)
+                            .map(|pair| pair.tracker.rotation),
+                        config.min_motion_rad,
+                        config.min_axis_separation_rad,
+                    )
                 {
                     best = Some(candidate);
                 }
             }
         }
     }
-    best
+    best.ok_or(if correlated {
+        more_motion
+    } else {
+        CalibrationError::Uncorrelated
+    })
 }
 
 fn offsets(

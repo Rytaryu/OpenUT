@@ -13,6 +13,8 @@ const START: Duration = Duration::from_secs(10);
 const NOW: Duration = Duration::from_secs(18);
 const SAMPLE_COUNT: u32 = 150;
 const SAMPLE_STEP_MS: u32 = 32;
+const FIRST_CONTROLLER_MS: u32 = 200;
+const TRACKER_SAMPLE_PHASE_MS: u32 = 11;
 const SEED: u32 = 0x3f25_b831;
 
 #[derive(Clone, Copy)]
@@ -149,9 +151,9 @@ fn collect(rig: Rig, motion: Motion, seed: Option<u32>, include_distractors: boo
     let mut collector = Collector::new(START);
     let mut noise = seed.map(Noise);
     for index in 0..SAMPLE_COUNT {
-        let controller_ms = 200 + index * SAMPLE_STEP_MS;
+        let controller_ms = FIRST_CONTROLLER_MS + index * SAMPLE_STEP_MS;
         // Sample the tracker on a different part of the cadence to require interpolation.
-        let tracker_ms = controller_ms + 11;
+        let tracker_ms = controller_ms + TRACKER_SAMPLE_PHASE_MS;
         let controller_at = START + Duration::from_millis(u64::from(controller_ms));
         let tracker_at = START
             + Duration::from_millis(
@@ -318,6 +320,45 @@ fn selects_the_one_rigid_pair_among_three_trackers_and_two_controllers() {
     assert_eq!((result.tracker, result.controller), (TRACKER, CONTROLLER));
     assert!(result.correlation >= 0.8);
     assert_recovers_rig(&result, rig);
+}
+
+#[test]
+fn selects_the_rigid_pair_over_four_highly_correlated_single_axis_samples() {
+    let rig = Rig::new("-y+z+x".parse().unwrap());
+    let config = CalibrationConfig::default();
+    let mut collector = collect(rig, Motion::WristTurns, None, false);
+    let reference = collector.calibrate(NOW, &config).unwrap();
+    assert_eq!(
+        (reference.tracker, reference.controller),
+        (TRACKER, CONTROLLER)
+    );
+    assert!(reference.correlation < 1.0);
+
+    let mut previous = None;
+    let mut yaw = 0.0;
+    for index in 0..4 {
+        let millis = FIRST_CONTROLLER_MS + TRACKER_SAMPLE_PHASE_MS + index * SAMPLE_STEP_MS;
+        let raw = tracker_pose(f64::from(millis) / 1_000.0, Motion::WristTurns);
+        let rotation = raw.rotation.to_matrix();
+        if let Some(previous) = previous {
+            // Reproduce the raw tracker's angular speeds exactly, but around one axis.
+            yaw += angle_between(rotation, previous);
+        }
+        collector.add_controller(
+            99,
+            TimedSample {
+                at: START + Duration::from_millis(u64::from(millis)),
+                pose: Pose {
+                    position: Vec3::ZERO,
+                    rotation: Quat::yaw(yaw),
+                },
+            },
+        );
+        previous = Some(rotation);
+    }
+
+    let selected = collector.calibrate(NOW, &config).unwrap();
+    assert_eq!(selected, reference);
 }
 
 #[test]
