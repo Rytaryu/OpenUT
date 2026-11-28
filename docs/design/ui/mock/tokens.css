@@ -1,4 +1,4 @@
-/* OpenUT design tokens, 4th version (mirrors docs/design/ui/m1.md, section 1).
+/* OpenUT design tokens, 5th version (mirrors docs/design/ui/m1.md, section 1).
    The app is drawn with egui / fontdue, not with this CSS. This file only feeds the mockups. */
 
 :root {
@@ -8,14 +8,14 @@
 
   /* Main window: one dark theme (1.2) */
   --bg: #1E2228;        /* window ground */
-  --panel: #282D34;     /* status band, tiles, guide frame */
-  --panel-2: #333941;   /* buttons at rest, list rows, hover */
-  --line: #3B424B;      /* dividers */
+  --panel: #282D34;     /* status bar, cards */
+  --panel-2: #333941;   /* buttons at rest, the card menu, the body of a tracker pictogram */
+  --line: #3B424B;      /* dividers, a menu item under the pointer */
   --ink: #EEF1F4;       /* text */
   --ink-2: #A9B2BC;     /* labels, the part of a serial before the tail, values shown greyed */
   --muted: #8D96A1;     /* marks shown greyed (last values, not current) */
-  --idle: #727B86;      /* outline of a tracker that is not connected, steps not reached */
-  --accent: #9DB2FF;    /* buttons, focus, host tag, the current step of a guide */
+  --idle: #727B86;      /* outline of a tracker that is not connected */
+  --accent: #9DB2FF;    /* icons of the buttons, focus, the host star, checkboxes */
   --on-accent: #15181C;
 
   /* The three states of W-10 (the only strong colours on the screen) */
@@ -24,12 +24,12 @@
   --fault: #FF7B6E;     /* 異常 */
   --on-state: #15181C;  /* text on a filled state colour */
 
-  /* Tray, toast logo, window icon: one colour each that works on light and dark Windows surfaces */
+  /* Tray, toast notification logo, window icon: one colour each that works on light and dark Windows surfaces */
   --icon-ok: #2F9466;
   --icon-wait: #B07A12;
   --icon-fault: #D64A3C;
 
-  /* SteamVR panels */
+  /* SteamVR notice overlay (provisional) */
   --vr-panel: rgba(30, 34, 40, 0.94);
   --vr-edge: rgba(255, 255, 255, 0.14);
   --vr-ink: #F3F6FA;

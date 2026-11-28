@@ -1,4 +1,6 @@
 // Scenes of the main window, written in the shape of the display model (design 7.4, DisplayModel).
+// The 5th version has no guide (PRD W-10, D-46): `guide` is not used, and the line of the status bar is a notice,
+// a problem on the side of the app, or "VIVE Hubを起動してください" (m1.md 2.3).
 // The serial numbers are made-up examples in the shape of the design's examples (00XX0000A0001):
 // no real serial number is in this repository.
 
@@ -12,13 +14,6 @@
   const S = (n) => `00XX0000A000${n}`;
   const lab = (d) => X.label(d);
 
-  // Guide steps: done flags and the current one (design 7.4, "いまの段").
-  const steps = (current, progress) =>
-    ["G1", "G2", "G3", "G4", "G5"].map((id, i) => ({
-      id, done: i < ["G1", "G2", "G3", "G4", "G5"].indexOf(current), current: id === current,
-      progress: id === current ? progress || null : null,
-    }));
-
   const t1 = dev({ serial: S(1), tail: "0001", hub: 2, battery: 82, state: "ok", host: true });
   const t2 = dev({ serial: S(2), tail: "0002", hub: 1, battery: 64, state: "wait" });
   const t3 = dev({ serial: S(3), tail: "0003", link: "none" });
@@ -26,8 +21,8 @@
   const scenes = {};
 
   scenes.a = {
-    title: "待機中（追跡を待っている台がある）",
-    overall: "wait", line: { guide: "G4" }, faults: [], guide: steps("G4", [1, 2]), dongle: "on",
+    title: "待機中（同期中の台がある）",
+    overall: "wait", line: null, faults: [], dongle: "on",
     devices: [t1, t2, t3],
   };
 
@@ -35,8 +30,8 @@
     const h = dev({ serial: S(1), tail: "0001", hub: 2, battery: 82, state: "fault", host: true });
     const n = X.notice("R1", "Raised", "", lab(h));
     scenes.b = {
-      title: "異常（追跡が始まらない。ホストの電源を入れ直す）",
-      overall: "fault", line: { fault: n }, faults: [n], guide: steps("G4", [0, 3]), dongle: "on",
+      title: "異常（トラッキングが始まらない。★の台の電源を入れ直す）",
+      overall: "fault", line: { fault: n }, faults: [n], dongle: "on",
       devices: [h, dev({ serial: S(2), tail: "0002", hub: 1, battery: 64, state: "wait" }),
                 dev({ serial: S(3), tail: "0003", hub: 3, battery: 71, state: "wait" })],
     };
@@ -44,7 +39,7 @@
 
   scenes.c = {
     title: "正常（5 台。1 台は USB で充電中）",
-    overall: "ok", line: { guide: "G5" }, faults: [], guide: steps("G5"), dongle: "on",
+    overall: "ok", line: null, faults: [], dongle: "on",
     devices: [
       dev({ serial: S(1), tail: "0001", hub: 3, battery: 82, state: "ok" }),
       dev({ serial: S(2), tail: "0002", hub: 1, battery: 64, state: "ok", host: true }),
@@ -56,19 +51,19 @@
 
   scenes.d = {
     title: "VIVE Hub が止まっている",
-    overall: "wait", line: { guide: "G1" }, faults: [], guide: steps("G1"), dongle: "unknown",
+    overall: "wait", line: { hub: true }, faults: [], dongle: "unknown",
     devices: [1, 2, 3].map((n) => dev({ serial: S(n), tail: `000${n}`, link: "none" })),
   };
 
   scenes.e = {
     title: "VIVE Hub のログが見つからない（フォルダーを選ぶ）",
-    overall: "wait", line: { guide: "G1" }, faults: [], guide: steps("G1"), dongle: "unknown",
+    overall: "wait", line: { hub: true }, faults: [], dongle: "unknown",
     devices: [], pickFolder: true,
   };
 
   scenes.f = {
     title: "灰色（最後に読めた値。VIVE Hub を起動し直す）",
-    overall: "wait", line: { health: "Stalled" }, faults: [], guide: steps("G4", [1, 2]), dongle: "on",
+    overall: "wait", line: { health: "Stalled" }, faults: [], dongle: "on",
     devices: [t1, t2, t3], greyed: true,
   };
 
@@ -81,26 +76,21 @@
     const r2 = X.notice("R2", "Raised", lab(b), lab(a));
     const ok = Object.assign(X.notice("R4", "Resolved", lab(d), ""), { resolved: true });
     scenes.g = {
-      title: "異常が 2 つと、つながった台（欄に並ぶ）",
-      overall: "fault", line: { fault: r4 }, faults: [ok, r2, r4], guide: steps("G4", [2, 3]), dongle: "on",
+      title: "異常が 2 つと、つながった台（案内の一覧）",
+      overall: "fault", line: { fault: r4 }, faults: [ok, r2, r4], dongle: "on",
       devices: [a, b, c, d],
     };
   }
 
   scenes.h = {
-    title: "操作の手引き（キャリブレーションの例。手順の中身は仮）",
-    overall: "ok", line: { guide: "G5" }, faults: [], guide: steps("G5"), dongle: "on",
-    devices: scenes.c.devices,
-    op: {
-      kind: "cal",
-      steps: ["トラッカーと|コントローラーを|重ねて持つ", "8の字を描いて|手首を回す", "終わり"],
-      current: 1, progress: 0.6,
-    },
+    title: "カードのメニュー（仮。中身は #76）",
+    overall: "ok", line: null, faults: [], dongle: "on",
+    devices: scenes.c.devices, menuOpen: 2,
   };
 
   {
     // Minimum size, six trackers: five connected (tails of 5 characters, because two serials share "0001")
-    // and one that is not. The sixth tile is reached by scrolling.
+    // and one that is not. The sixth card is reached by scrolling.
     const T = (s, tail, o) => dev(Object.assign({ serial: s, tail }, o));
     const a = T("00XX0000A0001", "A0001", { hub: 4, battery: 100, state: "ok", link: "usb", charging: true });
     const b = T("00XX0000A0002", "A0002", { hub: 2, battery: 58, state: "fault", host: true });
@@ -111,7 +101,7 @@
     const n = X.notice("R1", "Escalated", "", lab(b));
     scenes.i = {
       title: "最小の大きさ（1000 × 600）、6 台",
-      overall: "fault", line: { fault: n }, faults: [n], guide: steps("G4", [1, 5]), dongle: "on",
+      overall: "fault", line: { fault: n }, faults: [n], dongle: "on",
       devices: [a, b, c, d, e, f], size: [1000, 600],
     };
   }
@@ -128,7 +118,7 @@
     const r4 = X.notice("R4", "Raised", lab(c), "");
     scenes.j = {
       title: "最小の大きさ、末尾が 32 文字の 2 台",
-      overall: "fault", line: { fault: r1 }, faults: [r4, r1], guide: steps("G4", [1, 2]), dongle: "on",
+      overall: "fault", line: { fault: r1 }, faults: [r4, r1], dongle: "on",
       devices: [a, b, c], size: [1000, 600],
     };
   }

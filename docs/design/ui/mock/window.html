@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>OpenUT 主の窓</title>
+<title>OpenUT メインウィンドウ</title>
 <link rel="stylesheet" href="tokens.css">
 <script src="wrap.js"></script>
 <script src="glyph.js"></script>
@@ -11,25 +11,25 @@
 <script src="text.js"></script>
 <script src="scenarios.js"></script>
 <style>
-  /* Values: docs/design/ui/m1.md, chapter 3. Open with ?s=a .. ?s=j (scenes in scenarios.js). */
+  /* Values: docs/design/ui/m1.md, chapter 2 (5th version). Open with ?s=a .. ?s=j (scenes in scenarios.js). */
   body { padding: 24px; }
   #win { display: inline-block; border-radius: 8px; overflow: hidden; box-shadow: 0 0 0 1px #3A3F46; }
 
-  /* Windows draws the title bar (dark, 3.1). Shown here only for the frame. */
+  /* Windows draws the title bar (dark, 2.1). Shown here only for the frame. */
   .titlebar { height: 32px; background: #1A1D21; display: flex; align-items: center; padding-left: 12px;
               font-size: 12px; color: #D0D4D9; gap: 8px; }
   .titlebar .mk { width: 16px; height: 16px; }
   .titlebar .btns { margin-left: auto; display: flex; height: 100%; }
   .titlebar .btns span { width: 46px; display: grid; place-items: center; color: #B8BEC6; font-size: 12px; }
 
-  .client { background: var(--bg); display: grid; grid-template-rows: 1fr 52px; overflow: hidden; }
-  .scroll { padding: 20px 20px 0; display: flex; flex-direction: column; gap: 16px; overflow: hidden; min-height: 0; position: relative; }
+  .client { background: var(--bg); display: grid; grid-template-rows: 1fr 60px; overflow: hidden; }
+  .scroll { padding: 20px 20px 16px; display: flex; flex-direction: column; gap: 16px; overflow: hidden; min-height: 0; position: relative; }
   .scroll.cut::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 28px;
                        background: linear-gradient(transparent, var(--bg)); }
   .scroll > * { flex: none; }
   .vbar { position: absolute; right: 6px; top: 20px; width: 4px; border-radius: 2px; background: var(--idle); }
 
-  /* 1. Status band */
+  /* 1. Status bar */
   .band { background: var(--panel); border-radius: 8px; min-height: 76px; display: grid;
           grid-template-columns: 184px 1fr auto; align-items: center; }
   .band .overall { display: flex; align-items: center; gap: 12px; padding-left: 20px; height: 100%;
@@ -44,80 +44,65 @@
   .band .line .head { font-weight: 700; }
   .band .line .act { font-size: 16px; line-height: 24px; color: var(--ink); margin-top: 2px; }
   .band .btn { margin-right: 20px; }
+  .grey-band .others .row { color: var(--ink-2); }
 
-  /* 3. Devices */
-  .devices { display: flex; align-items: stretch; min-height: 245px; }
-  .tile.ghost { background: none; box-shadow: inset 0 0 0 1.5px var(--line); }
-  .tile.ghost .pict { margin-top: 44px; }
+  /* 2. Devices: the dongle card, a divider, the tracker cards (scrolls sideways from the 6th at the minimum width). */
+  .devwrap { display: flex; flex-direction: column; }
+  .devices { display: flex; align-items: stretch; }
   .devices .sep { width: 1px; background: var(--line); margin: 0 12px; flex: none; }
-  .strip { display: flex; gap: 12px; overflow: hidden; position: relative; flex: 1; min-width: 0; }
-  .strip.more::after { content: ""; position: absolute; right: 0; top: 0; bottom: 8px; width: 40px;
+  .strip { display: flex; gap: 12px; overflow: hidden; position: relative; flex: 1; min-width: 0; align-items: stretch; }
+  .strip.more::after { content: ""; position: absolute; right: 0; top: 0; bottom: 0; width: 40px;
                        background: linear-gradient(to right, transparent, var(--bg)); }
   .scrollbar { height: 4px; border-radius: 2px; background: var(--panel-2); margin-top: 6px; position: relative; }
   .scrollbar i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 2px; background: var(--idle); }
-  .tile { background: var(--panel); border-radius: 8px; flex: none; position: relative; overflow: hidden;
+
+  .card { background: var(--panel); border-radius: 8px; flex: none; position: relative;
           padding: 14px 12px 12px; display: flex; flex-direction: column; }
-  .tile .sbar { position: absolute; left: 0; right: 0; top: 0; height: 4px; }
-  .tile .name { font-size: 16px; font-weight: 700; line-height: 22px; white-space: nowrap; height: 22px;
+  .card .sbar { position: absolute; left: 0; right: 0; top: 0; height: 4px; border-radius: 8px 8px 0 0; }
+  .card .name { font-size: 16px; font-weight: 700; line-height: 22px; white-space: nowrap; height: 22px;
                 display: flex; justify-content: center; align-items: center; gap: 4px; }
-  .tile .pict { display: flex; justify-content: center; margin-top: 8px; height: 48px; }
-  .tile .state { height: 22px; margin-top: 8px; display: flex; justify-content: center; align-items: center; gap: 6px;
+  .card .hero { display: flex; flex-direction: column; align-items: center; margin-top: 12px; }
+  .card .pbox { height: 96px; display: flex; align-items: center; justify-content: center; }
+  .card .pict { display: block; }
+  .card .state { height: 22px; margin-top: 10px; display: flex; justify-content: center; align-items: center; gap: 6px;
                  font-size: 16px; font-weight: 700; line-height: 22px; }
-  .tile hr { border: 0; border-top: 1px solid var(--line); margin: 8px 0; width: 100%; }
-  .tile .kv { display: flex; align-items: center; gap: 6px; font-size: 13px; line-height: 20px; height: 20px; white-space: nowrap; }
-  .tile .kvs { display: flex; flex-direction: column; }
-  .tile .kvs.one { flex-direction: row; justify-content: space-between; }
-  .tile .kv b { font-weight: 700; }
-  .tile .lbl { font-size: 12px; line-height: 16px; color: var(--ink-2); margin-top: 6px; }
-  .tile .val { font-size: 13px; line-height: 18px; white-space: nowrap; }
-  .tile .val .pre { color: var(--ink-2); }
-  .tile .val .tail { font-weight: 700; }
-  .tile .unk { color: var(--ink-2); }
-  .tile.off .name, .tile.off .state { color: var(--ink-2); }
-  .tile.grey .val, .tile.grey .kv, .tile.grey .name { color: var(--ink-2); }
-  .tile.grey .val .tail { color: var(--ink-2); }
-  .tile.dongle .state { font-size: 16px; }
+  .card hr { border: 0; border-top: 1px solid var(--line); margin: 10px 0; width: 100%; }
+  .card .bat { display: flex; align-items: center; gap: 6px; font-size: 13px; line-height: 20px; height: 20px; white-space: nowrap; }
+  .card .bat b { font-weight: 700; }
+  .card .bat .ic { margin-left: 2px; }
+  .card .lbl { font-size: 12px; line-height: 16px; color: var(--ink-2); margin-top: 8px; }
+  .card .val { font-size: 13px; line-height: 18px; white-space: nowrap; }
+  .card .val .pre { color: var(--ink-2); }
+  .card .val .tail { font-weight: 700; }
+  .card .unk { color: var(--ink-2); }
+  .card .fwrow { display: flex; align-items: center; justify-content: space-between; height: 24px; }
+  .card .menu { width: 24px; height: 24px; border-radius: 6px; display: grid; place-items: center; color: var(--ink-2); flex: none; }
+  .card .menu.open { background: var(--panel-2); color: var(--ink); }
+  .card.off .name, .card.off .state { color: var(--ink-2); }
+  .card.grey .val, .card.grey .bat, .card.grey .name, .card.grey .val .tail { color: var(--ink-2); }
+  /* No tracker yet: the frame of a card with only its pictogram, at the same place as on a card (2.4). */
+  .card.ghost { background: none; box-shadow: inset 0 0 0 1.5px var(--line); }
+  .card.ghost > *:not(.hero), .card.ghost .state { visibility: hidden; }
 
-  /* 4. Guide frame and operations */
-  .lower { display: grid; grid-template-columns: 1fr 232px; gap: 16px; flex: none; }
-  .frame { background: var(--panel); border-radius: 8px; padding: 16px 20px; display: grid; grid-template-columns: 1fr; }
-  .frame.op { grid-template-columns: 176px 1fr; column-gap: 16px; }
-  .frame .hd { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; }
-  .frame .hd .nm { display: flex; align-items: center; gap: 8px; font-size: 16px; font-weight: 700; line-height: 22px; }
-  .steps { display: grid; position: relative; align-self: start; }
-  .step { display: flex; flex-direction: column; align-items: flex-start; position: relative; padding-right: 8px; }
-  .step .dot { width: 28px; height: 28px; border-radius: 14px; display: grid; place-items: center;
-               font-size: 14px; font-weight: 700; position: relative; z-index: 1; }
-  .step .dot.todo { box-shadow: inset 0 0 0 2px var(--idle); color: var(--ink-2); background: var(--panel); }
-  .step .dot.done { background: var(--panel-2); box-shadow: inset 0 0 0 2px var(--accent); }
-  .step .dot.now { background: var(--accent); color: var(--on-accent); }
-  .step .conn { position: absolute; left: 28px; right: 0; top: 13px; height: 2px; background: var(--idle); }
-  .step .conn.done { background: var(--accent); }
-  .step .lab { margin-top: 8px; font-size: 14px; line-height: 20px; color: var(--ink-2); }
-  .step.now .lab { color: var(--ink); font-weight: 700; }
-  .step.done .lab { color: var(--ink); }
-  .step .prog { display: inline-block; margin-top: 4px; font-size: 13px; font-weight: 700; line-height: 18px;
-                padding: 0 8px; border-radius: 9px; background: var(--panel-2); color: var(--accent); }
-  .step .pbar { width: calc(100% - 8px); height: 6px; border-radius: 3px; background: var(--panel-2); margin-top: 8px; overflow: hidden; }
-  .step .pbar i { display: block; height: 100%; background: var(--accent); }
+  /* The card's menu (2.5, provisional): opens upwards from the button, right edges aligned. */
+  .popup { position: absolute; right: 12px; bottom: 40px; z-index: 3; background: var(--panel-2); border-radius: 6px;
+           box-shadow: 0 0 0 1px var(--line), 0 8px 24px rgba(0, 0, 0, 0.35); padding: 4px; min-width: 148px; }
+  .popup div { height: 32px; display: flex; align-items: center; padding: 0 12px; font-size: 14px; border-radius: 4px; white-space: nowrap; }
+  .popup div.hl { background: var(--line); }
 
-  .ops { display: flex; flex-direction: column; gap: 8px; }
+  /* 3. Footer: the two operations, notifications, settings */
+  .foot { padding: 0 20px; display: flex; align-items: center; gap: 8px; font-size: 14px; border-top: 1px solid var(--line); }
+  .foot .gapl { margin-left: auto; }
+  .foot .lbl { font-size: 12px; color: var(--ink-2); margin-right: 4px; }
+  .foot .vsep { width: 1px; height: 24px; background: var(--line); margin: 0 12px 0 12px; }
   .btn { display: inline-flex; align-items: center; gap: 10px; height: 36px; padding: 0 16px; border-radius: 6px;
          background: var(--panel-2); color: var(--ink); font-size: 14px; font-weight: 700; white-space: nowrap; }
   .btn.primary { background: var(--accent); color: var(--on-accent); }
-  .ops .btn { height: 36px; color: var(--ink); }
-  .ops .btn svg { color: var(--accent); }
-  .ops .btn.on { box-shadow: inset 0 0 0 2px var(--accent); color: var(--accent); }
-  .ops .btn.off { color: var(--muted); }
-  .ops .btn.off svg { color: var(--muted); }
-  .ops .btn.focus { box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent); }
-
-  /* 5. Footer: notifications */
-  .foot { padding: 0 20px; display: flex; align-items: center; gap: 20px; font-size: 14px; border-top: 1px solid var(--line); }
-  .foot .lbl { font-size: 12px; color: var(--ink-2); }
-  .chk { display: inline-flex; align-items: center; gap: 8px; }
+  .btn svg { color: var(--accent); }
+  .btn.icon { width: 36px; padding: 0; justify-content: center; }
+  .btn.icon svg { color: var(--ink-2); }
+  .chk { display: inline-flex; align-items: center; gap: 8px; margin-right: 12px; }
   .chk i { width: 16px; height: 16px; border-radius: 4px; background: var(--accent); display: grid; place-items: center; }
-  .chk i.no { background: none; box-shadow: inset 0 0 0 1.5px var(--ink-2); }
 </style>
 </head>
 <body>
@@ -132,12 +117,14 @@
   const grey = !!sc.greyed;
   const c = (k) => (grey ? "var(--muted)" : col[k]);
   const esc = (s) => s.replace(/[&<>]/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[m]));
+  const fam = getComputedStyle(document.documentElement).getPropertyValue("--font").trim();
+  const K = 2; // tracker pictogram: 60 x 48 grid shown at 120 x 96. The dongle at 1.5 (90 x 72) in a box of 96 (1.4)
 
-  // Tile width (3.3): clamp(floor((avail - 12 * 4) / 5), 152, 176), avail = width - 40 - 120 - 25.
+  // Card width (2.4): clamp(floor((A - 12 * 4) / 5), 152, 176), A = width - 40 - 120 - 25.
   const avail = ww - 40 - 120 - 25;
   const tw = Math.max(152, Math.min(176, Math.floor((avail - 48) / 5)));
 
-  // Serial number on a tile (3.4): the tail (Bold) is always shown whole.
+  // Serial number on a card (2.4): the tail (Bold) is always shown whole.
   // A: the whole serial on one line. B: "…" and the end of the part before the tail, on one line.
   // C: the tail alone does not fit on one line: "…" (when there is a part before it) and the tail, cut into lines
   //    from the end (each line from the end as full as it can be, the rest on the first line), as many as needed.
@@ -154,64 +141,63 @@
     return lines.map((l, i) => (i === 0 && l.startsWith("…") ? html("…", l.slice(1)) : html("", l))).join("<br>");
   }
 
-  function tile(d) {
+  function card(d, i) {
     const off = d.link === "none";
     const st = d.state;
     const frame = st ? c(st) : "var(--idle)";
     const bar = st ? `<div class="sbar" style="background:${c(st)}"></div>` : "";
-    // Tile title (3.4): "トラッカー{N}" with the VIVE Hub number, else "トラッカー". The host has a star before it.
+    // Title (2.4): "トラッカー{N}" with the VIVE Hub number, else "トラッカー". The host has a star before it.
     const name = (d.host ? I.star(16, grey ? "var(--muted)" : "var(--accent)") : "") +
       `<span>${d.hub ? `${W.tracker}${d.hub}` : W.tracker}</span>`;
+    // One word for the connection and the state (2.4): 未接続, 同期中, 接続済み, USB接続, 異常.
+    const word = X.cardWord(d);
     const stateRow = st
-      ? `${I.state(st, 14, c(st))}<span style="color:${c(st)}">${W.state[st]}</span>`
-      : `${I.state("none", 14, "var(--idle)")}<span>${W.state.none}</span>`;
-    // Connection row: hidden when the state row already says 未接続 (3.3, rule "未接続の台").
-    const linkRow = off && !st ? "" :
-      `<div class="kv">${I.link(d.link, grey ? "var(--muted)" : "var(--ink-2)")}<span>${W.link[d.link]}</span></div>`;
-    const batRow = off ? "" :
-      `<div class="kv">${I.battery(d.battery, d.charging, grey ? "var(--muted)" : "var(--ink)")}` +
-      (d.battery == null ? `<span class="unk">${W.unknown}</span>` : `<b>${d.battery}%</b>`) + `</div>`;
+      ? `${I.state(st, 14, c(st))}<span style="color:${c(st)}">${word}</span>`
+      : `${I.state("none", 14, "var(--idle)")}<span>${word}</span>`;
+    // Battery row: kept empty (same height) on a card that is not connected, so the rows below line up.
+    const batRow = off ? `<div class="bat"></div>` :
+      `<div class="bat">${I.battery(d.battery, d.charging, grey ? "var(--muted)" : "var(--ink)")}` +
+      (d.battery == null ? `<span class="unk">${W.unknown}</span>` : `<b>${d.battery}%</b>`) +
+      // The USB mark only when the word does not say USB接続 already (同期中 or 異常 over USB).
+      (d.link === "usb" && word !== "USB接続" ? I.usb(grey ? "var(--muted)" : "var(--ink-2)") : "") + `</div>`;
     const ser = d.serial ? serialHtml(d.serial, d.tail, tw - 24) : `<span class="unk">${W.unknown}</span>`;
-    return `<div class="tile${off && !st ? " off" : ""}${grey ? " grey" : ""}" style="width:${tw}px">${bar}
+    const open = sc.menuOpen === i;
+    const popup = open ? `<div class="popup"><div class="hl">${W.menu.powerOff}</div><div>${W.menu.unpair}</div></div>` : "";
+    return `<div class="card${off && !st ? " off" : ""}${grey ? " grey" : ""}" style="width:${tw}px">${bar}
       <div class="name">${name}</div>
-      <div class="pict">${I.tracker(frame, off ? "outline" : "solid")}</div>
-      <div class="state">${stateRow}</div>
+      <div class="hero"><div class="pad"></div><div class="pbox">${I.tracker(frame, off ? "outline" : "solid", K)}</div><div class="state">${stateRow}</div><div class="pad"></div></div>
       <hr>
-      <div class="kvs${tw - 24 >= 148 ? " one" : ""}">${linkRow}${batRow}</div>
+      ${batRow}
       <div class="lbl">${W.serial}</div><div class="val">${ser}</div>
-      <div class="lbl">${W.firmware}</div><div class="val">${d.fw ? d.fw : `<span class="unk">${W.unknown}</span>`}</div>
+      <div class="lbl">${W.firmware}</div>
+      <div class="fwrow"><div class="val">${d.fw ? d.fw : `<span class="unk">${W.unknown}</span>`}</div>` +
+        `<span class="menu${open ? " open" : ""}" title="${W.menuLabel}">${I.more()}</span></div>${popup}
     </div>`;
   }
 
-  function dongleTile() {
+  function dongleCard() {
     const k = sc.dongle;
-    return `<div class="tile dongle${grey ? " grey" : ""}" style="width:120px">
+    return `<div class="card dongle${grey ? " grey" : ""}" style="width:120px">
       <div class="name">${W.dongleName}</div>
-      <div class="pict">${I.dongle(grey && k === "on" ? "on" : k)}</div>
-      <div class="state" style="color:${k === "on" && !grey ? "var(--ink)" : "var(--ink-2)"}">${W.dongle[k]}</div>
+      <div class="hero"><div class="pad"></div><div class="pbox">${I.dongle(grey && k === "on" ? "on" : k, 1.5)}</div>` +
+        `<div class="state" style="color:${k === "on" && !grey ? "var(--ink)" : "var(--ink-2)"}">${W.dongle[k]}</div><div class="pad"></div></div>
     </div>`;
   }
 
-  // Band line (3.2): guide / health / fault (headline + action). Text broken with wrap.js (4.4).
+  // Status bar line (2.3): a notice (headline + action), a problem on the side of the app, or VIVE Hub (G1).
   const lineW = ww - 40 - 184 - 40 - (sc.pickFolder ? 180 : 0);
-  function wrapHtml(s, font, width) {
-    return window.OpenUTWrap.wrap(s, font, width).map(esc).join("<br>");
-  }
-  const fam = getComputedStyle(document.documentElement).getPropertyValue("--font").trim();
+  const wrapHtml = (s, font, width) => window.OpenUTWrap.wrap(s, font, width).map(esc).join("<br>");
   function bandLine() {
     const l = sc.line;
     if (!l) return "";
     if (l.fault)
       return `<div class="head">${wrapHtml(l.fault.headline, `700 18px ${fam}`, lineW)}</div>` +
              `<div class="act">${wrapHtml(l.fault.action, `400 16px ${fam}`, lineW)}</div>`;
-    const s = l.guide ? X.guide[l.guide].line : X.health[l.health];
-    return wrapHtml(s, `400 18px ${fam}`, lineW);
+    return wrapHtml(l.hub ? X.hubLine : X.health[l.health], `400 18px ${fam}`, lineW);
   }
 
-  // Other live notices, inside the band under the line: all of faults except the one shown as the line (3.2).
+  // Other live notices, in the status bar under the line: all of faults except the one shown as the line (2.3).
   const others = sc.faults.filter((f) => !(sc.line && sc.line.fault === f));
-  // A row: the headline and, 12 to its right, the action. When they do not fit on one line, the action goes
-  // under the headline, and each is broken with wrap.js (4.4).
   const rowW = lineW - 14 - 8;
   function rowText(f) {
     const HB = `700 14px ${fam}`, AR = `400 14px ${fam}`, m = window.OpenUTWrap.measure;
@@ -224,73 +210,52 @@
         rowText(f) + `</div>`).join("")}</div>`
     : "";
 
-  function stepsHtml(items) {
-    const n = items.length;
-    return `<div class="steps" style="grid-template-columns:repeat(${n},1fr)">` + items.map((s, i) => {
-      const k = s.done ? "done" : s.current ? "now" : "todo";
-      const dot = s.done ? I.check(28, "var(--accent)") : String(i + 1);
-      const conn = i < n - 1 ? `<div class="conn${s.done ? " done" : ""}"></div>` : "";
-      const prog = s.progress ? `<span class="prog">${s.progress[0]}/${s.progress[1]}</span>` : "";
-      const bar = s.bar != null ? `<div class="pbar"><i style="width:${s.bar * 100}%"></i></div>` : "";
-      return `<div class="step ${k}"><div class="dot ${k}">${dot}</div>${conn}` +
-             `<div class="lab">${wrapHtml(s.text, `${s.current ? 700 : 400} 14px ${fam}`, stepW)}</div>${prog}${bar}</div>`;
-    }).join("") + `</div>`;
-  }
-
-  // Step column width (3.4): (frame inner width) / number of steps - 8.
-  const frameInner = ww - 40 - 232 - 16 - 40;
-  let stepW = 0;
-  let frame;
-  if (sc.op) {
-    const o = sc.op;
-    stepW = Math.floor((frameInner - 192) / o.steps.length) - 8;
-    frame = `<div class="frame op"><div class="hd"><div class="nm">${I.op(o.kind, "var(--accent)")}<span>${W.ops[o.kind]}</span></div>` +
-      `<span class="btn">${W.stop}</span></div>` +
-      stepsHtml(o.steps.map((t, i) => ({ text: t, done: i < o.current, current: i === o.current, bar: i === o.current ? o.progress : null }))) +
-      `</div>`;
-  } else {
-    stepW = Math.floor(frameInner / 5) - 8;
-    frame = `<div class="frame">` +
-      stepsHtml(sc.guide.map((g) => ({ text: X.guide[g.id].step, done: g.done, current: g.current, progress: g.progress }))) +
-      `</div>`;
-  }
-  const opBtn = (k) => {
-    const cls = sc.op ? (sc.op.kind === k ? " on" : " off") : "";
-    return `<span class="btn${cls}">${I.op(k)}${W.ops[k]}</span>`;
-  };
-
-  // No tracker yet: one empty outline in the place of the first tile (3.3), no words.
-  const strip = sc.devices.length ? sc.devices.map(tile).join("")
-    : `<div class="tile ghost" style="width:${tw}px"><div class="pict">${I.tracker("var(--line)", "outline").replace(/var\(--idle\)/g, "var(--line)")}</div></div>`;
+  // No tracker yet: one empty outline in the place of the first card (2.4), no words.
+  const strip = sc.devices.length ? sc.devices.map(card).join("")
+    : card({ serial: "00XX0000A0001", tail: "0001", link: "none", state: null, fw: "1.0.999.178" }, -1)
+        .replace('class="card off', 'class="card ghost off').replace(/var\(--idle\)/g, "var(--line)");
   const need = sc.devices.length * tw + Math.max(0, sc.devices.length - 1) * 12;
   const over = need > avail;
   const overall = sc.overall;
+  const opBtn = (k) => `<span class="btn">${I.op(k)}${W.ops[k]}</span>`;
+  const chk = (t) => `<span class="chk"><i>${I.check(16, "var(--on-accent)")}</i>${t}</span>`;
 
   document.getElementById("win").innerHTML =
     `<div class="titlebar"><canvas class="mk" data-glyph="${overall}" data-size="32" data-dpr="2" data-color="--icon-${overall}"></canvas><span>OpenUT</span><div class="btns"><span>—</span><span>☐</span><span>✕</span></div></div>` +
     `<div class="client" style="width:${ww}px;height:${wh}px"><div class="scroll">` +
-      `<div class="band"><div class="overall" style="color:${col[overall]}">${I.state(overall, 28, col[overall])}<span>${W.overall[overall]}</span></div>` +
+      `<div class="band${grey ? " grey-band" : ""}"><div class="overall" style="color:${col[overall]}">${I.state(overall, 28, col[overall])}<span>${W.overall[overall]}</span></div>` +
         `<div class="line">${bandLine()}${othersHtml}</div>` +
         (sc.pickFolder ? `<span class="btn primary">${W.pickFolder}</span>` : "<span></span>") + `</div>` +
-      `<div><div class="devices">${dongleTile()}<div class="sep"></div><div class="strip${over ? " more" : ""}">${strip}</div></div>` +
+      `<div class="devwrap"><div class="devices">${dongleCard()}<div class="sep"></div><div class="strip${over ? " more" : ""}">${strip}</div></div>` +
         (over ? `<div class="scrollbar" style="margin-left:${120 + 25}px"><i style="width:${(avail / need) * 100}%"></i></div>` : "") + `</div>` +
-      `<div class="lower">${frame}<div class="ops">${opBtn("pair")}${opBtn("map")}${opBtn("cal")}</div></div>` +
-      `<div style="height:4px;flex:none"></div></div>` +
-      `<div class="foot"><span class="lbl">${W.notify}</span>` +
-        `<span class="chk"><i>${I.check(16, "var(--on-accent)")}</i>${W.notifyVr}</span>` +
-        `<span class="chk"><i>${I.check(16, "var(--on-accent)")}</i>${W.notifyDesktop}</span></div>` +
+      `</div>` +
+      `<div class="foot">${opBtn("pair")}${opBtn("map")}<span class="gapl"></span>` +
+        `<span class="lbl">${W.notify}</span>${chk(W.notifyVr)}${chk(W.notifyDesktop)}` +
+        `<span class="vsep"></span><span class="btn icon" title="${W.settings}">${I.gear()}</span></div>` +
     `</div>`;
-  document.title = "OpenUT 主の窓 " + key + " " + sc.title;
-  // Vertical overflow: the content scrolls, the footer stays (3.1). Show the scroll bar of egui.
-  const sc_ = document.querySelector(".scroll");
-  if (sc_.scrollHeight > sc_.clientHeight + 1) {
-    sc_.classList.add("cut");
+  document.title = "OpenUT メインウィンドウ " + key + " " + sc.title;
+
+  // Height of the cards (2.4): the row fills the height that is left. Every card gets the same extra space, split
+  // above and below the pictogram and its word, so pictograms and rows line up across cards.
+  const scroll = document.querySelector(".scroll");
+  const cards = Array.from(document.querySelectorAll(".strip .card"));
+  const content = Math.max(...cards.map((el) => el.scrollHeight));
+  const bandH = document.querySelector(".band").offsetHeight;
+  const barH = over ? 10 : 0;
+  const left = wh - 60 - 20 - bandH - 16 - 16 - barH;
+  const extra = Math.max(0, left - content);
+  for (const p of document.querySelectorAll(".card .pad")) p.style.height = extra / 2 + "px";
+  for (const el of document.querySelectorAll(".devices .card")) el.style.height = Math.max(content, left) + "px";
+
+  // Vertical overflow: the content scrolls, the footer stays (2.1). Show the scroll bar of egui.
+  if (scroll.scrollHeight > scroll.clientHeight + 1) {
+    scroll.classList.add("cut");
     const vb = document.createElement("div");
     vb.className = "vbar";
-    vb.style.height = Math.round(((sc_.clientHeight - 24) * sc_.clientHeight) / sc_.scrollHeight) + "px";
-    sc_.appendChild(vb);
+    vb.style.height = Math.round(((scroll.clientHeight - 24) * scroll.clientHeight) / scroll.scrollHeight) + "px";
+    scroll.appendChild(vb);
   }
-  window.OpenUTLayout = { tw, avail, need, lineW, stepW, contentH: sc_.scrollHeight };
+  window.OpenUTLayout = { tw, avail, need, lineW, content, left, extra, contentH: scroll.scrollHeight };
 })();
 </script>
 </body>

@@ -1,4 +1,4 @@
-// Line breaking of docs/design/ui/m1.md (section 4.4), for the mockups and for mock/fit.js.
+// Line breaking of docs/design/ui/m1.md (section 5.4), for the mockups and for mock/fit.js.
 // The text is given as lines separated by "\n" (one line per sentence, after "。"),
 // and each line as phrases (文節) separated by "|". The result is the list of drawn lines.
 // The app does the same in Rust with the advance widths of the loaded font.
@@ -64,7 +64,7 @@
     return out;
   }
 
-  // The serial number on a tile when its tail does not fit on one line (m1.md 3.4, case C): lines are cut
+  // The serial number on a card when its tail does not fit on one line (m1.md 2.4, case C): lines are cut
   // from the end, each holding as many characters as fit, and what is left goes on the first line.
   // The end of the serial stays on one line, and the first line, where two long tails differ, stands apart.
   function wrapFromEnd(text, font, width) {

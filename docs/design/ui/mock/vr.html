@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>OpenUT VR の板</title>
+<title>OpenUT VR 内のオーバーレイ（仮）</title>
 <link rel="stylesheet" href="tokens.css">
 <script src="wrap.js"></script>
 <script src="icons.js"></script>
@@ -13,8 +13,8 @@
   body { padding: 24px; background: #6F7A86; }
   .cap { font-size: 13px; color: #F2F4F7; margin: 0 0 8px 2px; }
 
-  /* Notice panel (4.1), laid out in texture pixels (1280 wide). zoom 0.5 = one texture pixel per device pixel
-     in a deviceScaleFactor 2 screenshot. Text broken with wrap.js (4.4), no limit on the number of lines. */
+  /* Notice overlay (5.1, provisional: 4th version), laid out in texture pixels (1280 wide). zoom 0.5 = one texture pixel per device pixel
+     in a deviceScaleFactor 2 screenshot. Text broken with wrap.js (5.4), no limit on the number of lines. */
   .panel { width: 1280px; display: grid; grid-template-columns: 80px 1fr; column-gap: 36px; align-items: start;
            padding: 52px 64px 56px 56px; border-radius: 28px; background: var(--vr-panel);
            box-shadow: inset 0 0 0 3px var(--vr-edge); font-family: var(--font); }
@@ -23,7 +23,7 @@
   #vr-panels, #vr-long, #vr-serial32 { display: inline-grid; gap: 20px; padding: 24px; background: #8A949E; align-items: start; }
   #vr-panels .panel, #vr-long .panel, #vr-serial32 .panel { zoom: 0.5; }
 
-  /* Field of view: 100 degrees across the frame. Panel 24.1 degrees wide, centre 10.6 degrees below. */
+  /* Field of view: 100 degrees across the frame. Overlay 24.1 degrees wide, centre 10.6 degrees below. */
   #vr-view { display: inline-grid; grid-template-columns: 800px 800px; gap: 16px; padding: 16px; background: #E3E7EC; }
   .view { position: relative; width: 800px; height: 450px; overflow: hidden; border-radius: 6px; }
   .view .anchor { position: absolute; left: 50%; top: calc(50% + 85px); transform: translate(-50%, -50%); z-index: 1; }
@@ -40,71 +40,17 @@
            border: 1.5px solid rgba(255,255,255,.7); border-radius: 50%; z-index: 1; }
   .day .cross { border-color: rgba(0,0,0,.45); }
 
-  /* Dashboard board (4.6, provisional): the main window's parts, twice the size, in texture pixels (1600 x 960).
-     The height follows the content: a tail that needs more than one line makes the tiles and the board taller. */
-  #vr-board-wrap, #vr-board-32-wrap { display: inline-block; padding: 24px; background: #3A4048; }
-  .board { zoom: 0.5; width: 1600px; min-height: 960px; background: var(--bg); border-radius: 24px; padding: 48px;
-           display: flex; flex-direction: column; gap: 24px; font-family: var(--font); color: var(--ink); }
-  .b-band { background: var(--panel); border-radius: 16px; height: 140px; display: grid; grid-template-columns: 340px 1fr; align-items: center; }
-  .b-band .ov { display: flex; align-items: center; gap: 20px; padding-left: 36px; height: 100%; border-right: 2px solid var(--line);
-                font-size: 56px; font-weight: 700; }
-  .b-band .ln { padding: 0 36px; font-size: 36px; line-height: 52px; }
-  .b-dev { display: flex; gap: 16px; }
-  .b-tile { background: var(--panel); border-radius: 16px; width: 248px; min-height: 286px; position: relative; overflow: hidden;
-            display: flex; flex-direction: column; align-items: center; padding: 20px 0 14px; }
-  .b-tile .sbar { position: absolute; left: 0; right: 0; top: 0; height: 8px; }
-  .b-tile .nm { font-size: 32px; font-weight: 700; line-height: 44px; display: flex; align-items: center; gap: 8px; }
-  .b-tile .tl { margin-top: 10px; font-size: 28px; line-height: 38px; color: var(--ink-2); text-align: center; padding: 0 16px; }
-  .b-tile .tl b { color: var(--ink); }
-  .b-tile .pc { margin-top: 12px; height: 96px; }
-  .b-tile .pc svg { width: 120px; height: 96px; }
-  .b-tile .st { margin-top: 12px; display: flex; align-items: center; gap: 12px; font-size: 32px; font-weight: 700; line-height: 40px; }
-  .b-tile .st svg { width: 28px; height: 28px; }
-  .b-dongle { width: 160px; }
-  .b-dongle .pc svg { width: 100px; height: 80px; }
-  .b-sep { width: 2px; background: var(--line); margin: 0 4px; }
-  .b-low { display: grid; grid-template-columns: 1fr; gap: 24px; flex: 1; }
-  .b-frame { background: var(--panel); border-radius: 16px; padding: 24px 36px; display: grid; grid-template-columns: 380px 1fr; column-gap: 28px; }
-  .b-frame .hd { display: flex; flex-direction: column; gap: 20px; align-items: flex-start; }
-  .b-frame .nm { display: flex; align-items: center; gap: 14px; font-size: 32px; font-weight: 700; }
-  .b-frame .nm svg { width: 40px; height: 40px; }
-  .b-steps { display: grid; grid-template-columns: repeat(3, 1fr); }
-  .b-step { position: relative; padding-right: 16px; }
-  .b-step .dot { width: 56px; height: 56px; border-radius: 28px; display: grid; place-items: center; font-size: 28px; font-weight: 700;
-                 position: relative; z-index: 1; }
-  .b-step .dot svg { width: 56px; height: 56px; }
-  .b-step .dot.todo { box-shadow: inset 0 0 0 4px var(--idle); color: var(--ink-2); background: var(--panel); }
-  .b-step .dot.done { background: var(--panel-2); box-shadow: inset 0 0 0 4px var(--accent); }
-  .b-step .dot.now { background: var(--accent); color: var(--on-accent); }
-  .b-step .conn { position: absolute; left: 56px; right: 0; top: 26px; height: 4px; background: var(--idle); }
-  .b-step .conn.done { background: var(--accent); }
-  .b-step .lab { margin-top: 14px; font-size: 28px; line-height: 38px; color: var(--ink-2); }
-  .b-step.now .lab { color: var(--ink); font-weight: 700; }
-  .b-step.done .lab { color: var(--ink); }
-  .b-step .pbar { height: 12px; border-radius: 6px; background: var(--panel-2); margin-top: 14px; margin-right: 16px; overflow: hidden; }
-  .b-step .pbar i { display: block; height: 100%; background: var(--accent); }
-  .b-btn { display: inline-flex; align-items: center; justify-content: center; gap: 16px; height: 88px; padding: 0 36px; border-radius: 12px;
-           background: var(--panel-2); font-size: 32px; font-weight: 700; color: var(--ink); white-space: nowrap; }
-  .b-btn svg { width: 40px; height: 40px; color: var(--accent); }
-  .b-ops { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
-  .b-ops .b-btn.on { box-shadow: inset 0 0 0 4px var(--accent); color: var(--accent); }
-  .b-ops .b-btn.off { color: var(--muted); }
-  .b-ops .b-btn.off svg { color: var(--muted); }
 </style>
 </head>
 <body>
-<p class="cap">案内の板（テクスチャーの画素のまま。幅1280）</p>
+<p class="cap">案内のオーバーレイ（仮。テクスチャーの画素のまま。幅1280）</p>
 <div id="vr-panels"></div>
 <p class="cap" style="margin-top:28px">長い呼び名、まとめた案内、長いしきい値</p>
 <div id="vr-long"></div>
 <p class="cap" style="margin-top:28px">末尾が32文字の呼び名（末尾31文字が重なる2台。番号のない台を含む）</p>
 <div id="vr-serial32"></div>
-<p class="cap" style="margin-top:28px">視野の中（横100°。板は幅24°、中心は10.6°下）</p>
+<p class="cap" style="margin-top:28px">視野の中（横100°。オーバーレイは幅24°、中心は10.6°下）</p>
 <div id="vr-view"></div>
-<p class="cap" style="margin-top:28px">ダッシュボードの板（仮。1600×960）</p>
-<div id="vr-board-wrap"><div class="board" id="vr-board"></div></div>
-<p class="cap" style="margin-top:28px">ダッシュボードの板（仮）。末尾が32文字の2台</p>
-<div id="vr-board-32-wrap"><div class="board" id="vr-board-32"></div></div>
 <script>
 (() => {
   const I = window.OpenUTIcons, X = window.OpenUTText, W = X.words;
@@ -113,7 +59,7 @@
   const wrapH = (s, font, w) => window.OpenUTWrap.wrap(s, font, w).map(esc).join("<br>");
   const L = (hub, tail, host) => X.label({ hub, tail, host });
 
-  // One notice panel: glyph 80 (fault or ok), headline 64 Bold, action 54 Regular, width 1044 (4.1).
+  // One notice overlay: glyph 80 (fault or ok), headline 64 Bold, action 54 Regular, width 1044 (5.1).
   function panel(n, ok) {
     const g = I.state(ok ? "ok" : "fault", 80, ok ? "var(--ok)" : "var(--fault)");
     return `<div class="panel">${g}<div><p class="h">${wrapH(n.headline, `700 64px ${fam}`, 1044)}</p>` +
@@ -135,7 +81,7 @@
     panel(X.notice("R1", "Resolved", "", "", { more: 99 }), true);
 
   // The longest tails (design 3.2, 4.4): the two made-up serials of window.html?s=j, 32 characters each,
-  // sharing their last 31. Rule 3 of 4.4 breaks the run of serial characters where the line is full.
+  // sharing their last 31. Rule 3 of 5.4 breaks the run of serial characters where the line is full.
   const [SA, SB] = window.OpenUTLong32;
   document.getElementById("vr-serial32").innerHTML =
     panel(X.notice("R1", "Raised", "", L(1, SA), { more: 1 })) +
@@ -145,48 +91,6 @@
   const v = (cls, n) => `<div class="view ${cls}"><span class="cross"></span><div class="anchor">${panel(n)}</div></div>`;
   document.getElementById("vr-view").innerHTML = v("room", X.notice("R1", "Raised", "", H)) + v("day", X.notice("R2", "Raised", T, H));
 
-  // Dashboard board (4.6, provisional): status band, devices, the guide frame and the three operations.
-  const col = { ok: "var(--ok)", wait: "var(--wait)", fault: "var(--fault)" };
-  // "…{tail}" under the name: one line when it fits, else cut into lines from the end like a tile of the main
-  // window (m1.md 3.4, case C). Inner width 216.
-  const tailH = (tail) => window.OpenUTWrap.wrapFromEnd("…" + tail, `700 28px ${fam}`, 216)
-    .map((l, i) => (i === 0 ? `…<b>${esc(l.slice(1))}</b>` : `<b>${esc(l)}</b>`)).join("<br>");
-  const btile = (d) => d.st
-    ? `<div class="b-tile"><div class="sbar" style="background:${col[d.st]}"></div>` +
-      `<div class="nm">${d.host ? I.star(32, "var(--accent)") : ""}<span>${d.hub ? W.tracker + d.hub : W.tracker}</span></div>` +
-      `<div class="pc">${I.tracker(col[d.st], "solid")}</div>` +
-      `<div class="st">${I.state(d.st, 28, col[d.st])}<span style="color:${col[d.st]}">${W.state[d.st]}</span></div>` +
-      `<div class="tl">${tailH(d.tail)}</div></div>`
-    : `<div class="b-tile"><div class="nm" style="color:var(--ink-2)">${W.tracker}</div>` +
-      `<div class="pc">${I.tracker("var(--idle)", "outline")}</div>` +
-      `<div class="st" style="color:var(--ink-2)">${I.state("none", 28, "var(--idle)")}<span>${W.state.none}</span></div>` +
-      `<div class="tl">${tailH(d.tail)}</div></div>`;
-  const steps = ["トラッカーと|コントローラーを|重ねて持つ", "8の字を描いて|手首を回す", "終わり"];
-  const stepsH = steps.map((t, i) => {
-    const k = i < 1 ? "done" : i === 1 ? "now" : "todo";
-    const dot = k === "done" ? I.check(56, "var(--accent)") : String(i + 1);
-    return `<div class="b-step ${k}"><div class="dot ${k}">${dot}</div>${i < 2 ? `<div class="conn${k === "done" ? " done" : ""}"></div>` : ""}` +
-      `<div class="lab">${wrapH(t, `${k === "now" ? 700 : 400} 28px ${fam}`, 300)}</div>` +
-      (k === "now" ? `<div class="pbar"><i style="width:60%"></i></div>` : "") + `</div>`;
-  }).join("");
-  const board = (devs) =>
-    `<div class="b-band"><div class="ov" style="color:var(--ok)">${I.state("ok", 56, "var(--ok)")}<span>${W.overall.ok}</span></div>` +
-      `<div class="ln">${esc(X.plain(X.guide.G5.line))}</div></div>` +
-    `<div class="b-dev"><div class="b-tile b-dongle"><div class="nm">${W.dongleName}</div>` +
-      `<div class="pc">${I.dongle("on")}</div><div class="st" style="font-size:28px">${W.dongle.on}</div></div><div class="b-sep"></div>${devs.map(btile).join("")}</div>` +
-    `<div class="b-low"><div class="b-frame"><div class="hd"><div class="nm">${I.op("cal", "var(--accent)")}<span>${W.ops.cal}</span></div>` +
-      `<span class="b-btn" style="height:72px">${W.stop}</span></div><div class="b-steps">${stepsH}</div></div>` +
-      `<div class="b-ops"><span class="b-btn off">${I.op("pair")}${W.ops.pair}</span><span class="b-btn off">${I.op("map")}${W.ops.map}</span>` +
-      `<span class="b-btn on">${I.op("cal")}${W.ops.cal}</span></div></div>`;
-  document.getElementById("vr-board").innerHTML = board([
-    { hub: 3, tail: "0001", st: "ok" }, { hub: 1, tail: "0002", st: "ok", host: true }, { hub: 2, tail: "0003", st: "ok" },
-    { hub: 5, tail: "0004", st: "ok" }, { hub: 4, tail: "0005", st: "ok" },
-  ]);
-  // The serials of window.html?s=j: every tail is 32 characters (a 13-character serial shows whole).
-  // The tracker that is not connected has no number.
-  document.getElementById("vr-board-32").innerHTML = board([
-    { hub: 2, tail: "00XX0000A0003", st: "ok" }, { hub: 1, tail: SA, st: "ok", host: true }, { tail: SB, st: null },
-  ]);
 })();
 </script>
 </body>

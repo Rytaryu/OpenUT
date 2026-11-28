@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>OpenUT トレイ</title>
+<title>OpenUT トレイ（仮）</title>
 <link rel="stylesheet" href="tokens.css">
 <script src="glyph.js"></script>
 <style>
@@ -45,13 +45,13 @@
   document.getElementById("tray").innerHTML =
     `<div><div class="cap">明るいタスクバー（16、20、24、32）</div>${bars("light")}</div>` +
     `<div><div class="cap">暗いタスクバー（16、20、24、32）</div>${bars("dark")}</div>` +
-    `<div><div class="cap">指を置いたとき</div><div class="tips">` +
+    `<div><div class="cap">マウスを乗せたとき</div><div class="tips">` +
       `<span class="tip">正常 3/3</span><span class="tip">待機中 2/3</span>` +
-      `<span class="tip">異常：トラッカーの追跡が始まりません</span>` +
+      `<span class="tip">異常：トラッキングが始まりません</span>` +
       `<span class="tip dark">待機中：VIVE Hubを起動してください</span><span class="tip dark">待機中</span></div></div>` +
     `<div><div class="cap">16の拡大（1マスが1画素）</div>${zoom("")}</div>` +
     `<div><div class="cap">&nbsp;</div>${zoom("dark")}</div>` +
-    `<div><div class="cap">右クリック</div><div class="menu"><div class="on">状態を開く</div><hr><div>終了</div></div></div>`;
+    `<div><div class="cap">右クリック</div><div class="menu"><div class="on">OpenUTを開く</div><hr><div>終了</div></div></div>`;
 </script>
 </body>
 </html>

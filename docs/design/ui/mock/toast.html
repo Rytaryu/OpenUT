@@ -3,11 +3,11 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>OpenUT トースト</title>
+<title>OpenUT トースト通知（仮）</title>
 <link rel="stylesheet" href="tokens.css">
 <script src="glyph.js"></script>
 <style>
-  /* Windows draws the toast. Only the content (logo, title, text lines) is ours.
+  /* Windows draws the toast notification. Only the content (logo, title, text lines) is ours.
      The frame below approximates Windows 11 so the wording can be judged in place. */
   body { padding: 24px; }
   #toast { display: inline-grid; grid-template-columns: 364px 364px 364px; gap: 24px; padding: 24px;
@@ -30,7 +30,7 @@
     <div class="head"><span class="sender"></span>Windows PowerShell<span class="x">✕</span></div>
     <div class="content">
       <canvas data-glyph="fault" data-size="96" data-dpr="2" data-color="--icon-fault"></canvas>
-      <div><p class="t">トラッカーの追跡が始まりません</p>
+      <div><p class="t">トラッキングが始まりません</p>
         <p class="b">トラッカー2（…0001）の電源だけを入れ直してください。<br>ほかのトラッカーとドングルは、そのままにしてください</p>
         <p class="by">OpenUT</p></div>
     </div>
@@ -39,7 +39,7 @@
     <div class="head"><span class="sender"></span>Windows PowerShell<span class="x">✕</span></div>
     <div class="content">
       <canvas data-glyph="ok" data-size="96" data-dpr="2" data-color="--icon-ok"></canvas>
-      <div><p class="t">追跡が始まらない問題が直りました</p>
+      <div><p class="t">トラッキングが始まらない問題が直りました</p>
         <p class="by">OpenUT</p></div>
     </div>
   </div>

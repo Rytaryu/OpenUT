@@ -1,7 +1,7 @@
 // OpenUT glyph renderer for the mockups.
-// It follows the procedure in docs/design/ui/m1.md (section 2.2) pixel by pixel,
+// It follows the procedure in docs/design/ui/m1.md (section 4.2) pixel by pixel,
 // so the implementation in Rust can reproduce the same RGBA image without image files.
-// The tray, the window icon and the toast logo use it (4th version: one look per overall state).
+// The tray, the window icon and the toast notification logo use it (one look per overall state).
 
 (function () {
   "use strict";
