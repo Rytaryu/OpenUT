@@ -31,7 +31,11 @@ workspace = true
 
 [dependencies]
 openut-anonymize = { path = "crates/openut-anonymize" }
+openut-bridge = { path = "crates/openut-bridge" }
 openut-core = { path = "crates/openut-core" }
+openut-dongle = { path = "crates/openut-dongle" }
 openut-hublog = { path = "crates/openut-hublog" }
+openut-space = { path = "crates/openut-space" }
 serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
 toml = "1.2.3"
