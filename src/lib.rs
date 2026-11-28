@@ -7,6 +7,7 @@ pub mod driver_reg;
 pub mod replay;
 pub mod run;
 pub mod source_fs;
+pub mod steamvr;
 
 /// The version of this build, from `Cargo.toml`.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
