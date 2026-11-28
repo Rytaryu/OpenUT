@@ -1,6 +1,8 @@
 //! OpenUT: an unofficial runtime and tools for VIVE Ultimate Tracker on
 //! Windows + SteamVR.
 
+pub mod replay;
+
 /// The version of this build, from `Cargo.toml`.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
