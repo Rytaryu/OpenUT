@@ -214,7 +214,7 @@ impl Tailer {
         if file.len < cursor.offset {
             return Ok(Some(RebuildReason::Truncated));
         }
-        if file.len > cursor.observed_len
+        if file.len != cursor.observed_len
             && !cursor.prefix.is_empty()
             && let Some(prefix) = source.read_at(&cursor.name, 0, cursor.prefix.len())?
             && prefix != cursor.prefix
@@ -254,7 +254,14 @@ impl Tailer {
             let first = file_on_day(self.kind, files, newest.day - 1).unwrap_or(newest);
             (first.file, first.day, 0)
         };
-        let max = file.len.saturating_sub(offset).min(MAX_READ_BYTES as u64) as usize;
+        let remaining = file.len.saturating_sub(offset);
+        let check_rotation = newest.day > day && remaining <= MAX_READ_BYTES as u64;
+        let max = if check_rotation {
+            // The old size may have been sampled before the new file appeared.
+            MAX_READ_BYTES
+        } else {
+            remaining.min(MAX_READ_BYTES as u64) as usize
+        };
         let mut bytes = if max == 0 {
             Vec::new()
         } else {
@@ -265,11 +272,40 @@ impl Tailer {
         };
         bytes.truncate(max);
 
+        let startup_target = newest.file;
+        let refreshed;
+        let (files, newest, file) = if check_rotation {
+            // Confirm EOF against a size sampled after the content read.
+            refreshed = source.list()?;
+            let (Some(file), Some(next)) = (
+                find_file(&refreshed, &file.name),
+                find_file(&refreshed, &newest.file.name),
+            ) else {
+                return Ok(Vec::new());
+            };
+            if offset.saturating_add(bytes.len() as u64) > file.len
+                || self.rebuild_reason(source, &refreshed)?.is_some()
+            {
+                // Let the next poll check both streams again before consuming bytes.
+                return Ok(Vec::new());
+            }
+            (
+                refreshed.as_slice(),
+                Candidate {
+                    file: next,
+                    day: newest.day,
+                },
+                file,
+            )
+        } else {
+            (files, newest, file)
+        };
+
         let mut events = self.observe_numbered(files);
         self.collect_late_writes(files, now, &mut events);
         self.found = Some(true);
         if starting {
-            self.caught_up_target = Some(newest.file.clone());
+            self.caught_up_target = Some(startup_target.clone());
             self.start_file(file, day);
         }
         if let Some(cursor) = &mut self.cursor {
@@ -667,6 +703,64 @@ mod tests {
         );
         source.append(DAY_27, b"outside the window");
         assert!(read(&mut tailer, &source, 30_101).is_empty());
+    }
+
+    #[test]
+    fn stale_old_size_does_not_end_a_generation_before_its_final_bytes() {
+        let mut source = MemorySource::default();
+        source.write(DAY_27, b"first\n");
+        let mut tailer = Tailer::new(FileKind::Server);
+        assert_eq!(
+            read(&mut tailer, &source, 0),
+            [bytes(DAY_27, 1, b"first\n")]
+        );
+
+        let mut stale = source.list().expect("memory listing");
+        source.append(DAY_27, &vec![b'a'; MAX_READ_BYTES]);
+        source.append(DAY_27, b"last\n");
+        source.write(DAY_28, b"next\n");
+        stale.push(LogFile {
+            name: DAY_28.into(),
+            len: 5,
+        });
+        source.reads.borrow_mut().clear();
+
+        let events = tailer
+            .read(&source, &stale, LogTime(100))
+            .expect("memory read");
+        assert!(matches!(
+            events.as_slice(),
+            [FileEvent::Bytes { name, generation: 1, bytes }]
+                if name == DAY_27 && bytes.len() == MAX_READ_BYTES
+        ));
+        let reads = source.reads.borrow();
+        assert_eq!(
+            reads.iter().filter(|(_, offset, _)| *offset != 0).count(),
+            1
+        );
+        assert!(reads.iter().all(|(_, _, max)| *max <= MAX_READ_BYTES));
+        drop(reads);
+        assert!(tailer.has_work(&stale));
+
+        assert_eq!(
+            read(&mut tailer, &source, 200),
+            [
+                bytes(DAY_27, 1, b"last\n"),
+                finished(DAY_27, 1),
+                rotated(DAY_28, 2, false)
+            ]
+        );
+        source.append(DAY_27, b"late");
+        assert_eq!(
+            read(&mut tailer, &source, 300),
+            [
+                FileEvent::LateWrite {
+                    name: DAY_27.into(),
+                    bytes: 4
+                },
+                bytes(DAY_28, 2, b"next\n")
+            ]
+        );
     }
 
     #[test]

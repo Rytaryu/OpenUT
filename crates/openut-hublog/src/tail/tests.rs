@@ -364,6 +364,39 @@ fn failed_second_stream_read_keeps_the_first_stream_retriable() {
 }
 
 #[test]
+fn a_shorter_replacement_during_catch_up_rewinds_both_streams() {
+    let mut source = MemorySource::default();
+    let mut follower = LogFollower::default();
+    source.set(SERVER, line(1_000, "server from the beginning"));
+    let mut old_driver = line(1_000, "former file").into_bytes();
+    old_driver.resize(2 * file::MAX_READ_BYTES, b'x');
+    source.set(DRIVER, old_driver);
+
+    assert!(follower.poll(&source, time(2_000), None).unwrap());
+    let initial = drain(&mut follower, 2_000, None);
+    assert!(bodies(&initial).contains(&(FileKind::Driver, "former file", false)));
+    assert!(!follower.read_complete());
+
+    let mut new_driver = line(1_500, "replacement from the beginning").into_bytes();
+    new_driver.resize(file::MAX_READ_BYTES + file::MAX_READ_BYTES / 2, b'y');
+    source.set(DRIVER, new_driver);
+    source.reads.borrow_mut().clear();
+    assert!(follower.poll(&source, time(2_500), None).unwrap());
+    let events = drain(&mut follower, 2_500, None);
+    assert_eq!(
+        events.first(),
+        Some(&FollowEvent::Rebuild {
+            file: FileKind::Driver,
+            reason: RebuildReason::Replaced,
+        }),
+    );
+    assert!(bodies(&events).contains(&(FileKind::Server, "server from the beginning", false)));
+    assert!(bodies(&events).contains(&(FileKind::Driver, "replacement from the beginning", false)));
+    assert!(source.reads.borrow().iter().all(|(_, offset)| *offset == 0));
+    assert!(!follower.read_complete());
+}
+
+#[test]
 fn incomplete_driver_catch_up_reads_first_while_the_server_head_is_held() {
     let mut source = MemorySource::default();
     let mut follower = LogFollower::default();
