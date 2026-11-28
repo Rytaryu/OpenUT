@@ -14,6 +14,7 @@ pub enum Kind {
     WifiPassword,
     PcName,
     UserFolder,
+    UniverseId,
     PcSerialBody,
 }
 
@@ -26,6 +27,7 @@ impl Kind {
             Self::WifiPassword => "WIFI-SECRET",
             Self::PcName => "PC",
             Self::UserFolder => "USER",
+            Self::UniverseId => "UNIVERSE",
             Self::PcSerialBody => "PC-SERIAL",
         }
     }
@@ -47,6 +49,7 @@ impl fmt::Display for Kind {
             Self::WifiPassword => "Wi-Fi のパスワード",
             Self::PcName => "PC の名前",
             Self::UserFolder => "利用者のフォルダー名",
+            Self::UniverseId => "SteamVR のプレイエリアの識別番号",
             Self::PcSerialBody => "PC のシリアル番号を記録する本文",
         })
     }
@@ -128,7 +131,8 @@ pub fn anonymize(logs: &[&str], pc_name: Option<&str>) -> Result<Batch, Anonymiz
             written = span.range.end;
         }
         text.push_str(&log[written..]);
-        if let Some(kind) = originals.find_in(&text) {
+        let universe_tokens = scan::possible_universe_id_fields(&text).flat_map(decimal_tokens);
+        if let Some(kind) = originals.find_in(&text, universe_tokens) {
             return Err(AnonymizeError::Residual {
                 file: index + 1,
                 kind,
@@ -164,9 +168,26 @@ impl<'a> OriginalValues<'a> {
         Self(values)
     }
 
-    fn find_in(&self, text: &str) -> Option<Kind> {
+    fn find_in<'text>(
+        &self,
+        text: &str,
+        mut universe_tokens: impl Iterator<Item = &'text str>,
+    ) -> Option<Kind> {
         let mut folded = None;
+        let mut universe_match = None;
         self.0.iter().find_map(|(kind, original)| {
+            if *kind == Kind::UniverseId {
+                return universe_match
+                    .get_or_insert_with(|| {
+                        universe_tokens.any(|digits| {
+                            self.0.contains(&(
+                                Kind::UniverseId,
+                                Cow::Borrowed(digits.trim_start_matches('0')),
+                            ))
+                        })
+                    })
+                    .then_some(*kind);
+            }
             let search: &str = if kind.ignores_ascii_case() {
                 folded.get_or_insert_with(|| text.to_ascii_lowercase())
             } else {
@@ -193,8 +214,15 @@ impl<'a> OriginalValues<'a> {
     }
 }
 
+fn decimal_tokens(text: &str) -> impl Iterator<Item = &str> {
+    text.split(|character: char| !character.is_ascii_digit())
+        .filter(|digits| !digits.is_empty())
+}
+
 fn normalized(kind: Kind, original: &str) -> Cow<'_, str> {
-    if kind.ignores_ascii_case() {
+    if kind == Kind::UniverseId {
+        Cow::Borrowed(original.trim_start_matches('0'))
+    } else if kind.ignores_ascii_case() {
         Cow::Owned(original.to_ascii_lowercase())
     } else {
         Cow::Borrowed(original)
@@ -234,7 +262,7 @@ impl<'a> Aliases<'a> {
 
     fn new_alias(&mut self, kind: Kind, forbidden: &OriginalValues<'_>) -> Option<String> {
         for prefix in [kind.alias_prefix(), "ID"] {
-            if forbidden.find_in(prefix).is_some() {
+            if forbidden.find_in(prefix, decimal_tokens(prefix)).is_some() {
                 continue;
             }
             let next = self.next.entry(prefix).or_default();
@@ -246,7 +274,7 @@ impl<'a> Aliases<'a> {
                 };
                 *next = next.checked_add(1)?;
                 let alias = format!("{prefix}-{suffix}");
-                if forbidden.find_in(&alias).is_none() {
+                if forbidden.find_in(&alias, decimal_tokens(&alias)).is_none() {
                     return Some(alias);
                 }
             }
@@ -288,6 +316,63 @@ impl<'a> Aliases<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn treats_zero_padded_spellings_as_the_same_universe_number() {
+        let batch = anonymize(
+            &[
+                "current universe id: 1234567890123456789\n",
+                "current universe id: 01234567890123456789\nunrelated decimal: 91234567890123456789\n",
+            ],
+            None,
+        )
+        .expect("both representations can use the same alias");
+        assert_eq!(batch.outputs[0].text, "current universe id: UNIVERSE-A\n");
+        assert_eq!(
+            batch.outputs[1].text,
+            "current universe id: UNIVERSE-A\nunrelated decimal: 91234567890123456789\n",
+        );
+        assert!(
+            batch
+                .mapping_tsv()
+                .contains("UNIVERSE\t01234567890123456789\tUNIVERSE-A\n")
+        );
+    }
+
+    #[test]
+    fn retains_recognized_hub_metadata_with_the_same_number() {
+        let metadata = concat!(
+            "# Log begin at 2026-11-27 00:00:02.2\r\n",
+            "# Log rotate by date at 2026-11-28 00:00:02.02\r\n",
+            "# InitialLogLevel=2\r\n",
+            "[2026-11-28 00:02:02.002 +2:02 0x2 INFO main] [2] Started\r\n",
+        );
+        let batch = anonymize(&["current universe id: 2", metadata], None)
+            .expect("the matching numbers are in recognized metadata");
+        assert_eq!(batch.outputs[1].text, metadata);
+    }
+
+    #[test]
+    fn checks_unrecognized_fields_and_continuations_for_universe_numbers() {
+        for residual in [
+            "# AnotherSetting=00002",
+            "# InitialLogLevel=0 extra value 00002",
+            "# Log begin at 2026-11-27 00:00:02.000 extra text",
+            "[2026-11-27 00:00:00.000 +0:62 2 INFO main] [1] Started",
+            "[2026-11-27 00:00:00.000 +2.5 0x1 INFO main] [1] Started",
+            "[2026-11-27 00:00:00.000 +0 0x1 INFO event2] [1] Started",
+            "# InitialLogLevel=0\r\n[2026-11-27 00:00:00.000 +0 0x1 INFO f] [1] continuation:\n[2026-11-27 00:00:02.000 +0 0x2 INFO f] [2] text\r\n",
+        ] {
+            let result = anonymize(&["current universe id: 2", residual], None);
+            assert!(matches!(
+                result,
+                Err(AnonymizeError::Residual {
+                    file: 2,
+                    kind: Kind::UniverseId,
+                })
+            ));
+        }
+    }
 
     #[test]
     fn skips_an_ssid_equal_to_its_preferred_alias_across_files() {
