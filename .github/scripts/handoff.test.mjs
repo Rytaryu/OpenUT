@@ -691,6 +691,19 @@ test('taking a cut-short release up again never gives the label a second time', 
   world = fakeGitHub({ issues: [again] });
   await sweep(world);
   assert.deepEqual([again.labels, world.state.wakes], [['role:impl'], ['1: WAKE role:impl #303']]);
+
+  // The same when the earlier label and the new request carry the same second: the order of the events decides.
+  const sameSecond = issue(304, '担当: role:impl\n着手の条件: なし', ['backlog']);
+  const at = tick();
+  sameSecond.events = [
+    { event: 'labeled', label: { name: 'backlog' }, actor: { login: OWNER }, created_at: at },
+    { event: 'labeled', label: { name: 'role:impl' }, actor: { login: 'github-actions[bot]' }, created_at: at },
+    { event: 'unlabeled', label: { name: 'role:impl' }, actor: { login: OWNER }, created_at: at },
+    { event: 'labeled', label: { name: 'backlog' }, actor: { login: OWNER }, created_at: at },
+  ];
+  world = fakeGitHub({ issues: [sameSecond] });
+  await sweep(world);
+  assert.deepEqual([sameSecond.labels, world.state.wakes], [['role:impl'], ['1: WAKE role:impl #304']]);
 });
 
 test('taking a cut-short notice up again does not move a label the role has moved on', async () => {
