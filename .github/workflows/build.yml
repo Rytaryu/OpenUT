@@ -1,0 +1,49 @@
+name: Windows build
+# Builds the Windows executables of main so that the owner can download them
+# for checks on real hardware (PRD chapter 4; D-41). Nothing is released or
+# published: the files are kept as a workflow artifact for 30 days.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - 'src/**'
+      - 'crates/**'
+      - '.github/workflows/build.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    name: build (windows-latest)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install the pinned Rust toolchain (rust-toolchain.toml)
+        shell: bash
+        run: rustup show active-toolchain || rustup toolchain install
+      - name: Build the executables
+        shell: bash
+        run: cargo build --release --locked --workspace --bins
+      - name: Collect the executables
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp target/release/*.exe dist/
+          git rev-parse HEAD > dist/COMMIT.txt
+          ls -l dist
+      - uses: actions/upload-artifact@v7
+        with:
+          name: openut-windows-x64
+          path: dist/
+          if-no-files-found: error
+          retention-days: 30
