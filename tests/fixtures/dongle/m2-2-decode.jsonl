@@ -1,0 +1,5 @@
+{"type":"header","format":"openut.dongle-record","version":1,"tool":"synthetic M2-2 fixture","mode":"record","started_wall_ms":1000,"device":{"vid":"0001","pid":"0002","interface":0,"usage_page":"ff00","usage":"0001"},"server_running_at_start":false,"anonymized":true}
+{"type":"in","mono_us":10,"wall_ms":1000,"hex":"180c00000000552101020304"}
+{"type":"in","mono_us":20,"wall_ms":1001,"hex":"2801007721010203040101025753"}
+{"type":"in","mono_us":30,"wall_ms":1002,"hex":"1e1d000000000000000300000005010002080200080603000003000000"}
+{"type":"in","mono_us":40,"wall_ms":1003,"hex":"180c00000001552101020304"}
