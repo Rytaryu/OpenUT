@@ -1,6 +1,7 @@
 //! Tracker, host, and Wi-Fi state derived from events (watcher design §5).
 
 mod connection;
+mod devices;
 mod host;
 
 #[cfg(test)]
@@ -8,9 +9,9 @@ mod tests;
 
 use std::collections::BTreeMap;
 
-use crate::event::{Event, OetKind, PoseStatus, Timed};
+use crate::event::{Battery, Event, OetKind, PoseStatus, Timed};
 use crate::time::LogTime;
-use crate::tracker::{Serial, TrackerKey};
+use crate::tracker::{HubNumber, Serial, TrackerKey};
 
 const DEFAULT_DUP_MS: i64 = 1_000;
 
@@ -53,6 +54,8 @@ pub struct TrackerView {
     pub link: Link,
     pub tracked_since_connect: bool,
     pub inferred: bool,
+    pub battery: Option<Battery>,
+    pub hub_number: Option<HubNumber>,
 }
 
 impl TrackerView {
@@ -94,11 +97,58 @@ pub enum HostWifi {
     Held { since: LogTime },
 }
 
+/// The last information reported for a tracker, independent of its connection.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Identity {
+    pub serial: Serial,
+    pub firmware: Option<String>,
+    pub last_seen: LogTime,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DongleState {
+    Unknown,
+    Connected,
+    Disconnected,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum HubState {
+    Unknown,
+    Running,
+    Stopped,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Connection {
+    Disconnected,
+    Dongle,
+    Usb,
+}
+
+/// One roster entry or active tracker whose serial is not yet known.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DeviceView {
+    pub serial: Option<Serial>,
+    pub firmware: Option<String>,
+    pub hub_number: Option<HubNumber>,
+    pub key: Option<TrackerKey>,
+    pub conn: Option<ConnId>,
+    pub connection: Connection,
+    pub battery: Option<Battery>,
+    pub host: bool,
+    pub phase: Phase,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Snapshot {
     pub trackers: Vec<TrackerView>,
     pub host: Option<HostRef>,
     pub host_wifi: HostWifi,
+    pub roster: Vec<Identity>,
+    pub devices: Vec<DeviceView>,
+    pub dongle: DongleState,
+    pub hub: HubState,
     pub at: LogTime,
 }
 
@@ -145,11 +195,21 @@ struct Tracker {
     last_added: Option<LogTime>,
 }
 
+struct TrackerStart {
+    phase: Phase,
+    link: Link,
+    inferred: bool,
+    battery: Option<Battery>,
+}
+
 /// The state transition table. Time and event order come from the caller.
 pub struct State {
     trackers: BTreeMap<TrackerKey, Tracker>,
     host: Option<HostRef>,
     host_wifi: HostWifi,
+    roster: BTreeMap<Serial, Identity>,
+    dongle: DongleState,
+    hub: HubState,
     next_conn: u64,
     dup_ms: i64,
     out_of_order: u64,
@@ -167,6 +227,9 @@ impl State {
             trackers: BTreeMap::new(),
             host: None,
             host_wifi: HostWifi::Unknown,
+            roster: BTreeMap::new(),
+            dongle: DongleState::Unknown,
+            hub: HubState::Unknown,
             next_conn: 1,
             dup_ms: dup_ms.max(0),
             out_of_order: 0,
@@ -182,6 +245,10 @@ impl State {
                 .collect(),
             host: self.host.clone(),
             host_wifi: self.host_wifi,
+            roster: self.roster.values().cloned().collect(),
+            devices: self.device_views(),
+            dongle: self.dongle,
+            hub: self.hub,
             at,
         }
     }
@@ -197,6 +264,7 @@ impl State {
         let tracker_out_of_order = self.update_trackers(event, at, &mut update);
         let wifi_out_of_order = self.update_wifi(event, at);
         let host_out_of_order = self.update_host(event, at);
+        self.update_device_evidence(event, at);
         update.out_of_order = tracker_out_of_order || wifi_out_of_order || host_out_of_order;
         self.out_of_order = self
             .out_of_order
@@ -223,7 +291,9 @@ impl State {
             Event::SerialKnown {
                 tracker,
                 ref serial,
-            } => self.set_serial(tracker, serial),
+                hub_number,
+                ..
+            } => self.set_serial(tracker, serial, hub_number),
             Event::HostAssigned { tracker } => self.assign_host_phase(tracker, at, update),
             Event::HostWifiQueried { host } => {
                 self.infer_if_missing(host, Phase::Connected, at, update);
@@ -242,8 +312,19 @@ impl State {
                 connected,
                 map_ready,
                 usb,
+                battery,
                 ..
-            } => self.status(tracker, connected, map_ready, usb, at, update),
+            } => self.status(
+                tracker,
+                StatusReport {
+                    connected,
+                    map_ready,
+                    usb,
+                    battery,
+                },
+                at,
+                update,
+            ),
             Event::Pose { tracker, status } => {
                 let motion = match status {
                     PoseStatus::Ok => Motion::Tracked,
@@ -260,7 +341,9 @@ impl State {
                 };
                 self.motion(tracker, motion, at, update)
             }
-            Event::HostWifiObtained { .. }
+            Event::DongleAdded
+            | Event::DongleReport { .. }
+            | Event::HostWifiObtained { .. }
             | Event::PowerOffNotice { .. }
             | Event::PcCommand { .. } => false,
         }
@@ -276,11 +359,26 @@ impl State {
         if self.trackers.contains_key(&key) {
             return false;
         }
-        self.start_tracker(key, phase, Link::Unknown, true, at, update);
+        self.start_tracker(
+            key,
+            TrackerStart {
+                phase,
+                link: Link::Unknown,
+                inferred: true,
+                battery: None,
+            },
+            at,
+            update,
+        );
         true
     }
 
-    fn set_serial(&mut self, key: TrackerKey, serial: &Serial) -> bool {
+    fn set_serial(
+        &mut self,
+        key: TrackerKey,
+        serial: &Serial,
+        hub_number: Option<HubNumber>,
+    ) -> bool {
         if !self
             .trackers
             .get(&key)
@@ -291,9 +389,13 @@ impl State {
         for tracker in self.trackers.values_mut() {
             let view = &mut tracker.view;
             if view.key == key {
+                if hub_number.is_some() || view.serial.as_ref() != Some(serial) {
+                    view.hub_number = hub_number;
+                }
                 view.serial = Some(serial.clone());
             } else if view.serial.as_ref() == Some(serial) {
                 view.serial = None;
+                view.hub_number = None;
             }
         }
         false
@@ -386,12 +488,16 @@ impl State {
     fn status(
         &mut self,
         key: TrackerKey,
-        connected: bool,
-        map_ready: bool,
-        usb: Option<bool>,
+        report: StatusReport,
         at: LogTime,
         update: &mut StateUpdate,
     ) -> bool {
+        let StatusReport {
+            connected,
+            map_ready,
+            usb,
+            battery,
+        } = report;
         let reported_link = usb.map_or(
             Link::Unknown,
             |usb| if usb { Link::Usb } else { Link::Dongle },
@@ -407,6 +513,9 @@ impl State {
             if !connected {
                 return true;
             }
+            if let Some(battery) = battery {
+                view.battery = Some(battery);
+            }
             if map_ready
                 && matches!(
                     view.phase,
@@ -421,7 +530,17 @@ impl State {
             } else {
                 Phase::Connected
             };
-            self.start_tracker(key, phase, reported_link, true, at, update);
+            self.start_tracker(
+                key,
+                TrackerStart {
+                    phase,
+                    link: reported_link,
+                    inferred: true,
+                    battery,
+                },
+                at,
+                update,
+            );
         }
         false
     }
@@ -463,6 +582,13 @@ impl State {
         }
         false
     }
+}
+
+struct StatusReport {
+    connected: bool,
+    map_ready: bool,
+    usb: Option<bool>,
+    battery: Option<Battery>,
 }
 
 #[derive(Clone, Copy)]

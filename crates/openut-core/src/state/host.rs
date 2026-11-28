@@ -64,6 +64,7 @@ impl State {
             Event::SerialKnown {
                 tracker,
                 ref serial,
+                ..
             } => {
                 let connection = self.live_tracker(tracker).map(|view| view.conn);
                 if let Some(host) = &mut self.host
@@ -168,6 +169,7 @@ mod tests {
             host: true,
             map_ready: false,
             usb: None,
+            battery: None,
         }
     }
 
@@ -289,6 +291,8 @@ mod tests {
             Event::SerialKnown {
                 tracker,
                 serial: serial_a.clone(),
+                hub_number: None,
+                firmware: None,
             },
         );
         let original = state.trackers[&tracker].view.conn;
@@ -301,6 +305,8 @@ mod tests {
             Event::SerialKnown {
                 tracker,
                 serial: serial_b.clone(),
+                hub_number: None,
+                firmware: None,
             },
         );
         let reused = &state.trackers[&tracker].view;
