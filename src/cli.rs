@@ -20,15 +20,17 @@ const DRIVER_USAGE: &str = "openut driver register | openut driver unregister";
 pub(crate) fn dispatch(mut args: impl Iterator<Item = OsString>) -> Result<(), String> {
     match args.next().as_deref().and_then(std::ffi::OsStr::to_str) {
         Some("anonymize") => run_anonymize(args),
-        Some("run") => match args.next().as_deref().and_then(std::ffi::OsStr::to_str) {
+        Some("run") => match args.next().as_deref() {
             None => run::run(None),
-            Some("--help" | "-h") if args.next().is_none() => {
+            Some(flag) if (flag == "--help" || flag == "-h") && args.next().is_none() => {
                 println!("{RUN_USAGE}");
                 Ok(())
             }
-            Some("--config") => {
+            Some(flag) if flag == "--config" => {
                 let path = args.next().filter(|value| {
-                    !value.is_empty() && !value.to_str().is_some_and(|text| text.starts_with("--"))
+                    value
+                        .to_str()
+                        .is_some_and(|text| !text.is_empty() && !text.starts_with("--"))
                 });
                 match path {
                     Some(path) if args.next().is_none() => run::run(Some(path.into())),
@@ -380,6 +382,30 @@ mod command_tests {
                 dispatch(args.into_iter().map(OsString::from)),
                 Err(DRIVER_USAGE.to_owned())
             );
+        }
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn run_rejects_non_unicode_arguments_before_entering_the_runtime() {
+        #[cfg(unix)]
+        let invalid = {
+            use std::os::unix::ffi::OsStringExt;
+            OsString::from_vec(vec![0xff])
+        };
+        #[cfg(windows)]
+        let invalid = {
+            use std::os::windows::ffi::OsStringExt;
+            OsString::from_wide(&[0xd800])
+        };
+
+        for tail in [
+            vec![invalid.clone()],
+            vec![invalid.clone(), OsString::from("extra")],
+            vec![OsString::from("--config"), invalid],
+        ] {
+            let args = std::iter::once(OsString::from("run")).chain(tail);
+            assert_eq!(dispatch(args), Err(RUN_USAGE.to_owned()));
         }
     }
 }

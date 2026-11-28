@@ -2,6 +2,8 @@
 
 use std::path::PathBuf;
 
+#[cfg(any(windows, test))]
+mod capture;
 pub mod pipeline;
 
 pub fn run(config_path: Option<PathBuf>) -> Result<(), String> {
@@ -26,8 +28,8 @@ mod windows {
     use std::num::NonZeroU32;
     use std::path::PathBuf;
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-    use std::sync::mpsc::{self, RecvTimeoutError, SyncSender, TrySendError};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::mpsc::RecvTimeoutError;
     use std::thread;
     use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -35,9 +37,10 @@ mod windows {
     use openut_core::time::{LogTime, UtcOffset};
     use openut_dongle::guard::ServerGuard;
     use openut_dongle::process_windows::ProcessList;
-    use openut_dongle::run::{Clock, SourceItem, Stamp, reader_loop};
+    use openut_dongle::run::{Clock, Stamp};
     use openut_dongle::source_windows::DeviceList;
 
+    use super::capture::{CaptureItem, capture};
     use super::pipeline::Pipeline;
     use crate::bridge_out::BridgeOut;
     use crate::config::RunConfig;
@@ -48,7 +51,6 @@ mod windows {
     const IDLE_POLL: Duration = Duration::from_millis(100);
     const CONSOLE_INTERVAL_US: u64 = 1_000_000;
     const LOG_INTERVAL_US: u64 = 10_000_000;
-    const BUFFERED_ITEMS: usize = 64;
 
     pub fn start(config_path: Option<PathBuf>) -> Result<(), String> {
         let config_path = config_path.or_else(|| {
@@ -78,109 +80,85 @@ mod windows {
         let mut bridge = BridgeOut::bind(config.port)
             .map_err(|error| format!("SteamVR への送信を準備できません（{}）。", error.kind()))?;
         let devices = DeviceList::new().map_err(|error| error.to_string())?;
+        let stop = Arc::new(AtomicBool::new(false));
+        install_console_stop(&stop)?;
+        if stop.load(Ordering::Relaxed) {
+            return Ok(());
+        }
         // Check after enumerating the HID devices and before opening the handle.
         if processes.server_running(&guard) {
             return Err(SERVER_RUNNING.to_owned());
         }
-        log.write(format_args!(
-            "VIVE Hub のトラッカー用サーバーの停止を確認しました。"
-        ));
         let source = devices.open_dongle().map_err(|error| error.to_string())?;
         let runtime_clock = RuntimeClock(Instant::now());
-        let stop = Arc::new(AtomicBool::new(false));
-        let dropped = AtomicU64::new(0);
-        install_console_stop(&stop)?;
-        let mut pipeline = Pipeline::new(session_id(), 0, config.axis_map, config.body_rotation);
-        let mut progress = Progress::default();
-        let mut console = io::stdout().lock();
-        let mut next_guard = Instant::now() + GUARD_INTERVAL;
 
-        thread::scope(|scope| {
-            let (sender, stream) = mpsc::sync_channel(BUFFERED_ITEMS);
-            let reader_stop = &stop;
-            let reader_dropped = &dropped;
-            let reader = thread::Builder::new()
-                .spawn_scoped(scope, move || {
-                    reader_loop(
-                        source,
-                        runtime_clock,
-                        |item| send_item(&sender, item, reader_dropped),
-                        reader_stop,
-                    );
-                })
-                .map_err(|_| "ドングルの読み取りを開始できませんでした。".to_owned())?;
-            let result = loop {
-                if stop.load(Ordering::Relaxed) {
-                    break Ok(());
-                }
-                if Instant::now() >= next_guard {
-                    next_guard = Instant::now() + GUARD_INTERVAL;
-                    if processes.server_running(&guard) {
-                        break Err(
-                            "VIVE Hub が起動したため、ドングルの読み取りを停止しました。"
-                                .to_owned(),
-                        );
-                    }
-                }
-                let item = match stream.recv_timeout(IDLE_POLL) {
-                    Ok(item) => item,
-                    Err(RecvTimeoutError::Timeout) => continue,
-                    Err(RecvTimeoutError::Disconnected) if stop.load(Ordering::Relaxed) => {
+        capture(
+            source,
+            runtime_clock,
+            &stop,
+            GUARD_INTERVAL,
+            move || processes.server_running(&guard),
+            |stream, dropped| {
+                log.write(format_args!(
+                    "VIVE Hub のトラッカー用サーバーの停止を確認しました。"
+                ));
+                let mut pipeline =
+                    Pipeline::new(session_id(), 0, config.axis_map, config.body_rotation);
+                let mut progress = Progress::default();
+                let mut console = io::stdout().lock();
+                loop {
+                    if stop.load(Ordering::Relaxed) {
                         break Ok(());
                     }
-                    Err(RecvTimeoutError::Disconnected) => {
-                        break Err("ドングルの読み取りが中断されました。".to_owned());
+                    let item = match stream.recv_timeout(IDLE_POLL) {
+                        Ok(item) => item,
+                        Err(RecvTimeoutError::Timeout) => continue,
+                        Err(RecvTimeoutError::Disconnected) => break Ok(()),
+                    };
+                    if stop.load(Ordering::Relaxed) {
+                        break Ok(());
                     }
-                };
-                if stop.load(Ordering::Relaxed) {
-                    break Ok(());
-                }
-                let (at, packets) = match item {
-                    SourceItem::Report(report) => {
-                        let packets = pipeline.report(&report, runtime_clock.mono_us());
-                        (report.mono_us, packets)
-                    }
-                    SourceItem::Idle(at) => (at.mono_us, pipeline.advance_to(at.mono_us)),
-                    SourceItem::Removed(_) => {
-                        break Err("ドングルとの接続が切れました。".to_owned());
-                    }
-                    SourceItem::ReadError { os_code, .. } => {
-                        break Err(format!(
-                            "ドングルの読み取りに失敗しました（OS 番号 {os_code}）。"
-                        ));
-                    }
-                };
-                for mut packet in packets {
-                    match &mut packet.payload {
-                        Payload::DeviceList(devices) => progress.announce_devices(devices, log),
-                        Payload::Pose(pose) => {
-                            let age = runtime_clock.mono_us().saturating_sub(at);
-                            pose.age_us = u32::try_from(age).unwrap_or(u32::MAX);
+                    let (at, packets) = match item {
+                        CaptureItem::Report(report) => {
+                            let packets = pipeline.report(&report, runtime_clock.mono_us());
+                            (report.mono_us, packets)
+                        }
+                        CaptureItem::Idle(at) => (at.mono_us, pipeline.advance_to(at.mono_us)),
+                    };
+                    for mut packet in packets {
+                        if stop.load(Ordering::Relaxed) {
+                            break;
+                        }
+                        match &mut packet.payload {
+                            Payload::DeviceList(devices) => progress.announce_devices(devices, log),
+                            Payload::Pose(pose) => {
+                                let age = runtime_clock.mono_us().saturating_sub(at);
+                                pose.age_us = u32::try_from(age).unwrap_or(u32::MAX);
+                            }
+                        }
+                        if !stop.load(Ordering::Relaxed) {
+                            bridge.send(&packet);
                         }
                     }
-                    bridge.send(&packet);
+                    if stop.load(Ordering::Relaxed) {
+                        break Ok(());
+                    }
+                    if progress
+                        .update(
+                            at,
+                            &pipeline,
+                            &bridge,
+                            dropped.load(Ordering::Relaxed),
+                            &mut console,
+                            log,
+                        )
+                        .is_err()
+                    {
+                        break Err("状態をコンソールに書き込めませんでした。".to_owned());
+                    }
                 }
-                if progress
-                    .update(
-                        at,
-                        &pipeline,
-                        &bridge,
-                        dropped.load(Ordering::Relaxed),
-                        &mut console,
-                        log,
-                    )
-                    .is_err()
-                {
-                    break Err("状態をコンソールに書き込めませんでした。".to_owned());
-                }
-            };
-            stop.store(true, Ordering::Relaxed);
-            drop(stream);
-            let joined = reader.join();
-            result.and_then(|()| {
-                joined.map_err(|_| "ドングルの読み取りが中断されました。".to_owned())
-            })
-        })
+            },
+        )
     }
 
     fn install_console_stop(stop: &Arc<AtomicBool>) -> Result<(), String> {
@@ -197,22 +175,6 @@ mod windows {
                 .map_err(|_| "コンソールから終了する準備ができませんでした。".to_owned())?;
         }
         Ok(())
-    }
-
-    fn send_item(sender: &SyncSender<SourceItem>, item: SourceItem, dropped: &AtomicU64) -> bool {
-        if matches!(item, SourceItem::Removed(_) | SourceItem::ReadError { .. }) {
-            return sender.send(item).is_ok();
-        }
-        match sender.try_send(item) {
-            Ok(()) => true,
-            Err(TrySendError::Full(item)) => {
-                if matches!(item, SourceItem::Report(_)) {
-                    dropped.fetch_add(1, Ordering::Relaxed);
-                }
-                true
-            }
-            Err(TrySendError::Disconnected(_)) => false,
-        }
     }
 
     #[derive(Clone, Copy)]
