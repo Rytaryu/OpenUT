@@ -6,6 +6,9 @@ use std::process::ExitCode;
 use openut_core::time::UtcOffset;
 use openut_dongle::{replay::Replay, summary, view};
 
+#[cfg(windows)]
+mod cli_windows;
+
 mod export_cli;
 
 const USAGE: &str = "使い方\n  openut-dongle decode RECORD\n  openut-dongle summary RECORD [--utc-offset +9]\n  openut-dongle export --anonymize RECORD OUT [--map TSV]";
@@ -15,19 +18,32 @@ fn main() -> ExitCode {
     if args.next().as_deref() == Some(OsStr::new("export")) {
         return export_cli::run(args);
     }
-    if let Err(error) = run() {
-        eprintln!("{error}");
-        ExitCode::FAILURE
-    } else {
-        ExitCode::SUCCESS
+    match run() {
+        Ok(code) => ExitCode::from(code),
+        Err(error) => {
+            eprintln!("{error}");
+            ExitCode::FAILURE
+        }
     }
 }
 
-fn run() -> Result<(), String> {
+fn run() -> Result<u8, String> {
     let mut args = std::env::args_os().skip(1);
     let command = args.next();
     if command.as_deref() == Some(OsStr::new("--help")) && args.next().is_none() {
-        return writeln!(io::stdout().lock(), "{USAGE}").map_err(output_error);
+        let mut output = io::stdout().lock();
+        writeln!(output, "{USAGE}").map_err(output_error)?;
+        #[cfg(windows)]
+        writeln!(output, "{}", cli_windows::USAGE).map_err(output_error)?;
+        return Ok(0);
+    }
+    #[cfg(windows)]
+    if let Some(command) = command
+        .as_deref()
+        .and_then(OsStr::to_str)
+        .and_then(cli_windows::Command::from_name)
+    {
+        return Ok(cli_windows::run(command, args));
     }
 
     let (command, path) = match (command.as_deref().and_then(OsStr::to_str), args.next()) {
@@ -76,7 +92,8 @@ fn run() -> Result<(), String> {
                 .map_err(|error| error.to_string())?;
         }
     }
-    output.flush().map_err(output_error)
+    output.flush().map_err(output_error)?;
+    Ok(0)
 }
 
 enum Command {
