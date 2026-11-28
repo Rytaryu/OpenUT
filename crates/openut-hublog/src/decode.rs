@@ -27,7 +27,7 @@ pub struct Decoder {
     high_surrogate: Option<u16>,
     line: String,
     pending_cr: bool,
-    overlong_line: bool,
+    discarding_line_tail: bool,
     stats: DecodeStats,
 }
 
@@ -40,7 +40,7 @@ impl Decoder {
         self.stats
     }
 
-    /// Emits lines terminated by a newline and fragments of overlong lines.
+    /// Emits complete lines or the retained prefix of each overlong line.
     pub fn push(&mut self, mut bytes: &[u8]) -> Vec<String> {
         let mut lines = Vec::new();
         if self.encoding.is_none() {
@@ -73,7 +73,7 @@ impl Decoder {
         if !self.line.is_empty() {
             lines.push(std::mem::take(&mut self.line));
         }
-        self.overlong_line = false;
+        self.discarding_line_tail = false;
         lines
     }
 
@@ -191,14 +191,21 @@ impl Decoder {
     fn push_char(&mut self, character: char, lines: &mut Vec<String>) {
         if character == '\n' {
             self.pending_cr = false;
-            self.overlong_line = false;
-            lines.push(std::mem::take(&mut self.line));
+            if !std::mem::take(&mut self.discarding_line_tail) {
+                lines.push(std::mem::take(&mut self.line));
+            }
+            return;
+        }
+        if self.discarding_line_tail {
             return;
         }
 
         // Defer CR so that a CRLF terminator does not count toward the line limit.
         if std::mem::take(&mut self.pending_cr) {
             self.push_content('\r', lines);
+            if self.discarding_line_tail {
+                return;
+            }
         }
         if character == '\r' {
             self.pending_cr = true;
@@ -208,16 +215,14 @@ impl Decoder {
     }
 
     fn push_content(&mut self, character: char, lines: &mut Vec<String>) {
-        // Split the decoded text at a character boundary and count the
-        // physical line once, even if it takes multiple fragments to emit it.
+        // Emit only the valid UTF-8 prefix of an oversized physical line.
         if self.line.len() + character.len_utf8() > MAX_LINE_BYTES {
             lines.push(std::mem::take(&mut self.line));
-            if !self.overlong_line {
-                self.stats.long_lines = self.stats.long_lines.saturating_add(1);
-                self.overlong_line = true;
-            }
+            self.stats.long_lines = self.stats.long_lines.saturating_add(1);
+            self.discarding_line_tail = true;
+        } else {
+            self.line.push(character);
         }
-        self.line.push(character);
     }
 }
 
@@ -321,17 +326,37 @@ mod tests {
     }
 
     #[test]
-    fn splits_overlong_lines_without_splitting_characters() {
-        let expected = "x".repeat(MAX_LINE_BYTES - 1);
-        let remainder = "y".repeat(MAX_LINE_BYTES);
-        let input = format!("{expected}é{remainder}\nnext\n");
-        let (lines, stats) = decode_in_chunks(input.as_bytes(), 4096);
-        assert_eq!(lines.len(), 4);
-        assert_eq!(lines[0], expected);
-        assert_eq!(lines[1..3].concat(), format!("é{remainder}"));
-        assert_eq!(lines[3], "next");
-        assert!(lines.iter().all(|line| line.len() <= MAX_LINE_BYTES));
-        assert_eq!(stats.long_lines, 1);
+    fn emits_one_truncated_row_and_preserves_the_next_physical_line() {
+        let first = "x".repeat(MAX_LINE_BYTES);
+        let second = "y".repeat(MAX_LINE_BYTES - 1);
+        let ignored_header = "[2026-11-28 12:00:00.000 +9 0x0 INFO Test] ignored";
+        let input = format!("{first}{ignored_header}\r\n{second}éignored\nnext\n\n");
+        for chunk_size in [1, 4096, input.len()] {
+            let (lines, stats) = decode_in_chunks(input.as_bytes(), chunk_size);
+            assert_eq!(lines, [first.as_str(), second.as_str(), "next", ""]);
+            assert_eq!(stats.long_lines, 2);
+        }
+    }
+
+    #[test]
+    fn finish_does_not_emit_the_discarded_tail_of_an_unterminated_line() {
+        let full_line = "x".repeat(MAX_LINE_BYTES);
+        let mut decoder = Decoder::new();
+        assert!(decoder.push(full_line.as_bytes()).is_empty());
+        assert_eq!(decoder.push(b"tail\r\xff"), [full_line]);
+        assert!(decoder.finish().is_empty());
+        assert_eq!(decoder.stats().long_lines, 1);
+        assert_eq!(decoder.stats().replaced_chars, 1);
+    }
+
+    #[test]
+    fn a_trailing_standalone_cr_overflows_the_full_line_at_eof() {
+        let full_line = "x".repeat(MAX_LINE_BYTES);
+        let mut decoder = Decoder::new();
+        assert!(decoder.push(full_line.as_bytes()).is_empty());
+        assert!(decoder.push(b"\r").is_empty());
+        assert_eq!(decoder.finish(), [full_line]);
+        assert_eq!(decoder.stats().long_lines, 1);
     }
 
     #[test]
