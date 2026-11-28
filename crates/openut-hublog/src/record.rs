@@ -1,5 +1,7 @@
 //! Classify a Hub log entry by its body and read the values used by the watcher.
 
+use openut_core::event::Battery;
+
 use crate::header::{Entry, FileKind};
 
 /// A supported log record, including only the fields the watcher uses.
@@ -7,6 +9,7 @@ use crate::header::{Entry, FileKind};
 pub enum Record<'a> {
     ServerStart,
     ServerRelease,
+    DongleAdded,
     DongleRemoved,
     TrackerAdded {
         tracker: u16,
@@ -19,6 +22,8 @@ pub enum Record<'a> {
     DeviceInfo {
         tracker: u16,
         serial: &'a str,
+        hub_number: Option<u16>,
+        firmware: Option<&'a str>,
     },
     HostMode(u16),
     HostWifiQuery(u16),
@@ -36,6 +41,10 @@ pub enum Record<'a> {
         map_status: i64,
         map_state: i64,
         usb: Option<bool>,
+        battery: Option<Battery>,
+    },
+    ServiceStatus {
+        connected: bool,
     },
     Pose {
         tracker: u16,
@@ -91,6 +100,7 @@ pub fn classify<'a>(entry: &Entry<'a>, file: FileKind) -> Record<'a> {
         {
             command_with_value("camera_rate", tail)
         }
+        Some(b'D') if body.starts_with("Dongle is added.") => Record::DongleAdded,
         Some(b'D') if body.starts_with("Dongle is removed.") => Record::DongleRemoved,
         Some(b'F') if let Some(tail) = body.strip_prefix("Fail to stop tracker, err:") => {
             command_with_value("stop", tail)
@@ -134,6 +144,9 @@ pub fn classify<'a>(entry: &Entry<'a>, file: FileKind) -> Record<'a> {
             tracker_before(tail, ").").map_or(Record::Unparsed, |(tracker, _)| {
                 command("wake_dongle", Some(tracker))
             })
+        }
+        Some(b'[') if let Some(tail) = body.strip_prefix("[ServiceStatusToVHServer] ") => {
+            service_status(tail).unwrap_or(Record::Unparsed)
         }
         Some(b'[') => bracketed_tracker(body, '[', ']', " OET OVERSPEED!", Record::OetOverspeed),
         Some(b'(') => classify_pose(body),
@@ -235,14 +248,57 @@ fn bracketed_tracker<'a>(
     }
 }
 
-fn device_info<'a>(fields: &str, serial: &'a str) -> Option<Record<'a>> {
-    let (_, index) = fields.split_once(", device index: ")?;
-    let (tracker, _) = tracker_before(index, ",")?;
-    let (serial, _) = serial.split_once(')')?;
-    if serial.trim_ascii().is_empty() {
+fn device_info<'a>(before_serial: &'a str, serial_and_tail: &'a str) -> Option<Record<'a>> {
+    let (_, index) = before_serial.split_once(", device index: ")?;
+    let tracker = index.split(',').next()?.parse().ok()?;
+    let (serial, tail) = serial_and_tail.split_once(')')?;
+    if !ascii_identifier(serial, b"-") {
         return None;
     }
-    Some(Record::DeviceInfo { tracker, serial })
+
+    let mut hub_number = None;
+    let mut firmware = None;
+    let tail = tail.strip_prefix(", ").unwrap_or_default();
+    for (key, value) in fields(before_serial).chain(fields(tail)) {
+        let Some((value, _)) = value.strip_prefix('(').and_then(|v| v.split_once(')')) else {
+            continue;
+        };
+        match key {
+            "model name" => {
+                hub_number = value
+                    .strip_prefix("VIVE Ultimate Tracker ")
+                    .filter(|number| number.bytes().all(|byte| byte.is_ascii_digit()))
+                    .and_then(|number| number.parse().ok())
+                    .filter(|number| (1..=99).contains(number));
+            }
+            "fw version" => firmware = ascii_identifier(value, b".-_").then_some(value),
+            _ => {}
+        }
+    }
+    Some(Record::DeviceInfo {
+        tracker,
+        serial,
+        hub_number,
+        firmware,
+    })
+}
+
+fn ascii_identifier(value: &str, punctuation: &[u8]) -> bool {
+    (1..=32).contains(&value.len())
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || punctuation.contains(&byte))
+}
+
+fn fields(body: &str) -> impl Iterator<Item = (&str, &str)> {
+    body.split(", ").filter_map(|field| field.split_once(": "))
+}
+
+fn service_status(body: &str) -> Option<Record<'_>> {
+    let (_, value) = fields(body).find(|(key, _)| *key == "dongle connected")?;
+    Some(Record::ServiceStatus {
+        connected: read_switch(value.trim_ascii().parse().ok()?)?,
+    })
 }
 
 fn device_status(body: &str) -> Option<Record<'_>> {
@@ -252,7 +308,9 @@ fn device_status(body: &str) -> Option<Record<'_>> {
     let mut map_status = None;
     let mut map_state = None;
     let mut usb = None;
-    for (key, value) in body.split(", ").filter_map(|field| field.split_once(": ")) {
+    let mut percentage = None;
+    let mut charging = None;
+    for (key, value) in fields(body) {
         let value = value.trim_ascii();
         match key {
             "device index" => tracker = value.parse().ok(),
@@ -261,16 +319,26 @@ fn device_status(body: &str) -> Option<Record<'_>> {
             "map status" => map_status = value.parse().ok(),
             "map state" => map_state = value.parse().ok(),
             "bIsConnectedOnUSB" => usb = value.parse().ok().and_then(read_switch),
+            "percentage" => {
+                percentage = value.parse().ok().filter(|value| (1..=100).contains(value))
+            }
+            "charging" => charging = value.parse().ok().and_then(read_switch),
             _ => {}
         }
     }
+    let connected = connected?;
     Some(Record::DeviceStatus {
         tracker: tracker?,
-        connected: connected?,
+        connected,
         host: host?,
         map_status: map_status?,
         map_state: map_state?,
         usb,
+        battery: if connected == 1 {
+            percentage.map(|percent| Battery { percent, charging })
+        } else {
+            None
+        },
     })
 }
 
@@ -367,10 +435,10 @@ mod tests {
 
     #[test]
     fn reads_the_three_documented_device_status_records() {
-        for (line, tracker, connected, host, map_status, map_state) in [
-            (STATUS_SAMPLES[0], 2, 0, 0, 0, 0),
-            (STATUS_SAMPLES[1], 4, 1, 0, 6, 2),
-            (STATUS_SAMPLES[2], 2, 1, 1, -1, 0),
+        for (line, tracker, connected, host, map_status, map_state, percent) in [
+            (STATUS_SAMPLES[0], 2, 0, 0, 0, 0, None),
+            (STATUS_SAMPLES[1], 4, 1, 0, 6, 2, Some(74)),
+            (STATUS_SAMPLES[2], 2, 1, 1, -1, 0, Some(98)),
         ] {
             assert_eq!(
                 classify_line(line, FileKind::Server),
@@ -380,7 +448,11 @@ mod tests {
                     host,
                     map_status,
                     map_state,
-                    usb: Some(false)
+                    usb: Some(false),
+                    battery: percent.map(|percent| Battery {
+                        percent,
+                        charging: Some(false),
+                    }),
                 }
             );
         }
@@ -403,7 +475,11 @@ mod tests {
                     host: 1,
                     map_status: -1,
                     map_state: 0,
-                    usb
+                    usb,
+                    battery: Some(Battery {
+                        percent: 98,
+                        charging: Some(false),
+                    }),
                 }
             );
         }
@@ -444,6 +520,7 @@ mod tests {
             "(SteamVR: -1)(2)[44]Pose status is changed: Pose data - status: ",
             "(SteamVR: -1)(x)[44]Pose status is changed: Pose data - status: 2, pos: (-nan, -nan, -nan)",
             "[x] OET OVERSPEED!",
+            "[ServiceStatusToVHServer] unrecognized [2] OET OVERSPEED!",
         ] {
             assert_server_body(body, Record::Unparsed);
         }
@@ -453,7 +530,7 @@ mod tests {
             "Response - cmd type: 214, device index: 2, result: 0",
             "This OET has latest firmware",
             "Tracker is not found",
-            "[ServiceStatusToVHServer] unrecognized [2] OET OVERSPEED!",
+            "[Unrecognized] [2] OET OVERSPEED!",
             "(2) Tracker is going to power-off.",
         ] {
             assert_server_body(body, Record::Other);

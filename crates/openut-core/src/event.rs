@@ -1,7 +1,7 @@
 //! Source-independent input to tracker state, detection rules, and summaries.
 
 use crate::time::{LogTime, UtcOffset};
-use crate::tracker::{Serial, TrackerKey};
+use crate::tracker::{HubNumber, Serial, TrackerKey};
 
 /// An event and the UTC instant and local offset at which it occurred.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -15,8 +15,13 @@ pub struct Timed {
 pub enum Event {
     ServerStarted,
     ServerStopped,
+    DongleAdded,
     /// Disconnects the dongle's trackers. Direct USB connections are separate.
     DongleRemoved,
+    /// Reports the dongle's state without changing tracker connections.
+    DongleReport {
+        connected: bool,
+    },
     TrackerAdded {
         tracker: TrackerKey,
         usb: bool,
@@ -28,6 +33,8 @@ pub enum Event {
     SerialKnown {
         tracker: TrackerKey,
         serial: Serial,
+        hub_number: Option<HubNumber>,
+        firmware: Option<String>,
     },
     HostAssigned {
         tracker: TrackerKey,
@@ -55,6 +62,7 @@ pub enum Event {
         host: bool,
         map_ready: bool,
         usb: Option<bool>,
+        battery: Option<Battery>,
     },
     Pose {
         tracker: TrackerKey,
@@ -72,6 +80,13 @@ pub enum Event {
         tracker: Option<TrackerKey>,
         kind: String,
     },
+}
+
+/// The last reported percentage and charging state of a connected tracker.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Battery {
+    pub percent: u8,
+    pub charging: Option<bool>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
