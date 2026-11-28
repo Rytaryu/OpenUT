@@ -92,6 +92,9 @@ impl Decoder {
 
     fn pairing(&mut self, report: &[u8]) -> Result<DongleEvent, &'static str> {
         let report = declared_report(report)?;
+        if !(12..=64).contains(&report.len()) {
+            return Err("pairing report length outside 12..=64");
+        }
         let unpaired = match report.get(5) {
             Some(0) => false,
             Some(1) => true,

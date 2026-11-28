@@ -180,6 +180,39 @@ fn tolerates_one_leading_zero_before_a_known_type() {
 }
 
 #[test]
+fn bounds_pairing_length_without_consuming_a_label() {
+    let mut oversized_address = ADDRESS;
+    oversized_address[1] ^= 1;
+    let mut oversized = pairing_report(oversized_address, 0);
+    oversized[1] = 65;
+    oversized.resize(65, 0);
+    oversized.insert(0, 0);
+
+    let mut maximum = pairing_report(ADDRESS, 0);
+    maximum[1] = 64;
+    maximum.resize(64, 0);
+    maximum.insert(0, 0);
+
+    for start in [0, 1] {
+        let mut decoder = Decoder::default();
+        assert!(matches!(
+            decoder.decode(&oversized[start..]),
+            DongleEvent::Malformed {
+                report_type: 0x18,
+                ..
+            }
+        ));
+        assert_eq!(
+            decoder.decode(&maximum[start..]),
+            DongleEvent::Pair {
+                tracker: TrackerLabel('A'),
+                unpaired: false,
+            }
+        );
+    }
+}
+
+#[test]
 fn preserves_uninterpreted_report_types_without_showing_payload() {
     let bytes = [0x29, 4, 0xa1, 0xb2];
     assert!(matches!(
