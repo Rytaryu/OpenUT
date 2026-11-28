@@ -271,6 +271,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "openut-driver"
+version = "0.0.0"
+dependencies = [
+ "openut-bridge",
+ "serde_json",
+]
+
+[[package]]
 name = "openut-hublog"
 version = "0.0.0"
 dependencies = [
