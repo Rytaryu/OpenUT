@@ -406,17 +406,32 @@ for (const [name, method, path] of [
   });
 }
 
-test('wakes through a locked wake PR by opening it for the one comment, and locks it again', (t) => {
+test('a locked wake PR is never opened: without the owner\'s token the wake fails and needs-human stays', (t) => {
   const fixture = harness(t, { body: '返事の行き先: role:review #55', wakeLocked: true });
-  succeeded(fixture.run());
+  const result = fixture.run();
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /HTTP 403/);
   const state = fixture.read();
-  assert.deepEqual(state.issues[wakePr].comments, ['WAKE role:review #55']);
+  assert.deepEqual(state.issues[wakePr].comments, []);
   assert.equal(state.issues[wakePr].locked, true);
-  const onWakePr = mutations(state)
-    .filter(({ path }) => path.startsWith(`${base}/issues/${wakePr}/`))
-    .map(({ method, path, failed }) => `${method} ${path.split('/').at(-1)}${failed ? ` (${failed})` : ''}`);
-  assert.deepEqual(onWakePr, ['POST comments (403)', 'DELETE lock', 'POST comments', 'PUT lock']);
-  assertCompletionFlagLast(state);
+  assert.equal(state.calls.some(({ path }) => path.endsWith('/lock')), false);
+  assert.ok(state.issues[source].labels.includes('needs-human'));
+});
+
+test('a 502 at the wake comment touches no lock, with or without the owner\'s token', (t) => {
+  for (const wakeToken of ['', 'owner-token']) {
+    const fixture = harness(t, {
+      body: '返事の行き先: role:review #55',
+      wakeLocked: true,
+      wakeToken,
+      failures: [{ method: 'POST', path: `${base}/issues/${wakePr}/comments`, remaining: 1, status: 502 }],
+    });
+    assert.notEqual(fixture.run().status, 0);
+    const state = fixture.read();
+    assert.equal(state.calls.some(({ path }) => path.endsWith('/lock')), false);
+    assert.equal(state.issues[wakePr].locked, true);
+    assert.ok(state.issues[source].labels.includes('needs-human'));
+  }
 });
 
 test('the owner\'s token writes to the locked wake PR as it is', (t) => {
@@ -424,24 +439,7 @@ test('the owner\'s token writes to the locked wake PR as it is', (t) => {
   succeeded(fixture.run());
   const state = fixture.read();
   assert.deepEqual(state.issues[wakePr].comments, ['WAKE role:review #55']);
-  assert.equal(mutations(state).some(({ path }) => path.endsWith('/lock')), false);
-});
-
-test('a wake that fails on the opened wake PR leaves it locked and keeps needs-human for the retry', (t) => {
-  const fixture = harness(t, {
-    body: '返事の行き先: role:review #55',
-    wakeLocked: true,
-    // Both attempts of the first run fail: the one on the locked PR and the one on the opened PR.
-    failures: [{ method: 'POST', path: `${base}/issues/${wakePr}/comments`, remaining: 2, status: 502 }],
-  });
-  const first = fixture.run();
-  assert.notEqual(first.status, 0);
-  let state = fixture.read();
   assert.equal(state.issues[wakePr].locked, true);
-  assert.ok(state.issues[source].labels.includes('needs-human'));
-  succeeded(fixture.run());
-  state = fixture.read();
-  assert.deepEqual(state.issues[wakePr].comments, ['WAKE role:review #55']);
-  assert.equal(state.issues[wakePr].locked, true);
+  assert.equal(state.calls.some(({ path }) => path.endsWith('/lock')), false);
   assert.equal(state.issues[source].labels.includes('needs-human'), false);
 });

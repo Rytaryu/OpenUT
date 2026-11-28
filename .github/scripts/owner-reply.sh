@@ -76,27 +76,7 @@ $SIGN" >/dev/null
 # The PM has no event trigger (daily run), so no wake comment for role:pm.
 if [[ "$role" != "role:pm" ]]; then
   # Comments by the workflow's own bot do not start the ChatGPT tasks; the owner's token does.
-  post_wake() {
-    GH_TOKEN="${WAKE_TOKEN:-$GH_TOKEN}" gh api "repos/$REPO/issues/$WAKE_PR/comments" -f body="WAKE $role #$target" >/dev/null
-  }
-  if ! refusal=$(post_wake 2>&1); then
-    echo "$refusal" >&2
-    # The wake PR is kept locked, so that nobody outside can start the roles
-    # (the repository is public). The job's own account cannot comment on a
-    # locked conversation: open it for this one comment and lock it again,
-    # whether the comment went out or not.
-    locked=$(gh api "repos/$REPO/issues/$WAKE_PR" --jq .locked 2>/dev/null || true)
-    if [[ "$locked" != "true" ]]; then
-      echo "Unable to post the wake comment: retry" >&2; exit 1
-    fi
-    gh api -X DELETE "repos/$REPO/issues/$WAKE_PR/lock" >/dev/null
-    posted=0
-    post_wake || posted=$?
-    gh api -X PUT "repos/$REPO/issues/$WAKE_PR/lock" >/dev/null
-    if [[ "$posted" -ne 0 ]]; then
-      echo "Unable to post the wake comment: retry" >&2; exit 1
-    fi
-  fi
+  GH_TOKEN="${WAKE_TOKEN:-$GH_TOKEN}" gh api "repos/$REPO/issues/$WAKE_PR/comments" -f body="WAKE $role #$target" >/dev/null
 fi
 # Retain the retry marker until every routing operation has succeeded.
 gh api -X DELETE "repos/$REPO/issues/$ISSUE/labels/needs-human" >/dev/null
