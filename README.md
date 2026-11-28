@@ -41,3 +41,5 @@ VIVE Hub の代わりに、VIVE Ultimate Tracker を SteamVR で使うための 
 ## ライセンス
 
 MIT License（`LICENSE`）
+
+`.claude/skills/` にあるのは、開発を担当する AI が使うスキルで、OpenUT の一部ではありません。それぞれの配布元のライセンスに従います（`.claude/skills/README.md`）。
