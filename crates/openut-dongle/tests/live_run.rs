@@ -503,6 +503,127 @@ fn probe_opens_only_after_baseline_and_records_both_windows_in_order() {
 }
 
 #[test]
+fn probe_reads_and_releases_the_device_while_startup_display_is_blocked() {
+    const WAIT: Duration = Duration::from_secs(3);
+
+    struct GatedSource {
+        source: FakeSource,
+        start: Option<mpsc::Receiver<()>>,
+        dropped_at: mpsc::Sender<u64>,
+    }
+
+    impl ReportSource for GatedSource {
+        fn read_timeout(&mut self, timeout: Duration) -> ReadOutcome {
+            if let Some(start) = self.start.take() {
+                start
+                    .recv_timeout(WAIT)
+                    .expect("startup display should release the first read");
+            }
+            self.source.read_timeout(timeout)
+        }
+    }
+
+    impl Drop for GatedSource {
+        fn drop(&mut self) {
+            let _ = self
+                .dropped_at
+                .send(self.source.time.load(Ordering::Relaxed));
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    enum StartupNotice {
+        WindowStart,
+        Opened,
+    }
+
+    let expected_reports = [
+        (1_100_000, pose(1, 1)),
+        (1_100_000, pose(2, 2)),
+        (1_990_000, pose(1, 3)),
+    ];
+    let deadline = 2_000_000;
+    let capture = |pause: Option<StartupNotice>| {
+        let (source, clock) = script(
+            expected_reports
+                .iter()
+                .map(|(at, bytes)| (*at, ReadOutcome::Report(bytes.clone())))
+                .chain([
+                    (deadline, ReadOutcome::Idle),
+                    (2_500_000, ReadOutcome::Report(pose(3, 4))),
+                ]),
+        );
+        let now = Arc::clone(&clock.0);
+        let (start_reader, start) = mpsc::channel();
+        let (dropped_at, device_closed) = mpsc::channel();
+        let source = GatedSource {
+            source,
+            start: Some(start),
+            dropped_at,
+        };
+        let mut start_reader = Some(start_reader);
+        let release_at = pause.unwrap_or(StartupNotice::Opened);
+        let mut writer =
+            RecordWriter::new(Vec::new(), &header(Mode::ProbeSharing)).expect("header");
+        let result = run_probe(
+            &mut writer,
+            clock,
+            Duration::from_secs(1),
+            |_| now.store(1_000_000, Ordering::Relaxed),
+            || true,
+            || Ok(source),
+            |notice| {
+                if matches!(
+                    (release_at, notice),
+                    (
+                        StartupNotice::WindowStart,
+                        Notice::Window {
+                            note: Note::WindowProbeStart,
+                            ..
+                        }
+                    ) | (StartupNotice::Opened, Notice::ProbeOpened)
+                ) {
+                    start_reader
+                        .take()
+                        .expect("one startup notice")
+                        .send(())
+                        .expect("release the first read");
+                    if pause.is_some() {
+                        assert_eq!(
+                            device_closed
+                                .recv_timeout(WAIT)
+                                .expect("reader should close the source before display returns"),
+                            deadline,
+                        );
+                        now.store(2_500_000, Ordering::Relaxed);
+                    }
+                }
+                Ok(())
+            },
+        )
+        .expect("write synthetic probe record");
+
+        assert_eq!(result.end, stamp(deadline));
+        assert_eq!(result.reason, EndReason::Duration);
+        assert_eq!(result.stats.reports, expected_reports.len() as u64);
+        writer.into_inner()
+    };
+
+    let normal = capture(None);
+    let reports: Vec<_> = rows(&normal)
+        .into_iter()
+        .filter_map(|row| match row {
+            Record::Input(report) => Some((report.mono_us, report.bytes)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(reports, expected_reports);
+    for notice in [StartupNotice::WindowStart, StartupNotice::Opened] {
+        assert_eq!(capture(Some(notice)), normal);
+    }
+}
+
+#[test]
 fn a_probe_backlog_ends_at_the_deadline_and_counts_only_reports_in_the_window() {
     let settings = RunOptions {
         start: stamp(0),

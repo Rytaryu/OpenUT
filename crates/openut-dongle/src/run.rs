@@ -266,8 +266,6 @@ pub fn run_probe<S: ReportSource + Send, C: Clock + Send, W: Write>(
     match open() {
         Ok(source) => {
             let read_start = clock.now();
-            write_window(writer, read_start, Note::WindowProbeStart, &mut display)?;
-            display(Notice::ProbeOpened)?;
             capture(
                 source,
                 clock,
@@ -315,7 +313,7 @@ fn capture<S: ReportSource + Send, C: Clock + Send, W: Write>(
     writer: &mut RecordWriter<W>,
     settings: RunOptions,
     server_running: impl FnMut() -> bool,
-    display: impl FnMut(Notice<'_>) -> io::Result<()>,
+    mut display: impl FnMut(Notice<'_>) -> io::Result<()>,
 ) -> io::Result<RunResult> {
     let stop = AtomicBool::new(false);
     thread::scope(|scope| {
@@ -330,7 +328,15 @@ fn capture<S: ReportSource + Send, C: Clock + Send, W: Write>(
                 settings.probe_deadline(),
             );
         })?;
-        let result = main_loop(&stream, &stop, writer, settings, server_running, display);
+        let result = (|| {
+            if settings.mode == Mode::ProbeSharing {
+                // The reader owns the timed device access while startup output
+                // is written. Queued reports are consumed after the marker.
+                write_window(writer, settings.start, Note::WindowProbeStart, &mut display)?;
+                display(Notice::ProbeOpened)?;
+            }
+            main_loop(&stream, &stop, writer, settings, server_running, display)
+        })();
         stop.store(true, Ordering::Relaxed);
         drop(stream);
         let joined = reader.join();
