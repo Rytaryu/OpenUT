@@ -1,5 +1,6 @@
 use std::ops::Range;
 
+use openut_hublog::decode::LineEnding;
 use openut_hublog::header::{ParsedLine, parse_line};
 
 use crate::{Kind, Warning};
@@ -20,28 +21,24 @@ pub(crate) fn scan(text: &str, pc_name: Option<&str>) -> Scan {
         warnings: Vec::new(),
     };
     let pc_name = pc_name
-        .filter(|name| !name.is_empty())
+        // A supplied name cannot consume a delimiter. The residual check still scans for it.
+        .filter(|name| !name.is_empty() && !name.contains(['\r', '\n']))
         .map(str::to_ascii_lowercase);
-    // VIVE Hub separates records with CRLF; an LF within a record is part of its body.
-    let separator = if text.contains("\r\n") { "\r\n" } else { "\n" };
+    let separator = LineEnding::detect(text).unwrap_or(LineEnding::Lf).as_str();
     let mut offset = 0;
     for (index, raw_record) in text.split_inclusive(separator).enumerate() {
-        let record = raw_record.strip_suffix(separator).unwrap_or(raw_record);
+        let record = raw_record
+            .strip_suffix("\r\n")
+            .or_else(|| raw_record.strip_suffix(separator))
+            .unwrap_or(raw_record);
         let mut found = RecordSpans::default();
         if let ParsedLine::Entry(entry) = parse_line(record)
             && entry.func == "BiCollector::GetPcSerialNumber"
         {
-            let mut body = entry.body;
-            if entry.thread.is_some_and(|thread| {
-                thread.is_empty() || !thread.bytes().all(|byte| byte.is_ascii_digit())
-            }) && let Some((_, tail)) = record.split_once(']')
-            {
-                // Only decimal brackets are thread metadata in this format.
-                body = tail.trim_start();
-            }
+            let body = entry.body;
             let mut line_start = record.len() - body.len();
-            for part in body.split_inclusive('\n') {
-                let body = part.strip_suffix('\n').unwrap_or(part);
+            for part in body.split_inclusive(['\r', '\n']) {
+                let body = part.strip_suffix(['\r', '\n']).unwrap_or(part);
                 found.add(line_start..line_start + body.len(), Kind::PcSerialBody);
                 line_start += part.len();
             }
@@ -395,16 +392,30 @@ mod tests {
 
     #[test]
     fn removes_pc_serial_body_segments_without_removing_line_endings() {
-        let record = "[2026-11-27 22:53:34.900 +9 0xF88 ERROR BiCollector::GetPcSerialNumber] [3976] test\ncontinued\r\nnext";
+        let record = "# Log begin\r\n[2026-11-27 22:53:34.900 +9 0xF88 ERROR BiCollector::GetPcSerialNumber] [3976] test\ncontinued\rthird\r\nnext";
         let scan = scan(record, None);
         assert_eq!(
             selected(record, &scan),
             [
                 (Kind::PcSerialBody, "test"),
-                (Kind::PcSerialBody, "continued")
+                (Kind::PcSerialBody, "continued"),
+                (Kind::PcSerialBody, "third"),
             ]
         );
         assert!(scan.warnings.is_empty());
+    }
+
+    #[test]
+    fn the_first_lf_determines_record_numbers_in_a_mixed_log() {
+        let record =
+            "# Log begin\nordinary\nordinary\r\nTRACKER NOT FOUND. tracker: FUTURE-HW001\r\n";
+        assert_eq!(
+            scan(record, None).warnings,
+            [Warning {
+                record: 4,
+                kind: Kind::TrackerSerial,
+            }]
+        );
     }
 
     #[test]

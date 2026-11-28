@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use openut_hublog::decode::{Decoder, LineEnding};
+
 const TEST_PC: &str = "SYNTHETIC-PC";
 const SERIAL: &str = "00ZZ000000111";
 const OTHER_SERIAL: &str = "00ZZ000000222";
@@ -70,6 +72,14 @@ fn read_output(dir: &Path, input: &Path) -> String {
             .collect::<Vec<_>>(),
     )
     .expect("decode anonymized log")
+}
+
+fn crlf_records(text: &str) -> Vec<String> {
+    let mut decoder = Decoder::new();
+    let mut records = decoder.push(&encode_utf16le(text));
+    records.extend(decoder.finish());
+    assert_eq!(decoder.line_ending(), Some(LineEnding::CrLf));
+    records
 }
 
 fn anonymize_command(output: &Path, map: &Path) -> Command {
@@ -200,19 +210,23 @@ fn anonymizes_documented_fields_across_files_and_preserves_record_format() {
     let not_found = "[2026-11-27 22:53:28.522 +9 0xF88 ERROR OETServer::DeviceInfoCB] [3976] TRACKER NOT FOUND. tracker: ";
     let wifi = "[2026-11-27 22:53:30.000 +9 0xF88 INFO OETServer::ProcessDeviceMsg] [3976] ";
     let pc_serial = "[2026-11-27 22:53:31.000 +9 0xF88 INFO BiCollector::GetPcSerialNumber] [3976]";
-    let driver_timeout = "[2026-11-27 19:07:28.939 +9 0x3410 INFO TrackerDongleHID::DataDispatchThreadProc] [13328] Wait for HID data got timeout.\n\r\n";
+    let server_header = "# Log begin at 2026-11-27 22:53:25.000";
+    let driver_header = "# Log begin at 2026-11-27 19:07:26.866";
+    let driver_timeout = "[2026-11-27 19:07:28.939 +9 0x3410 INFO TrackerDongleHID::DataDispatchThreadProc] [13328] Wait for HID data got timeout.\n";
+    let driver_log = format!("{driver_header}\r\n{driver_timeout}\r\n");
+    let map_creation = "[2026-11-27 22:53:34.900 +9 0xF88 INFO OETServer::SaveCalibratedDataToFile] [3976] Save map creation time: Wed Nov 25 21:00:00 2026\n.";
     let ordinary = "[2026-11-27 22:53:33.658 +9 0xF88 WARN OETServer::ProcessDeviceMsg] [3976] Wifi info is not yet available.\r\n";
     let unknown = format!("{not_found}{UNKNOWN_SERIAL}\r\n");
     let ending = ", model name: (VIVE Ultimate Tracker 1), fw version: (1.0.999.178)\r\n";
 
     let server_log = format!(
-        "# Log begin at 2026-11-27 22:53:25.000\r\n\
+        "{server_header}\r\n\
          {response}({SERIAL}){ending}\
          {response}({OTHER_SERIAL}){ending}\
          {wifi}ssid: \"{SSID}\", password: \"{PASSWORD}\", psk={PSK}, retries: 2\r\n\
          {wifi}machine: {TEST_PC}, peer: peer_synthetic-pc, path: (C:\\Users\\{USER_FOLDER}\\Steam\\config\\chaperone_info.vrchap)\r\n\
-         {pc_serial} {PC_SERIAL_BODY}\n{PC_SERIAL_TAIL}\r\n\
-         {ordinary}{unknown}unrecognized final record: 910",
+         {pc_serial} {PC_SERIAL_BODY}\r{PC_SERIAL_TAIL}\n\r\n\
+         {ordinary}{map_creation}\r\n{unknown}unrecognized final record: 910",
     );
     let second_server_log = format!("{not_found}{SERIAL}\r\n");
     let dongle_log = format!(
@@ -224,11 +238,7 @@ fn anonymizes_documented_fields_across_files_and_preserves_record_format() {
         "ViveTrackerServer_20261128.txt",
         &second_server_log,
     );
-    let driver = write_input(
-        &directory.0,
-        "ViveTrackerDriver_20261127.txt",
-        driver_timeout,
-    );
+    let driver = write_input(&directory.0, "ViveTrackerDriver_20261127.txt", &driver_log);
     let dongle = write_input(&directory.0, "ViveTrackerDongle_20261127.txt", &dongle_log);
     let result = anonymize(&output, &map, &[&server, &next_day, &driver, &dongle]);
     assert!(result.status.success(), "batch anonymization failed");
@@ -250,15 +260,19 @@ fn anonymizes_documented_fields_across_files_and_preserves_record_format() {
     assert!(sanitized.ends_with("unrecognized final record: 910"));
     assert!(sanitized.contains(", retries: 2\r\n"));
     assert!(sanitized.contains("\\Steam\\config\\chaperone_info.vrchap)\r\n"));
-    assert!(
-        sanitized.contains(pc_serial),
-        "the PC record retains its header"
-    );
+    let server_before = crlf_records(&server_log);
+    let server_after = crlf_records(&sanitized);
+    assert_eq!(server_before.len(), 10);
+    assert_eq!(server_after.len(), server_before.len());
+    assert_eq!(server_after[0], server_header);
+    assert_eq!(server_after[5], format!("{pc_serial} \r \n"));
+    assert_eq!(server_after[7], map_creation);
+    let sanitized_driver = read_output(&output, &driver);
+    assert_eq!(sanitized_driver, driver_log);
     assert_eq!(
-        sanitized.matches("\r\n").count(),
-        server_log.matches("\r\n").count()
+        crlf_records(&sanitized_driver),
+        [driver_header, driver_timeout]
     );
-    assert_eq!(read_output(&output, &driver), driver_timeout);
 
     let sanitized_dongle = read_output(&output, &dongle);
     assert!(sanitized_dongle.contains("bt mac address: (#3)("));
