@@ -1,0 +1,16 @@
+# Log begin at 2026-11-28 11:59:59.900
+# WriteTimeInterval=5000
+# OpenType=1
+# FileType=0
+# EncodeType=0
+# Truncate=0
+# MaxFileSize=15728640
+# MaxRollingCount=5
+# WriteThrough=1
+# HardFlush=0
+# FilenameWithProcessID=0
+# InitialLogLevel=2
+# ThreadPriority=0
+# AllPackagesAccess=0
+[2026-11-28 11:59:59.900 +9 0x1 INFO ] [1] ==================== Log Start ====================
+[2026-11-28 12:01:05.125 +9 0x1 INFO TrackerDongleHID::ParseIndication] [1] (1) Tracker is going to power-off.

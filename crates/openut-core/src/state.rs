@@ -13,7 +13,7 @@ use crate::event::{Battery, Event, OetKind, PoseStatus, Timed};
 use crate::time::LogTime;
 use crate::tracker::{HubNumber, Serial, TrackerKey};
 
-const DEFAULT_DUP_MS: i64 = 1_000;
+pub(crate) const DEFAULT_DUP_MS: i64 = 1_000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Phase {
@@ -251,6 +251,22 @@ impl State {
             hub: self.hub,
             at,
         }
+    }
+
+    pub(crate) fn tracker(&self, key: TrackerKey) -> Option<&TrackerView> {
+        self.trackers.get(&key).map(|tracker| &tracker.view)
+    }
+
+    pub(crate) fn trackers(&self) -> impl Iterator<Item = &TrackerView> {
+        self.trackers.values().map(|tracker| &tracker.view)
+    }
+
+    pub(crate) fn host(&self) -> Option<&HostRef> {
+        self.host.as_ref()
+    }
+
+    pub(crate) fn host_wifi(&self) -> HostWifi {
+        self.host_wifi
     }
 
     pub fn out_of_order(&self) -> u64 {

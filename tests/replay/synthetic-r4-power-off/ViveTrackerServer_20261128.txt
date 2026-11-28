@@ -1,0 +1,24 @@
+# Log begin at 2026-11-28 11:59:59.900
+# WriteTimeInterval=5000
+# OpenType=1
+# FileType=0
+# EncodeType=0
+# Truncate=0
+# MaxFileSize=15728640
+# MaxRollingCount=5
+# WriteThrough=1
+# HardFlush=0
+# FilenameWithProcessID=0
+# InitialLogLevel=2
+# ThreadPriority=0
+# AllPackagesAccess=0
+[2026-11-28 11:59:59.900 +9 0x1 INFO ] [1] ==================== Log Start ====================
+[2026-11-28 11:59:59.900 +9 0x1 INFO main] [1] Tracker Server Starts.
+[2026-11-28 12:00:00.000 +9 0x1 INFO OETServer::AddTrackerCB] [1] Add new tracker: (1), connection type: 1
+[2026-11-28 12:00:01.000 +9 0x1 INFO OETServer::AddTrackerCB] [1] Add new tracker: (2), connection type: 1
+[2026-11-28 12:00:02.000 +9 0x1 INFO OETServer::AddTrackerCB] [1] Add new tracker: (3), connection type: 2
+[2026-11-28 12:01:05.125 +9 0x1 INFO OETServer::RemoveTrackerCB] [1] Remove tracker (1), connection type: 1, power state:11
+[2026-11-28 12:01:05.128 +9 0x1 INFO OETServer::RemoveTrackerCB] [1] Remove tracker (1), connection type: 1, power state:11
+[2026-11-28 12:01:15.250 +9 0x1 INFO OETServer::RemoveTrackerCB] [1] Remove tracker (2), connection type: 1, power state:11
+[2026-11-28 12:01:25.500 +9 0x1 INFO OETServer::RemoveTrackerCB] [1] Remove tracker (3), connection type: 2, power state:21
+[2026-11-28 12:01:36.000 +9 0x1 INFO OETServer::Release] [1] Release begin

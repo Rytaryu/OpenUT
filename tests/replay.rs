@@ -3,9 +3,13 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use openut::replay::{Expectations, ObservedSummaries, RaisedDetection};
+use openut_core::engine::EngineConfig;
+use openut_core::rules::{RuleId, Step};
+use openut_core::time::UtcOffset;
+use openut_core::tracker::TrackerKey;
 use openut_hublog::decode::decode_utf16le_text;
 use openut_hublog::header::{ParsedLine, parse_line};
-use openut_hublog::replay::{ReplayCounts, ReplayFile, replay};
+use openut_hublog::replay::{ReplayCounts, ReplayFile, ReplayResult, replay, replay_with_flush};
 
 struct SavedCase {
     files: Vec<(String, Vec<u8>)>,
@@ -44,6 +48,14 @@ impl SavedCase {
             .map(|(name, bytes)| ReplayFile { name, bytes })
             .collect()
     }
+
+    fn run_replay(&self, inputs: &[ReplayFile<'_>]) -> ReplayResult {
+        replay_with_flush(
+            inputs,
+            EngineConfig::default(),
+            u64::from(self.expectations.replay.flush_s),
+        )
+    }
 }
 
 fn fixture_root() -> PathBuf {
@@ -58,7 +70,7 @@ fn is_log_file_name(name: &str) -> bool {
 }
 
 macro_rules! replay_cases {
-    ($($test:ident => $case:literal, $lines:literal, $meta:literal);+ $(;)?) => {
+    ($($test:ident => $case:literal, $lines:literal, $meta:literal $(, $check:ident)?);+ $(;)?) => {
         const CASES: &[(&str, &str)] = &[$(($case, stringify!($test))),+];
         $(
             #[test]
@@ -68,15 +80,18 @@ macro_rules! replay_cases {
                     replay(&case.inputs()),
                     ReplayCounts { lines: $lines, meta: $meta, no_header: 0 },
                 );
+                $($check(&case);)?
             }
         )+
     };
 }
 
 replay_cases! {
-    synthetic_r1_second_host_command => "synthetic-r1-second-host-command", 132, 14;
-    synthetic_normal_start => "synthetic-normal-start", 28, 14;
-    synthetic_utf16 => "synthetic-utf16", 28, 14;
+    synthetic_r1_second_host_command => "synthetic-r1-second-host-command", 132, 14, check_detections;
+    synthetic_normal_start => "synthetic-normal-start", 28, 14, check_detections;
+    synthetic_utf16 => "synthetic-utf16", 28, 14, check_detections;
+    synthetic_r1_gap_then_fault => "synthetic-r1-gap-then-fault", 140, 14, check_detections;
+    synthetic_r4_power_off => "synthetic-r4-power-off", 40, 28, check_power_off_detections;
     hub_2026_11_23_28 => "hub-2026-11-23-28", 91_356, 317;
 }
 
@@ -109,7 +124,7 @@ fn every_fixture_has_a_matching_test_function() {
 }
 
 #[test]
-fn utf16_matches_utf8_contents_and_record_counts() {
+fn utf16_matches_utf8_contents_and_replay_output() {
     let utf16 = SavedCase::load("synthetic-utf16");
     let utf8 = SavedCase::load("synthetic-normal-start");
     let [(_, encoded)] = utf16.files.as_slice() else {
@@ -125,7 +140,10 @@ fn utf16_matches_utf8_contents_and_record_counts() {
         decode_utf16le_text(encoded).expect("UTF-16 fixture must have a LE BOM"),
         expected,
     );
-    assert_eq!(replay(&utf16.inputs()), replay(&utf8.inputs()));
+    assert_eq!(
+        utf16.run_replay(&utf16.inputs()),
+        utf8.run_replay(&utf8.inputs()),
+    );
 }
 
 #[test]
@@ -186,37 +204,51 @@ fn r1_expectation_matches_the_saved_host_and_warning_sequence() {
         .expect("expected R1 host and time match the fixture");
 }
 
-fn check_detections(name: &str) {
-    let case = SavedCase::load(name);
-    let (detections, summaries) = replay_with_engine(&case.inputs(), &case.expectations);
-    if let Err(report) = case.expectations.compare(&detections, &summaries) {
-        panic!("{name}\n{report}");
+fn check_detections(case: &SavedCase) -> ReplayResult {
+    let result = case.run_replay(&case.inputs());
+    let raised: Vec<_> = result
+        .detections
+        .iter()
+        .filter(|detection| detection.step == Step::Raised)
+        .map(|detection| RaisedDetection {
+            rule: detection.rule.as_str(),
+            tracker: detection.tracker.map(|tracker| tracker.0),
+            at: detection.at,
+            // Each synthetic fixture uses a consistent +09:00 throughout.
+            offset: UtcOffset(9 * 60),
+        })
+        .collect();
+    if let Err(report) = case
+        .expectations
+        .compare(&raised, &ObservedSummaries::new())
+    {
+        panic!("{report}");
     }
+    result
 }
 
-fn replay_with_engine(
-    _inputs: &[ReplayFile<'_>],
-    _expectations: &Expectations,
-) -> (Vec<RaisedDetection<'static>>, ObservedSummaries) {
-    // Wire to the real engine before enabling these tests. Empty output would
-    // let the normal-start cases pass without exercising any detection rules.
-    unimplemented!("replay detections require the M1-6 engine")
-}
+fn check_power_off_detections(case: &SavedCase) {
+    let result = check_detections(case);
+    assert_eq!(result.stats.power_offs, 1);
 
-#[test]
-#[ignore = "M1-6 で有効にする"]
-fn synthetic_r1_second_host_command_detections() {
-    check_detections("synthetic-r1-second-host-command");
-}
-
-#[test]
-#[ignore = "M1-6 で有効にする"]
-fn synthetic_normal_start_detections() {
-    check_detections("synthetic-normal-start");
-}
-
-#[test]
-#[ignore = "M1-6 で有効にする"]
-fn synthetic_utf16_detections() {
-    check_detections("synthetic-utf16");
+    let server_files: Vec<_> = case
+        .inputs()
+        .into_iter()
+        .filter(|file| file.name.starts_with("ViveTrackerServer_"))
+        .collect();
+    let without_driver = case.run_replay(&server_files);
+    assert_eq!(without_driver.stats.power_offs, 0);
+    let raised: Vec<_> = without_driver
+        .detections
+        .iter()
+        .filter(|detection| detection.step == Step::Raised)
+        .map(|detection| (detection.rule, detection.tracker))
+        .collect();
+    assert_eq!(
+        raised,
+        [
+            (RuleId::R4, Some(TrackerKey(1))),
+            (RuleId::R4, Some(TrackerKey(2))),
+        ],
+    );
 }
