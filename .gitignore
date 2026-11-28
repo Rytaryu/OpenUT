@@ -3,3 +3,4 @@
 *.tgz
 raw-logs/
 *.anonymize-map.*
+openut-anonymize-map.tsv

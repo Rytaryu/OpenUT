@@ -30,6 +30,7 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+openut-anonymize = { path = "crates/openut-anonymize" }
 openut-core = { path = "crates/openut-core" }
 openut-hublog = { path = "crates/openut-hublog" }
 serde = { version = "1.0.229", features = ["derive"] }

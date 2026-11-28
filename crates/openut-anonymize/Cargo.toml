@@ -1,0 +1,15 @@
+[package]
+name = "openut-anonymize"
+description = "Anonymization of VIVE Hub log text"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+openut-hublog = { path = "../openut-hublog" }
