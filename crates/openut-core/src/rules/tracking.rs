@@ -141,6 +141,7 @@ impl Tracking {
 
 fn outcome(rule: RuleId, view: &TrackerView, cfg: &RulesConfig) -> Option<Step> {
     match (rule, view.phase) {
+        (RuleId::R2, _) if view.role != Role::Client => Some(Step::Ended),
         (RuleId::R2, Phase::Relocalizing | Phase::Tracking)
         | (RuleId::R3 | RuleId::R5, Phase::Tracking) => Some(Step::Resolved),
         (RuleId::R2, Phase::WaitingWifi) => Some(Step::Ended),
@@ -258,6 +259,37 @@ mod tests {
                     ]
                 );
             }
+        }
+    }
+
+    #[test]
+    fn becoming_host_at_the_r2_deadline_cancels_the_wait() {
+        let mut engine = Engine::new(EngineConfig::default());
+        apply(&mut engine, 0, added(2));
+        apply(&mut engine, 1_000, link(2, true));
+        engine.advance_to(LogTime(31_000));
+        apply(&mut engine, 31_000, host_assigned(2));
+        engine.advance_to(LogTime(32_000));
+
+        assert!(detections(&mut engine).is_empty());
+    }
+
+    #[test]
+    fn becoming_host_ends_an_already_raised_r2_episode() {
+        for switch in [host_assigned(2), map_ready(2, true)] {
+            let mut engine = Engine::new(EngineConfig::default());
+            apply(&mut engine, 0, added(2));
+            apply(&mut engine, 1_000, link(2, true));
+            engine.advance_to(LogTime(31_001));
+            let raised = detections(&mut engine);
+            assert_eq!(steps(&raised), [(RuleId::R2, 2, Step::Raised, 31_000)]);
+
+            apply(&mut engine, 32_000, switch);
+
+            let ended = detections(&mut engine);
+            assert_eq!(steps(&ended), [(RuleId::R2, 2, Step::Ended, 32_000)]);
+            assert_eq!(ended[0].episode, raised[0].episode);
+            assert_eq!(ended[0].conn, raised[0].conn);
         }
     }
 
