@@ -20,6 +20,7 @@ const TRACKER_DATA: u8 = 0x28;
 const UNCLASSIFIED_REPORT: u8 = 0x29;
 const TRACKER_TEXT: u16 = 0x0101;
 const TRACKER_POSE: u16 = 0x0110;
+const LABELS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum DongleEvent {
@@ -57,9 +58,17 @@ pub enum DongleEvent {
 #[derive(Default)]
 pub struct Decoder {
     labels: BTreeMap<addr::TrackerId, TrackerLabel>,
+    anonymized: bool,
 }
 
 impl Decoder {
+    pub(crate) fn for_recording(anonymized: bool) -> Self {
+        Self {
+            anonymized,
+            ..Self::default()
+        }
+    }
+
     pub fn decode(&mut self, bytes: &[u8]) -> DongleEvent {
         let report = normalize(bytes);
         let Some(&report_type) = report.first() else {
@@ -131,14 +140,32 @@ impl Decoder {
     }
 
     fn tracker_label(&mut self, report: &[u8]) -> Result<TrackerLabel, &'static str> {
-        let id = addr::TrackerId::from_report(report).ok_or("short tracker address")?;
+        let address = addr::report_address(report).ok_or("short tracker address")?;
+        let id = addr::TrackerId::from_address(address);
+        let exported = self
+            .anonymized
+            .then(|| addr::anonymized_label(address))
+            .flatten();
         if let Some(&label) = self.labels.get(&id) {
+            if exported.is_some_and(|exported| exported != label) {
+                return Err("conflicting tracker label in export");
+            }
             return Ok(label);
         }
-        let next = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-            .get(self.labels.len())
-            .ok_or("tracker label capacity exhausted")?;
-        let label = TrackerLabel(char::from(*next));
+        let is_available =
+            |candidate: &TrackerLabel| !self.labels.values().any(|label| candidate == label);
+        let label = if let Some(label) = exported {
+            if !is_available(&label) {
+                return Err("conflicting tracker label in export");
+            }
+            label
+        } else {
+            LABELS
+                .iter()
+                .map(|&letter| TrackerLabel(char::from(letter)))
+                .find(is_available)
+                .ok_or("tracker label capacity exhausted")?
+        };
         self.labels.insert(id, label);
         Ok(label)
     }
