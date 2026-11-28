@@ -2,7 +2,7 @@
 
 `hub-log-format.md` の見本。オーナーの PC の 2026-11-27 のログから抜いた行で、**個人の情報と、起動のたびに変わる値は、置き換えてある**。
 
-- シリアル番号は `00XX000000001`〜`00XX000000003`（形は実物と同じ 13 文字）。無線のアドレスは `00 11 22 33 44 55`。
+- シリアル番号は `00XX000000001`、`00XX000000002`（形は実物と同じ 13 文字。4 章の 2 行目と 3 行目）。無線のアドレスは `00 11 22 33 44 55`。
 - 16 桁の 16 進（プロセスの中のアドレス）は `00000000000000NN`、`cmd key` は `(AAAA)`、`handle` は `00001000` から。
 - 姿勢と較正の数は、0 でないものを `0.123456`（符号は元のまま）にした。`0.000000` と `-nan` は元のまま。
 - 時刻、スレッド番号、状態の値、電池の残量、版は、元のまま。
@@ -149,6 +149,10 @@
 ## 4. そのほかの種類（サーバー）
 
 ```
+[2026-11-27 22:53:25.380 +9 0xF88 INFO OETServer::DeviceStatusToVHServer] [3976] display index: 0, device index: 2, connected: 1, tracking status: 5, charging: 0, percentage: 98, map ID: -1, map status: -1, has map: 1, map state: 0, is host: 1, bIsConnectedOnUSB: 0, has new fw: 0, is unpaired: 0, last update time: 0, error code: -1, indicator event: 1, indicator value: 1
+[2026-11-27 22:53:25.385 +9 0x82B0 INFO OETServer::GetDeviceInfoAndResponse] [33456] Response - cmd type: 214, cmd key: (AAAA), device index: 2, result: 0, sn: (00XX000000001), model name: (VIVE Ultimate Tracker 1), fw version: (1.0.999.178), role: (0), device type: 0, force update: 0, type: 1
+[2026-11-27 22:53:28.522 +9 0xF88 ERROR OETServer::DeviceInfoCB] [3976] TRACKER NOT FOUND. tracker: 00XX000000002
+[2026-11-27 22:53:25.399 +9 0x82B0 ERROR OETServer::CreateDeviceAndResponse] [33456] Fail to create tracker. Device index: 2, tracking mode: 1, tracking format: 11, err: 22
 [2026-11-27 22:52:59.298 +9 0xF88 INFO OETServer::RemoveTrackerCB] [3976] Remove tracker (2), connection type: 1, power state:11 
 [2026-11-27 22:52:59.300 +9 0xF88 INFO OETServer::WakeupDongle] [3976] Wake up dongle: (2).
 [2026-11-27 22:52:59.301 +9 0xF88 INFO OETServer::RemoveTrackerCB] [3976] Remove tracker (2), connection type: 1, power state:11 
