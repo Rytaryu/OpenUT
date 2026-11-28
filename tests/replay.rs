@@ -531,29 +531,36 @@ fn long_gap_after_midnight_is_unobserved_with_or_without_a_previous_file() {
 
 #[test]
 fn long_gap_across_midnight_splits_unobserved_time_at_midnight() {
-    let mut case = SavedCase::load("synthetic-midnight");
+    let case = SavedCase::load("synthetic-midnight");
     let original = case.run_replay(&case.inputs());
-    edit_next_day(&mut case, |source| {
-        source
-            .replace("00:04:00.000", "00:10:00.000")
-            .replace("00:04:30.000", "00:10:30.000")
-    });
-    let replay = case.run_replay(&case.inputs());
-    let [before, after] = replay.summaries.as_slice() else {
-        panic!("expected both calendar days");
-    };
-    assert_eq!(before.date, "2026-11-27");
-    assert!(before.is_final);
-    assert_eq!(before.observed_until, "2026-11-28 00:00:00.000");
-    assert_eq!(
-        before.unobserved_s,
-        original.summaries[0].unobserved_s + 60.0
-    );
-    assert_eq!(before.trackers[0].tracking_s, 540.0);
-    assert_eq!(after.date, "2026-11-28");
-    assert_eq!(after.unobserved_s, 600.0);
-    assert_eq!(after.trackers[0].connected_s, 1200.0);
-    assert_eq!(after.trackers[0].tracking_s, 1170.0);
+    let prior_unobserved_s = original.summaries[0].unobserved_s + 60.0;
+    for (first_row, unobserved, connected) in [
+        ("00:10:00.000", 600.0, 1200.0),
+        ("00:10:00.001", 600.001, 1199.999),
+    ] {
+        let mut case = SavedCase::load("synthetic-midnight");
+        edit_next_day(&mut case, |source| {
+            source
+                .replace("00:04:00.000", first_row)
+                .replace("00:04:30.000", "00:10:30.000")
+        });
+        let replay = case.run_replay(&case.inputs());
+        let [before, after] = replay.summaries.as_slice() else {
+            panic!("expected both calendar days for first row at {first_row}");
+        };
+        assert_eq!(before.date, "2026-11-27");
+        assert!(before.is_final);
+        assert_eq!(
+            before.observed_until, "2026-11-28 00:00:00.000",
+            "{first_row}"
+        );
+        assert_eq!(before.unobserved_s, prior_unobserved_s, "{first_row}");
+        assert_eq!(before.trackers[0].tracking_s, 540.0, "{first_row}");
+        assert_eq!(after.date, "2026-11-28");
+        assert_eq!(after.unobserved_s, unobserved, "{first_row}");
+        assert_eq!(after.trackers[0].connected_s, connected, "{first_row}");
+        assert_eq!(after.trackers[0].tracking_s, 1170.0, "{first_row}");
+    }
 }
 
 fn replay_server(source: &str, flush_s: u64) -> ReplayResult {

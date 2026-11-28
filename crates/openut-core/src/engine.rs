@@ -375,16 +375,6 @@ impl Engine {
         &self.stats
     }
 
-    fn server_time(&mut self, at: LogTime, offset: UtcOffset) -> LogTime {
-        if let Some(now) = self.now.filter(|now| at < *now) {
-            self.stats.time_regressions = self.stats.time_regressions.saturating_add(1);
-            return now;
-        }
-        self.advance_to(at);
-        self.offset = offset;
-        at
-    }
-
     fn observe_server_line(
         &mut self,
         at: LogTime,
@@ -392,12 +382,22 @@ impl Engine {
         before: &Snapshot,
         quality: Option<LineQuality>,
     ) -> LogTime {
-        let effective = self.server_time(at, offset);
-        self.last_server_row = Some(effective);
+        let (effective, offset) = self
+            .now
+            .filter(|&now| at < now)
+            .map_or((at, offset), |now| (now, self.offset));
+        // A real row supplies the end of the observation interval. Split it
+        // across midnight before advancing timers that can close the prior day.
         self.summaries
-            .observe(effective, self.offset, before, self.cfg.summary.gap_s);
-        // An exact-cutoff row establishes the observation interval before the day
-        // closes. Its event and source counters are processed after closure.
+            .observe(effective, offset, before, self.cfg.summary.gap_s);
+        if effective == at {
+            self.advance_to(at);
+            self.offset = offset;
+        } else {
+            self.stats.time_regressions = self.stats.time_regressions.saturating_add(1);
+        }
+        self.last_server_row = Some(effective);
+        // Rows exactly at the cutoff close the day before their own facts apply.
         self.closed_days.extend(
             self.summaries
                 .close_days(effective, self.cfg.summary.finalize_delay_s),

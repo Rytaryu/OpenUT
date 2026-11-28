@@ -130,18 +130,20 @@ fn summary_deadline_clamps_to_rule_windows_and_closes_without_a_row() {
 
 #[test]
 fn cutoff_row_finishes_interval_before_freezing_event_facts() {
-    for wall_tick in [false, true] {
+    for (clock_cutoff, delay_ms, unobserved_s) in
+        [(false, 0, 600.0), (true, 0, 600.0), (false, 1, 600.001)]
+    {
         let mut engine = Engine::new(EngineConfig::default());
         engine.apply(timed(DAY_MS - 1_000, add(1)));
         let cutoff = DAY_MS + 600_000;
-        if wall_tick {
+        if clock_cutoff {
             engine.advance_to(LogTime(cutoff));
         }
         assert!(engine.drain().is_empty());
 
         let serial = Serial("SYNTHETIC-A".to_owned());
         engine.apply(timed(
-            cutoff,
+            cutoff + delay_ms,
             Event::SerialKnown {
                 tracker: TrackerKey(1),
                 serial: serial.clone(),
@@ -161,8 +163,29 @@ fn cutoff_row_finishes_interval_before_freezing_event_facts() {
             current.trackers[0].serial.as_deref(),
             Some(serial.0.as_str())
         );
-        assert_eq!(current.unobserved_s, 600.0);
+        assert_eq!(current.unobserved_s, unobserved_s);
     }
+}
+
+#[test]
+fn server_row_does_not_reopen_day_already_closed_by_the_clock() {
+    let mut engine = Engine::new(EngineConfig::default());
+    let last = LogTime(DAY_MS - 60_000);
+    let first = LogTime(DAY_MS + 600_001);
+    engine.note_line(FileKind::Server, Some(last), LineQuality::Other);
+
+    engine.advance_to(first);
+    let [Output::DayClosed(prior)]: [Output; 1] = engine.drain().try_into().unwrap() else {
+        panic!("expected one closed prior day")
+    };
+    assert_eq!(prior.observed_until, "1970-01-01 23:59:00.000");
+    assert_eq!(prior.unobserved_s, 86_340.0);
+
+    engine.note_line(FileKind::Server, Some(first), LineQuality::Other);
+    assert!(engine.drain().is_empty());
+    let [current]: [Summary; 1] = engine.open_summaries().try_into().unwrap();
+    assert_eq!(current.observed_until, "1970-01-02 00:10:00.001");
+    assert_eq!(current.unobserved_s, 600.001);
 }
 
 #[test]

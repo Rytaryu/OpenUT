@@ -2,6 +2,7 @@
 
 mod axis;
 pub mod calib;
+pub mod fingerprint;
 mod hold;
 mod linalg;
 mod math;
