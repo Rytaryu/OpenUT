@@ -5,11 +5,74 @@ use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::{self, Path, PathBuf};
 
+use openut::{
+    driver_reg::{self, DriverAction},
+    run,
+};
 use openut_anonymize::{Batch, anonymize};
 use openut_hublog::decode::decode_utf16le_text;
 
 const MAP_NAME: &str = "openut-anonymize-map.tsv";
 const USAGE: &str = "openut anonymize --out-dir DIR --map-dir DIR [--pc-name NAME] LOG...";
+const RUN_USAGE: &str = "openut run [--config FILE]";
+const DRIVER_USAGE: &str = "openut driver register | openut driver unregister";
+
+pub(crate) fn dispatch(mut args: impl Iterator<Item = OsString>) -> Result<(), String> {
+    match args.next().as_deref().and_then(std::ffi::OsStr::to_str) {
+        Some("anonymize") => run_anonymize(args),
+        Some("run") => match args.next().as_deref() {
+            None => run::run(None),
+            Some(flag) if (flag == "--help" || flag == "-h") && args.next().is_none() => {
+                println!("{RUN_USAGE}");
+                Ok(())
+            }
+            Some(flag) if flag == "--config" => {
+                let path = args.next().filter(|value| {
+                    value
+                        .to_str()
+                        .is_some_and(|text| !text.is_empty() && !text.starts_with("--"))
+                });
+                match path {
+                    Some(path) if args.next().is_none() => run::run(Some(path.into())),
+                    _ => Err(RUN_USAGE.to_owned()),
+                }
+            }
+            _ => Err(RUN_USAGE.to_owned()),
+        },
+        Some("driver") => {
+            let action = match args.next().as_deref().and_then(std::ffi::OsStr::to_str) {
+                Some("register") => DriverAction::Register,
+                Some("unregister") => DriverAction::Unregister,
+                Some("--help" | "-h") if args.next().is_none() => {
+                    println!("{DRIVER_USAGE}");
+                    return Ok(());
+                }
+                _ => return Err(DRIVER_USAGE.to_owned()),
+            };
+            if args.next().is_some() {
+                return Err(DRIVER_USAGE.to_owned());
+            }
+            driver_reg::run(action).map_err(|error| error.to_string())?;
+            let result = match action {
+                DriverAction::Register => "OpenUT のドライバーを SteamVR に登録しました。",
+                DriverAction::Unregister => "OpenUT のドライバーを SteamVR から解除しました。",
+            };
+            println!("{result}");
+            Ok(())
+        }
+        Some("--help" | "-h") => {
+            println!(
+                "OpenUT {}\n{RUN_USAGE}\n{DRIVER_USAGE}\n{USAGE}",
+                openut::VERSION
+            );
+            Ok(())
+        }
+        _ => {
+            println!("OpenUT {}", openut::VERSION);
+            Ok(())
+        }
+    }
+}
 
 struct Input {
     path: PathBuf,
@@ -294,4 +357,55 @@ fn output_error(number: usize, error: &io::Error) -> String {
 
 fn map_error(error: &io::Error) -> String {
     format!("対応表を書き出せませんでした（{}）", error.kind())
+}
+
+#[cfg(test)]
+mod command_tests {
+    use super::*;
+
+    #[test]
+    fn malformed_subcommands_stop_before_opening_hardware_or_registering() {
+        for args in [
+            ["run", "--config", "--unknown"],
+            ["run", "extra", "argument"],
+        ] {
+            assert_eq!(
+                dispatch(args.into_iter().map(OsString::from)),
+                Err(RUN_USAGE.to_owned())
+            );
+        }
+        for args in [
+            ["driver", "register", "extra"],
+            ["driver", "unregister", "extra"],
+        ] {
+            assert_eq!(
+                dispatch(args.into_iter().map(OsString::from)),
+                Err(DRIVER_USAGE.to_owned())
+            );
+        }
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn run_rejects_non_unicode_arguments_before_entering_the_runtime() {
+        #[cfg(unix)]
+        let invalid = {
+            use std::os::unix::ffi::OsStringExt;
+            OsString::from_vec(vec![0xff])
+        };
+        #[cfg(windows)]
+        let invalid = {
+            use std::os::windows::ffi::OsStringExt;
+            OsString::from_wide(&[0xd800])
+        };
+
+        for tail in [
+            vec![invalid.clone()],
+            vec![invalid.clone(), OsString::from("extra")],
+            vec![OsString::from("--config"), invalid],
+        ] {
+            let args = std::iter::once(OsString::from("run")).chain(tail);
+            assert_eq!(dispatch(args), Err(RUN_USAGE.to_owned()));
+        }
+    }
 }
