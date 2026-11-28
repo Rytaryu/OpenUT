@@ -39,6 +39,7 @@ pub enum SummaryWrite {
 pub struct WatchRound {
     pub outputs: Vec<Output>,
     pub summaries: Vec<SummaryWrite>,
+    periodic_summary: bool,
     pub display: DisplayModel,
     pub health: WatchHealth,
     pub hub: HubLive,
@@ -60,6 +61,7 @@ pub struct Watcher {
     read_failures: u64,
     next_process_check: Option<LogTime>,
     next_summary: Option<LogTime>,
+    deferred_closed: Vec<SummaryWrite>,
     last_growth: Option<LogTime>,
     latest_server: Option<LogTime>,
     latest_driver: Option<LogTime>,
@@ -82,6 +84,7 @@ impl Watcher {
             read_failures: 0,
             next_process_check: None,
             next_summary: None,
+            deferred_closed: Vec::new(),
             last_growth: None,
             latest_server: None,
             latest_driver: None,
@@ -219,13 +222,10 @@ impl Watcher {
                 false
             }
         };
-        outputs.extend(self.engine.drain());
-        for output in &outputs {
-            if let Output::DayClosed(summary) = output {
-                summaries.push(SummaryWrite::Daily((**summary).clone()));
-            }
-        }
-        if !self.catching_up && self.next_summary.is_none_or(|next| now >= next) {
+        self.drain_outputs(&mut outputs, &mut summaries);
+        let periodic_summary =
+            !self.catching_up && self.next_summary.is_none_or(|next| now >= next);
+        if periodic_summary {
             self.next_summary = Some(after_ms(now, SUMMARY_INTERVAL_MS));
             summaries.extend(self.open_summaries().into_iter().map(SummaryWrite::Daily));
         }
@@ -242,6 +242,7 @@ impl Watcher {
         WatchRound {
             outputs,
             summaries,
+            periodic_summary,
             display,
             health,
             hub,
@@ -292,6 +293,21 @@ impl Watcher {
             .set_hub_down(display::hub_down(self.gate.live(log), log));
     }
 
+    fn drain_outputs(&mut self, outputs: &mut Vec<Output>, summaries: &mut Vec<SummaryWrite>) {
+        let drained = self.engine.drain();
+        let writes = if self.catching_up {
+            &mut self.deferred_closed
+        } else {
+            summaries.append(&mut self.deferred_closed);
+            summaries
+        };
+        writes.extend(drained.iter().filter_map(|output| match output {
+            Output::DayClosed(summary) => Some(SummaryWrite::Daily((**summary).clone())),
+            _ => None,
+        }));
+        outputs.extend(drained);
+    }
+
     fn rebuild(
         &mut self,
         name: Option<&str>,
@@ -301,17 +317,22 @@ impl Watcher {
         before_rebuild: &mut Option<&mut SummarySink<'_>>,
     ) {
         // Preserve outputs from the old segment. Rebuilding clears the engine queue.
-        outputs.extend(self.engine.drain());
-        let write: fn(Summary) -> SummaryWrite = if replaced {
-            SummaryWrite::BeforeRebuild
+        self.drain_outputs(outputs, summaries);
+        if self.catching_up {
+            // The interrupted catch-up did not finish rebuilding this generation's days.
+            self.deferred_closed.clear();
         } else {
-            SummaryWrite::Daily
-        };
-        for action in self.open_summaries().into_iter().map(write) {
-            if let Some(sink) = before_rebuild.as_deref_mut() {
-                sink(action);
+            let write = if replaced {
+                SummaryWrite::BeforeRebuild
             } else {
-                summaries.push(action);
+                SummaryWrite::Daily
+            };
+            for action in self.open_summaries().into_iter().map(write) {
+                if let Some(sink) = before_rebuild.as_deref_mut() {
+                    sink(action);
+                } else {
+                    summaries.push(action);
+                }
             }
         }
         self.engine.rebuild();
@@ -457,7 +478,7 @@ impl Watcher {
                     .saturating_add(u64::from(entry.bad_offset));
             }
         }
-        self.record_decode(file, (file == FileKind::Driver).then_some(date), position);
+        self.record_decode(file, Some(date), position);
         if file == FileKind::Server {
             let started = self.gate.starting_since();
             if let Some(position) = position {

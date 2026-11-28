@@ -59,7 +59,7 @@ pub struct ReplayResult {
 pub fn replay(files: &[ReplayFile<'_>]) -> ReplayCounts {
     let mut counts = ReplayCounts::default();
     for file in files {
-        read_lines(file, |line| counts.observe(&line));
+        read_lines(file, |line, _| counts.observe(&line));
     }
     counts
 }
@@ -96,21 +96,29 @@ pub fn replay_with_options(
 
     while let Some((source, record)) = input.next_record() {
         match record {
-            ReplayRecord::Event(event, bad_offset) => {
-                let date = event.at.to_local(event.offset).0;
+            ReplayRecord::Event {
+                event,
+                bad_offset,
+                decode,
+            } => {
+                let time = (event.at, event.offset);
                 engine.apply(event);
-                if bad_offset {
-                    record_bad_offset(&mut engine, source, date);
-                }
+                record_timed_source(&mut engine, source, time, bad_offset, decode);
             }
-            ReplayRecord::Line(at, quality, file_date, bad_offset) => {
-                engine.note_line_in_file(source, file_date, at, quality);
-                if let (true, Some((at, offset))) = (bad_offset, at) {
-                    record_bad_offset(&mut engine, source, at.to_local(offset).0);
-                }
+            ReplayRecord::Line {
+                at,
+                quality,
+                bad_offset,
+                decode,
+            } => {
+                engine.note_line_at(source, Some(at), quality);
+                record_timed_source(&mut engine, source, at, bad_offset, decode);
+            }
+            ReplayRecord::NoHeader(date) => {
+                engine.note_line_in_file(source, Some(date), None, LineQuality::NoHeader);
             }
             ReplayRecord::FileSource { date, meta, decode } => {
-                record_file_source(&mut engine, source, date, meta, decode);
+                record_source(&mut engine, source, date, meta, decode);
             }
             ReplayRecord::Rebuild(_) => {
                 collect_segment(
@@ -176,6 +184,26 @@ fn collect_segment(
     });
 }
 
+fn record_timed_source(
+    engine: &mut Engine,
+    file: Source,
+    (at, offset): (LogTime, UtcOffset),
+    bad_offset: bool,
+    decode: DecodeStats,
+) {
+    let had_decode_errors = decode != DecodeStats::default();
+    if !bad_offset && !had_decode_errors {
+        return;
+    }
+    let date = at.to_local(offset).0;
+    if bad_offset {
+        record_bad_offset(engine, file, date);
+    }
+    if had_decode_errors {
+        record_source(engine, file, date, 0, decode);
+    }
+}
+
 fn record_bad_offset(engine: &mut Engine, file: Source, date: LogDate) {
     let driver = file == Source::Driver;
     if let Some(source) = engine.summary_source(driver.then_some(date)) {
@@ -188,13 +216,7 @@ fn record_bad_offset(engine: &mut Engine, file: Source, date: LogDate) {
     }
 }
 
-fn record_file_source(
-    engine: &mut Engine,
-    file: Source,
-    date: LogDate,
-    meta: u64,
-    decode: DecodeStats,
-) {
+fn record_source(engine: &mut Engine, file: Source, date: LogDate, meta: u64, decode: DecodeStats) {
     let Some(source) = engine.summary_source(Some(date)) else {
         return;
     };
@@ -211,17 +233,16 @@ fn record_file_source(
     }
 }
 
-fn read_lines(file: &ReplayFile<'_>, mut visit: impl FnMut(ParsedLine<'_>)) -> DecodeStats {
-    let mut decoder = Decoder::new();
+fn read_lines(file: &ReplayFile<'_>, mut visit: impl FnMut(ParsedLine<'_>, DecodeStats)) {
+    let mut decoder = Decoder::positioned();
     for chunk in file.bytes.chunks(8192) {
-        for line in decoder.push(chunk) {
-            visit(parse_line(&line));
+        for line in decoder.push_positioned(chunk) {
+            visit(parse_line(&line.text), line.stats);
         }
     }
-    for line in decoder.finish() {
-        visit(parse_line(&line));
+    for line in decoder.finish_positioned() {
+        visit(parse_line(&line.text), line.stats);
     }
-    decoder.stats()
 }
 
 #[derive(Default)]
@@ -265,29 +286,33 @@ impl ReplayInput {
             };
             let first = records.len();
             let mut meta = 0_u64;
-            let decode = read_lines(file, |line| {
+            let mut untimed_decode = DecodeStats::default();
+            read_lines(file, |line, decode| {
                 input.counts.observe(&line);
                 match line {
-                    ParsedLine::Entry(entry) => input.offsets.push(name.kind, entry, |filled| {
-                        records.push_back(ReplayRecord::from(filled));
-                    }),
+                    ParsedLine::Entry(entry) => {
+                        input.offsets.push(name.kind, entry, |filled| {
+                            records.push_back(ReplayRecord::from_entry(filled, decode));
+                        });
+                        return;
+                    }
                     ParsedLine::NoHeader(_) => {
-                        records.push_back(ReplayRecord::Line(
-                            None,
-                            LineQuality::NoHeader,
-                            Some(name.date),
-                            false,
-                        ));
+                        records.push_back(ReplayRecord::NoHeader(name.date));
                     }
                     ParsedLine::Meta(_) => meta = meta.saturating_add(1),
                 }
+                untimed_decode.replaced_chars = untimed_decode
+                    .replaced_chars
+                    .saturating_add(decode.replaced_chars);
+                untimed_decode.long_lines =
+                    untimed_decode.long_lines.saturating_add(decode.long_lines);
             });
             records.insert(
                 first,
                 ReplayRecord::FileSource {
                     date: name.date,
                     meta,
-                    decode,
+                    decode: untimed_decode,
                 },
             );
         }
@@ -323,13 +348,18 @@ impl ReplayInput {
 }
 
 enum ReplayRecord {
-    Event(Timed, bool),
-    Line(
-        Option<(LogTime, UtcOffset)>,
-        LineQuality,
-        Option<LogDate>,
-        bool,
-    ),
+    Event {
+        event: Timed,
+        bad_offset: bool,
+        decode: DecodeStats,
+    },
+    Line {
+        at: (LogTime, UtcOffset),
+        quality: LineQuality,
+        bad_offset: bool,
+        decode: DecodeStats,
+    },
+    NoHeader(LogDate),
     FileSource {
         date: LogDate,
         meta: u64,
@@ -341,38 +371,39 @@ enum ReplayRecord {
 impl ReplayRecord {
     fn time(&self) -> Option<(LogTime, UtcOffset)> {
         match self {
-            Self::Event(event, _) => Some((event.at, event.offset)),
-            Self::Line(at, _, _, _) => *at,
-            Self::FileSource { .. } | Self::Rebuild(_) => None,
+            Self::Event { event, .. } => Some((event.at, event.offset)),
+            Self::Line { at, .. } => Some(*at),
+            Self::NoHeader(_) | Self::FileSource { .. } | Self::Rebuild(_) => None,
         }
     }
 
     fn date(&self) -> Option<LogDate> {
         match self {
-            Self::FileSource { date, .. } => Some(*date),
-            Self::Line(None, _, file_date, _) => *file_date,
+            Self::NoHeader(date) | Self::FileSource { date, .. } => Some(*date),
             _ => self.time().map(|(at, offset)| at.to_local(offset).0),
         }
     }
-}
 
-impl From<FilledEntry<'_>> for ReplayRecord {
-    fn from(filled: FilledEntry<'_>) -> Self {
+    fn from_entry(filled: FilledEntry<'_>, decode: DecodeStats) -> Self {
         let mut counts = MapCounts::default();
         if let Some(event) = map_entry(&filled.entry, filled.file, &mut counts) {
-            return Self::Event(event, filled.bad_offset);
+            return Self::Event {
+                event,
+                bad_offset: filled.bad_offset,
+                decode,
+            };
         }
         let quality = if counts.server.unparsed + counts.driver.unparsed > 0 {
             LineQuality::Unparsed
         } else {
             LineQuality::Other
         };
-        Self::Line(
-            Some((filled.entry.at, filled.entry.offset)),
+        Self::Line {
+            at: (filled.entry.at, filled.entry.offset),
             quality,
-            None,
-            filled.bad_offset,
-        )
+            bad_offset: filled.bad_offset,
+            decode,
+        }
     }
 }
 
@@ -507,6 +538,39 @@ mod tests {
             (2, 1, 1)
         );
         assert_eq!(source.driver.bad_offset, 1);
+    }
+
+    #[test]
+    fn attributes_decode_errors_to_the_rows_local_day_across_midnight() {
+        let server = b"# File header \xff\n\
+            unreadable header \xff\n\
+            [2026-11-27 23:59:00.000 +9 0x1 INFO Test] [1] server activity\n\
+            [2026-11-28 00:00:01.000 0x1 INFO Test] [1] Tracker Server Starts. \xff\n\
+            [2026-11-28 00:00:02.000 +9 0x1 INFO Test] [1] server activity \xff\xfe\n";
+        let driver = b"# File header \xff\n\
+            [2026-11-28 00:00:01.000 +9 0x1 INFO Test] [1] (2) Tracker is going to power-off. \xff";
+        let result = replay_with_engine(
+            &[
+                ReplayFile {
+                    name: "ViveTrackerServer_20261127.txt",
+                    bytes: server,
+                },
+                ReplayFile {
+                    name: "ViveTrackerDriver_20261127.txt",
+                    bytes: driver,
+                },
+            ],
+            EngineConfig::default(),
+        );
+        let [before, after] = &result.summaries[..] else {
+            panic!("expected two daily summaries");
+        };
+        assert_eq!(before.date.to_string(), "2026-11-27");
+        assert_eq!(after.date.to_string(), "2026-11-28");
+        assert_eq!(before.source.replaced_chars, 2);
+        assert_eq!(after.source.replaced_chars, 3);
+        assert_eq!(before.source.driver.replaced_chars, 1);
+        assert_eq!(after.source.driver.replaced_chars, 1);
     }
 
     #[test]

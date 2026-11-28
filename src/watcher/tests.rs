@@ -5,7 +5,7 @@ use std::io;
 use openut_core::display::{Line, Overall};
 use openut_core::rules::{Detection, RuleId, Step};
 use openut_core::state::Connection;
-use openut_hublog::replay::{ReplayFile, replay_with_engine};
+use openut_hublog::replay::{ReplayFile, ReplayResult, replay_with_engine};
 use openut_hublog::tail::LogFile;
 
 use super::*;
@@ -21,34 +21,42 @@ const HELD_ROW: i64 = CUT + 5_100;
 
 #[derive(Default)]
 struct Source {
-    files: RefCell<BTreeMap<&'static str, String>>,
+    files: RefCell<BTreeMap<&'static str, Vec<u8>>>,
     unreadable: Cell<bool>,
     fail_next_list: Cell<bool>,
 }
 
 impl Source {
     fn append(&self, file: &'static str, lines: &str) {
+        self.append_bytes(file, lines.as_bytes());
+    }
+
+    fn append_bytes(&self, file: &'static str, bytes: &[u8]) {
         self.files
             .borrow_mut()
             .entry(file)
             .or_default()
-            .push_str(lines);
+            .extend_from_slice(bytes);
     }
 
     fn replace(&self, file: &'static str, contents: String) {
-        self.files.borrow_mut().insert(file, contents);
+        self.files.borrow_mut().insert(file, contents.into_bytes());
     }
 
     fn replay(&self, config: &WatchConfig) -> Vec<Detection> {
+        self.replay_result(config).detections
+    }
+
+    fn replay_result(&self, config: &WatchConfig) -> ReplayResult {
         let logs = self.files.borrow();
         let files: Vec<_> = logs
             .iter()
             .map(|(&name, content)| ReplayFile {
                 name,
-                bytes: content.as_bytes(),
+                bytes: content,
             })
             .collect();
-        replay_with_engine(&files, config.engine.clone()).detections
+        replay_with_engine(&files, config.engine.clone())
     }
 }
 
@@ -75,8 +83,7 @@ impl LogSource for Source {
             return Err(io::Error::other("synthetic read failure"));
         }
         let offset = usize::try_from(offset).unwrap_or(usize::MAX);
-        Ok(self.files.borrow().get(name).map(|content| {
-            let bytes = content.as_bytes();
+        Ok(self.files.borrow().get(name).map(|bytes| {
             let start = offset.min(bytes.len());
             let end = start.saturating_add(max).min(bytes.len());
             bytes[start..end].to_vec()
@@ -319,6 +326,54 @@ fn a_late_at_midnight_driver_row_reaches_its_day_before_the_summary_closes() {
 }
 
 #[test]
+fn live_and_replay_count_replacement_characters_on_the_row_day() {
+    let source = Source::default();
+    source.append(PRIOR_SERVER, &line(-10_000, "before midnight"));
+    source.append(PRIOR_DRIVER, &line(-5_000, "before midnight"));
+    for (file, at) in [(PRIOR_SERVER, 1_000), (PRIOR_DRIVER, 2_000)] {
+        let mut row = line(at, "after midnight ").into_bytes();
+        row.insert(row.len() - 1, 0xff);
+        source.append_bytes(file, &row);
+    }
+    source.append(SERVER, &line(660_000, "after the daily cutoff"));
+
+    let config = WatchConfig::default();
+    let mut watcher = Watcher::new(config.clone());
+    let first = watcher.poll(&source, time(660_000), None);
+    let round = watcher.poll(&source, time(690_000), None);
+    assert!(!round.catching_up);
+    let live = first
+        .summaries
+        .into_iter()
+        .chain(round.summaries)
+        .filter_map(|write| match write {
+            SummaryWrite::Daily(summary) => Some(summary),
+            SummaryWrite::BeforeRebuild(_) => None,
+        });
+    let counts = |summary: Summary| {
+        (
+            summary.date,
+            summary.source.replaced_chars,
+            summary.source.driver.replaced_chars,
+        )
+    };
+    let expected = [
+        ("2026-11-27".to_owned(), 0, 0),
+        ("2026-11-28".to_owned(), 1, 1),
+    ];
+    assert_eq!(live.map(counts).collect::<Vec<_>>(), expected);
+    assert_eq!(
+        source
+            .replay_result(&config)
+            .summaries
+            .into_iter()
+            .map(counts)
+            .collect::<Vec<_>>(),
+        expected,
+    );
+}
+
+#[test]
 fn stopped_startup_suppresses_old_faults_and_accepts_only_a_new_start() {
     let mut config = WatchConfig::default();
     config.engine.rules.r2.wait_s = 1;
@@ -517,7 +572,7 @@ fn a_replaced_server_keeps_the_previous_summary_and_does_not_repeat_r1() {
     assert_eq!(pushed(&raised), [RuleId::R1]);
 
     // A replacement that retains the entire known prefix is an append.
-    let original = source.files.borrow()[SERVER].clone();
+    let original = String::from_utf8(source.files.borrow()[SERVER].clone()).unwrap();
     let appended = original + &line(4_000, "appended checkpoint");
     source.replace(SERVER, appended.clone());
     let append = watcher.poll(&source, time(4_000), None);
@@ -831,4 +886,89 @@ fn idle_wall_cutoff_freezes_prior_day_without_inventing_an_observation() {
     assert!(final_day.is_final);
     assert!(watcher.open_summaries().is_empty());
     assert!(watcher.now().unwrap() < time(600_000));
+}
+
+const CATCH_UP_TIME: i64 = 660_001;
+
+fn multi_read_source() -> Source {
+    let source = Source::default();
+    source.append(PRIOR_SERVER, &line(-1_000, "preceding day's last line"));
+    source.append(
+        SERVER,
+        &line(
+            CATCH_UP_TIME,
+            "synthetic row beyond the previous day's cutoff",
+        )
+        .repeat(80_000),
+    );
+    source
+}
+
+fn read_until_a_day_closes_during_catch_up(watcher: &mut Watcher, source: &Source) {
+    for _ in 0..4 {
+        let round = watcher.poll(source, time(CATCH_UP_TIME), None);
+        assert!(round.catching_up && round.more);
+        assert!(!round.periodic_summary);
+        assert!(round.summaries.is_empty());
+        if round
+            .outputs
+            .iter()
+            .any(|output| matches!(output, Output::DayClosed(_)))
+        {
+            return;
+        }
+    }
+    panic!("the previous day should close before catching up");
+}
+
+#[test]
+fn writes_closed_days_only_after_all_initial_log_chunks_are_read() {
+    let source = multi_read_source();
+    let mut watcher = Watcher::new(WatchConfig::default());
+    read_until_a_day_closes_during_catch_up(&mut watcher, &source);
+
+    let caught_up = watcher.poll(&source, time(CATCH_UP_TIME + 1), None);
+    assert!(!caught_up.catching_up && !caught_up.more);
+    assert!(caught_up.periodic_summary);
+    let finalized: Vec<_> = caught_up
+        .summaries
+        .iter()
+        .filter_map(|write| match write {
+            SummaryWrite::Daily(day) if day.is_final => Some((day.date.as_str(), day.source.lines)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(finalized, [("2026-11-27", 1)]);
+    assert!(
+        watcher
+            .poll(&source, time(CATCH_UP_TIME + 2), None)
+            .summaries
+            .is_empty()
+    );
+}
+
+#[test]
+fn replacement_during_catch_up_discards_unfinished_summaries() {
+    let source = multi_read_source();
+    let mut watcher = Watcher::new(WatchConfig::default());
+    read_until_a_day_closes_during_catch_up(&mut watcher, &source);
+
+    // The replacement generation can no longer reconstruct the preceding day.
+    source.files.borrow_mut().remove(PRIOR_SERVER);
+    source.replace(SERVER, line(CATCH_UP_TIME, "replacement log"));
+    let mut backups = Vec::new();
+    let rebuilt = watcher.poll_with_rebuild_sink(
+        &source,
+        time(CATCH_UP_TIME + 1),
+        None,
+        Some(&mut |action| backups.push(action)),
+    );
+    assert!(!rebuilt.catching_up);
+    assert!(backups.is_empty());
+    let [SummaryWrite::Daily(day)] = rebuilt.summaries.as_slice() else {
+        panic!("only the replacement day's summary should be written");
+    };
+    assert_eq!(day.date, "2026-11-28");
+    assert_eq!(day.source.lines, 1);
+    assert!(!day.is_final);
 }
