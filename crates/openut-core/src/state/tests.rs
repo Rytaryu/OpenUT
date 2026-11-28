@@ -1,10 +1,11 @@
 use super::{
-    HostBy, HostWifi, Link, Phase, Role, Snapshot, State, StateTally, StateUpdate, TrackerView,
+    Connection, DeviceView, DongleState, HostBy, HostWifi, HubState, Link, Phase, Role, Snapshot,
+    State, StateTally, StateUpdate, TrackerView,
 };
 use crate::{
-    event::{Event, OetKind, PoseStatus, Timed},
+    event::{Battery, Event, OetKind, PoseStatus, Timed},
     time::{LogTime, UtcOffset},
-    tracker::{Serial, TrackerKey},
+    tracker::{HubNumber, Serial, TrackerKey},
 };
 
 fn apply(state: &mut State, at: i64, event: Event) -> StateUpdate {
@@ -30,6 +31,7 @@ fn report(slot: u16, connected: bool, host: bool, map_ready: bool, usb: Option<b
         host,
         map_ready,
         usb,
+        battery: None,
     }
 }
 
@@ -69,9 +71,15 @@ fn oet(slot: u16, kind: OetKind) -> Event {
 }
 
 fn serial(slot: u16, value: &str) -> Event {
+    device_info(slot, value, None, None)
+}
+
+fn device_info(slot: u16, value: &str, number: Option<u16>, firmware: Option<&str>) -> Event {
     Event::SerialKnown {
         tracker: TrackerKey(slot),
         serial: Serial(value.into()),
+        hub_number: number.map(HubNumber),
+        firmware: firmware.map(str::to_owned),
     }
 }
 
@@ -594,4 +602,359 @@ fn the_same_timed_lifecycle_works_for_one_and_five_tracker_slots() {
         }
         assert_eq!(state.snapshot(LogTime(1_000)).trackers.len(), count);
     }
+}
+
+const BATTERY: Battery = Battery {
+    percent: 73,
+    charging: Some(true),
+};
+
+fn battery_report(slot: u16, usb: Option<bool>) -> Event {
+    Event::Status {
+        tracker: TrackerKey(slot),
+        connected: true,
+        host: false,
+        map_ready: false,
+        usb,
+        battery: Some(BATTERY),
+    }
+}
+
+fn device<'a>(snapshot: &'a Snapshot, serial: &str) -> &'a DeviceView {
+    snapshot
+        .devices
+        .iter()
+        .find(|device| {
+            device
+                .serial
+                .as_ref()
+                .is_some_and(|value| value.0 == serial)
+        })
+        .expect("the fixture includes this device")
+}
+
+#[test]
+fn battery_and_hub_number_belong_to_the_current_connection() {
+    for end in [
+        remove(2),
+        Event::DongleRemoved,
+        Event::ServerStarted,
+        Event::ServerStopped,
+        add(2),
+    ] {
+        let mut state = State::default();
+        apply(&mut state, 10, add(2));
+        apply(&mut state, 20, battery_report(2, None));
+        apply(
+            &mut state,
+            30,
+            device_info(2, "TRACKER-SYNTHETIC-A", Some(1), None),
+        );
+        apply(&mut state, 40, report(2, true, false, false, None));
+        apply(&mut state, 50, serial(2, "TRACKER-SYNTHETIC-A"));
+        let initial = state.snapshot(LogTime(50));
+        assert_eq!(tracker(&initial, 2).battery, Some(BATTERY));
+        assert_eq!(tracker(&initial, 2).hub_number, Some(HubNumber(1)));
+
+        apply(
+            &mut state,
+            60,
+            device_info(2, "TRACKER-SYNTHETIC-A", Some(3), None),
+        );
+        assert_eq!(
+            tracker(&state.snapshot(LogTime(60)), 2).hub_number,
+            Some(HubNumber(3))
+        );
+        apply(&mut state, 2_000, end);
+        let ended = state.snapshot(LogTime(2_000));
+        let view = tracker(&ended, 2);
+        assert_eq!((view.battery, view.hub_number), (None, None));
+
+        apply(&mut state, 4_000, add(2));
+        let started = state.snapshot(LogTime(4_000));
+        let view = tracker(&started, 2);
+        assert_eq!((view.battery, view.hub_number), (None, None));
+        assert_ne!(view.conn, tracker(&initial, 2).conn);
+    }
+}
+
+#[test]
+fn inferred_status_keeps_battery_and_a_dongle_removal_leaves_usb_metadata() {
+    let mut state = State::default();
+    apply(&mut state, 10, battery_report(2, Some(true)));
+    apply(
+        &mut state,
+        20,
+        device_info(2, "TRACKER-SYNTHETIC-USB", Some(1), None),
+    );
+    apply(&mut state, 30, battery_report(4, None));
+    apply(
+        &mut state,
+        40,
+        device_info(4, "TRACKER-SYNTHETIC-WIRELESS", Some(2), None),
+    );
+    let before = state.snapshot(LogTime(40));
+    for slot in [2, 4] {
+        assert!(tracker(&before, slot).inferred);
+        assert_eq!(tracker(&before, slot).battery, Some(BATTERY));
+    }
+
+    apply(&mut state, 50, Event::DongleRemoved);
+    let after = state.snapshot(LogTime(50));
+    assert_eq!(tracker(&after, 2), tracker(&before, 2));
+    assert_eq!(tracker(&after, 4).battery, None);
+    assert_eq!(tracker(&after, 4).hub_number, None);
+}
+
+#[test]
+fn roster_preserves_firmware_without_reusing_the_hub_number_on_another_slot() {
+    let value = "TRACKER-SYNTHETIC-A";
+    let mut state = State::default();
+    assert!(state.snapshot(LogTime(0)).roster.is_empty());
+    apply(&mut state, 10, add(2));
+    apply(&mut state, 20, add(4));
+    apply(&mut state, 30, device_info(2, value, Some(1), Some("1.2")));
+    apply(&mut state, 40, serial(4, value));
+    let moved = state.snapshot(LogTime(40));
+    assert_eq!(moved.roster.len(), 1);
+    assert_eq!(moved.roster[0].serial, Serial(value.into()));
+    assert_eq!(moved.roster[0].firmware.as_deref(), Some("1.2"));
+    assert_eq!(moved.roster[0].last_seen, LogTime(40));
+    let old_slot = tracker(&moved, 2);
+    assert_eq!(
+        (old_slot.serial.as_ref(), old_slot.hub_number),
+        (None, None)
+    );
+    assert_eq!(tracker(&moved, 4).hub_number, None);
+
+    apply(&mut state, 50, device_info(4, value, Some(2), Some("1.3")));
+    apply(&mut state, 60, report(4, true, false, false, None));
+    let updated = state.snapshot(LogTime(60));
+    assert_eq!(updated.roster[0].firmware.as_deref(), Some("1.3"));
+    assert_eq!(updated.roster[0].last_seen, LogTime(60));
+    assert_eq!(device(&updated, value).hub_number, Some(HubNumber(2)));
+
+    for (at, event) in [
+        (70, remove(4)),
+        (80, Event::ServerStarted),
+        (90, Event::ServerStopped),
+    ] {
+        apply(&mut state, at, event);
+        let snapshot = state.snapshot(LogTime(at));
+        assert_eq!(snapshot.roster, updated.roster);
+        assert_eq!(device(&snapshot, value).hub_number, None);
+    }
+}
+
+#[test]
+fn roster_capacity_evicts_the_oldest_disconnected_identity_first() {
+    for all_active in [false, true] {
+        let mut state = State::default();
+        for i in 0..=16_u16 {
+            let slot = if all_active || i == 0 { i } else { 1 };
+            let at = i64::from(i) * 10 + 1;
+            apply(&mut state, at, add(slot));
+            apply(
+                &mut state,
+                at + 1,
+                serial(slot, &format!("TRACKER-SYNTHETIC-{i:02}")),
+            );
+            if !all_active && i > 0 {
+                apply(&mut state, at + 2, remove(slot));
+            }
+        }
+        let snapshot = state.snapshot(LogTime(200));
+        assert_eq!(snapshot.roster.len(), 16);
+        let oldest_to_evict = if all_active { "00" } else { "01" };
+        assert!(
+            !snapshot
+                .roster
+                .iter()
+                .any(|identity| identity.serial.0.ends_with(oldest_to_evict))
+        );
+        if !all_active {
+            assert_eq!(
+                device(&snapshot, "TRACKER-SYNTHETIC-00").connection,
+                Connection::Dongle
+            );
+        }
+    }
+}
+
+#[test]
+fn three_and_five_devices_use_the_current_slot_and_host_connection() {
+    let slots = [0, 2, 4, 1, 3];
+    for count in [3, 5] {
+        let mut state = State::default();
+        for (i, &slot) in slots[..count].iter().enumerate() {
+            let at = i as i64 * 10;
+            apply(
+                &mut state,
+                at + 1,
+                battery_report(slot, (slot == 0).then_some(true)),
+            );
+            apply(
+                &mut state,
+                at + 2,
+                device_info(
+                    slot,
+                    &format!("TRACKER-SYNTHETIC-{slot}"),
+                    Some(slot + 1),
+                    Some("1.2"),
+                ),
+            );
+            apply(&mut state, at + 3, pose(slot, PoseStatus::Ok));
+        }
+        apply(&mut state, 60, assign_host(2));
+        let first = state.snapshot(LogTime(60));
+        assert_eq!(first.devices.len(), count);
+        for &slot in &slots[..count] {
+            let value = format!("TRACKER-SYNTHETIC-{slot}");
+            let view = device(&first, &value);
+            let source = tracker(&first, slot);
+            assert_eq!(view.key, Some(TrackerKey(slot)));
+            assert_eq!(view.conn, Some(source.conn));
+            assert_eq!(view.hub_number, Some(HubNumber(slot + 1)));
+            assert_eq!(view.battery, Some(BATTERY));
+            assert_eq!(view.phase, Phase::Tracking);
+            assert_eq!(view.host, slot == 2);
+            let connection = if slot == 0 {
+                Connection::Usb
+            } else {
+                Connection::Dongle
+            };
+            assert_eq!(view.connection, connection);
+        }
+
+        apply(&mut state, 70, assign_host(4));
+        let after = state.snapshot(LogTime(70));
+        let mut expected = first.devices;
+        for entry in &mut expected {
+            entry.host = entry.key == Some(TrackerKey(4));
+        }
+        assert_eq!(after.devices, expected);
+    }
+}
+
+#[test]
+fn provisional_device_becomes_known_without_inheriting_a_previous_hosts_connection() {
+    let mut state = State::default();
+    apply(&mut state, 10, add(3));
+    let first = state.snapshot(LogTime(10));
+    let [provisional] = first.devices.as_slice() else {
+        panic!("the connected slot has one provisional device");
+    };
+    let old_conn = Some(tracker(&first, 3).conn);
+    assert_eq!(
+        (provisional.key, provisional.conn),
+        (Some(TrackerKey(3)), old_conn)
+    );
+    assert_eq!(
+        (provisional.serial.as_ref(), provisional.hub_number),
+        (None, None)
+    );
+    assert!(provisional.firmware.is_none());
+
+    apply(
+        &mut state,
+        20,
+        device_info(3, "TRACKER-SYNTHETIC-A", Some(1), Some("1.2")),
+    );
+    apply(&mut state, 30, battery_report(3, None));
+    apply(&mut state, 40, assign_host(3));
+    let known = state.snapshot(LogTime(40));
+    assert_eq!(known.devices.len(), 1);
+    let original = device(&known, "TRACKER-SYNTHETIC-A");
+    assert_eq!(original.conn, old_conn);
+    assert!(original.host);
+
+    apply(&mut state, 50, remove(3));
+    apply(&mut state, 60, add(3));
+    apply(&mut state, 70, serial(3, "TRACKER-SYNTHETIC-B"));
+    let reused = state.snapshot(LogTime(70));
+    let disconnected = device(&reused, "TRACKER-SYNTHETIC-A");
+    assert_eq!(
+        (
+            disconnected.key,
+            disconnected.conn,
+            disconnected.hub_number,
+            disconnected.battery
+        ),
+        (None, None, None, None),
+    );
+    assert_eq!(disconnected.connection, Connection::Disconnected);
+    assert_eq!(disconnected.phase, Phase::Disconnected);
+    assert!(!disconnected.host);
+    let replacement = device(&reused, "TRACKER-SYNTHETIC-B");
+    assert_eq!(replacement.key, Some(TrackerKey(3)));
+    assert_eq!(replacement.conn, Some(tracker(&reused, 3).conn));
+    assert_ne!(replacement.conn, old_conn);
+    assert!(!replacement.host);
+    assert_eq!(reused.host.as_ref().map(|host| host.conn), old_conn);
+}
+
+#[test]
+fn dongle_reports_and_server_lifecycle_are_independent_of_tracker_phases() {
+    let mut state = State::default();
+    let initial = state.snapshot(LogTime(0));
+    assert_eq!(
+        (initial.dongle, initial.hub),
+        (DongleState::Unknown, HubState::Unknown)
+    );
+
+    apply(&mut state, 10, Event::ServerStarted);
+    let running = state.snapshot(LogTime(10));
+    assert_eq!(
+        (running.dongle, running.hub),
+        (DongleState::Unknown, HubState::Running)
+    );
+    apply(
+        &mut state,
+        15,
+        Event::TrackerAdded {
+            tracker: TrackerKey(1),
+            usb: true,
+        },
+    );
+    assert_eq!(state.snapshot(LogTime(15)).dongle, DongleState::Unknown);
+    for (at, event, expected) in [
+        (20, Event::DongleAdded, DongleState::Connected),
+        (
+            30,
+            Event::DongleReport { connected: false },
+            DongleState::Disconnected,
+        ),
+        (
+            40,
+            Event::DongleReport { connected: true },
+            DongleState::Connected,
+        ),
+        (50, Event::DongleRemoved, DongleState::Disconnected),
+        (60, add(2), DongleState::Connected),
+    ] {
+        apply(&mut state, at, event);
+        let snapshot = state.snapshot(LogTime(at));
+        assert_eq!(snapshot.dongle, expected);
+        assert_eq!(snapshot.hub, HubState::Running);
+        assert_eq!(tracker(&snapshot, 1).phase, Phase::Connected);
+    }
+    let live = state.snapshot(LogTime(60));
+    apply(&mut state, 70, Event::DongleReport { connected: false });
+    let disconnected = state.snapshot(LogTime(70));
+    assert_eq!(disconnected.trackers, live.trackers);
+    assert_eq!(disconnected.dongle, DongleState::Disconnected);
+
+    apply(&mut state, 80, Event::ServerStopped);
+    let stopped = state.snapshot(LogTime(80));
+    assert_eq!(
+        (stopped.dongle, stopped.hub),
+        (DongleState::Unknown, HubState::Stopped)
+    );
+    apply(&mut state, 90, add(3));
+    apply(&mut state, 100, report(3, true, false, false, None));
+    let activity = state.snapshot(LogTime(100));
+    assert_eq!(
+        (activity.dongle, activity.hub),
+        (DongleState::Connected, HubState::Stopped)
+    );
 }

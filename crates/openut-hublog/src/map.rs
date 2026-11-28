@@ -1,7 +1,7 @@
 //! Map classified Hub text records to source-independent events (watcher design §4.4).
 
 use openut_core::event::{Event, OetKind, PoseStatus, Timed};
-use openut_core::tracker::{Serial, TrackerKey};
+use openut_core::tracker::{HubNumber, Serial, TrackerKey};
 
 use crate::header::{Entry, FileKind};
 use crate::record::{Record, classify};
@@ -32,7 +32,9 @@ pub fn map_entry(entry: &Entry<'_>, file: FileKind, counts: &mut MapCounts) -> O
     let event = match classify(entry, file) {
         Record::ServerStart => Event::ServerStarted,
         Record::ServerRelease => Event::ServerStopped,
+        Record::DongleAdded => Event::DongleAdded,
         Record::DongleRemoved => Event::DongleRemoved,
+        Record::ServiceStatus { connected } => Event::DongleReport { connected },
         Record::TrackerAdded {
             tracker,
             connection,
@@ -47,9 +49,16 @@ pub fn map_entry(entry: &Entry<'_>, file: FileKind, counts: &mut MapCounts) -> O
             tracker: TrackerKey(tracker),
             usb: connection == 2,
         },
-        Record::DeviceInfo { tracker, serial } => Event::SerialKnown {
+        Record::DeviceInfo {
+            tracker,
+            serial,
+            hub_number,
+            firmware,
+        } => Event::SerialKnown {
             tracker: TrackerKey(tracker),
             serial: Serial(serial.to_owned()),
+            hub_number: hub_number.map(HubNumber),
+            firmware: firmware.map(str::to_owned),
         },
         Record::HostMode(tracker) => Event::HostAssigned {
             tracker: TrackerKey(tracker),
@@ -73,12 +82,14 @@ pub fn map_entry(entry: &Entry<'_>, file: FileKind, counts: &mut MapCounts) -> O
             map_status,
             map_state,
             usb,
+            battery,
         } => Event::Status {
             tracker: TrackerKey(tracker),
             connected: connected == 1,
             host: host == 1,
             map_ready: map_state == 2 || map_status == 6,
             usb,
+            battery,
         },
         Record::Pose { tracker, status } => Event::Pose {
             tracker: TrackerKey(tracker),

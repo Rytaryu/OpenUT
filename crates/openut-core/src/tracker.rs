@@ -8,3 +8,7 @@ pub struct TrackerKey(pub u16);
 /// A tracker serial number, when the event source supplies one.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct Serial(pub String);
+
+/// The number VIVE Hub shows for the tracker's current connection.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct HubNumber(pub u16);
