@@ -122,7 +122,7 @@ impl Engine {
     pub fn new(cfg: EngineConfig) -> Self {
         Self {
             state: State::new(cfg.state.dup_ms),
-            notices: NoticeScheduler::new(cfg.notice.clone(), cfg.rules.r5.wait_s),
+            notices: NoticeScheduler::new(cfg.notice.clone()),
             cfg,
             rules: Rules::default(),
             now: None,

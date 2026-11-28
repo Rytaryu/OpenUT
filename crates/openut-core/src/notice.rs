@@ -5,11 +5,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::rules::{Detection, RuleId, Step, after};
 use crate::state::{ConnId, Snapshot};
-use crate::text::{add_other_notices, add_repetitions, host_label, notice_text, target_label};
 use crate::time::LogTime;
-use crate::tracker::{Serial, TrackerKey};
-
-pub use crate::text::{NoticeText, TextPart, TrackerLabel};
+use crate::tracker::{Serial, TrackerKey, TrackerLabel, host_label, target_label};
 
 #[cfg(test)]
 mod tests;
@@ -40,8 +37,12 @@ pub struct Notice {
     pub conn: Option<ConnId>,
     pub step: Step,
     pub at: LogTime,
-    pub text: NoticeText,
     pub target: TrackerLabel,
+    pub host: Option<TrackerLabel>,
+    /// Number of occurrences of a repeated disconnect, including this one.
+    pub repetitions: u64,
+    /// Number of remaining notices grouped with this push.
+    pub other_count: usize,
     pub push: bool,
     pub priority: u8,
 }
@@ -92,18 +93,24 @@ struct DisconnectPush {
     at: LogTime,
     repeats: u64,
     last_repeat: Option<LogTime>,
-    delivered: bool,
+}
+
+enum Outgoing {
+    Notice(Notice),
+    Prepared {
+        at: LogTime,
+        candidates: Vec<Notice>,
+    },
 }
 
 pub(crate) struct NoticeScheduler {
     cfg: NoticeConfig,
-    r5_wait_s: u64,
     catching_up: bool,
     hub_down: bool,
     active: BTreeMap<u64, Active>,
     reconnected: BTreeMap<u64, (LogTime, Notice)>,
     waiting: BTreeMap<u64, Notice>,
-    outbox: Vec<Notice>,
+    outbox: Vec<Outgoing>,
     last_delivered: Option<LogTime>,
     cooldown_ends: Vec<CooldownEnd>,
     disconnect_pushes: Vec<DisconnectPush>,
@@ -111,10 +118,9 @@ pub(crate) struct NoticeScheduler {
 }
 
 impl NoticeScheduler {
-    pub(crate) fn new(cfg: NoticeConfig, r5_wait_s: u64) -> Self {
+    pub(crate) fn new(cfg: NoticeConfig) -> Self {
         Self {
             cfg,
-            r5_wait_s,
             catching_up: false,
             hub_down: false,
             active: BTreeMap::new(),
@@ -142,13 +148,11 @@ impl NoticeScheduler {
             conn: detection.conn,
             step: detection.step,
             at: detection.at,
-            text: notice_text(
-                detection.rule,
-                detection.step,
-                self.r5_wait_s,
-                &host_label(snapshot),
-            ),
             target: target_label(snapshot, detection),
+            host: (detection.rule == RuleId::R2 && detection.step == Step::Raised)
+                .then(|| host_label(snapshot)),
+            repetitions: 1,
+            other_count: 0,
             push: false,
             priority: priority(detection.rule),
         };
@@ -174,6 +178,7 @@ impl NoticeScheduler {
             }
             Step::Resolved | Step::Ended => {
                 self.waiting.remove(&notice.episode);
+                let was_prepared = self.cancel_prepared(notice.episode);
                 if let Some(active) = previous.filter(|active| !active.muted) {
                     push = allowed && notice.rule == RuleId::R1 && notice.step == Step::Resolved;
                     if !self.catching_up && cooldown_after_end(notice.rule) {
@@ -183,6 +188,10 @@ impl NoticeScheduler {
                             undrained_episode: Some(notice.episode),
                         });
                     }
+                }
+                if was_prepared && let Some(at) = self.push_deadline().filter(|at| *at < notice.at)
+                {
+                    self.prepare_batch(at);
                 }
                 if notice.rule == RuleId::R4 && notice.step == Step::Resolved {
                     self.reconnected.insert(
@@ -210,13 +219,7 @@ impl NoticeScheduler {
                     previous.repeats = previous.repeats.saturating_add(1);
                     previous.last_repeat = Some(notice.at);
                 }
-                notice.text = notice_text(
-                    notice.rule,
-                    notice.step,
-                    self.r5_wait_s,
-                    &TrackerLabel::default(),
-                );
-                add_repetitions(&mut notice.text, previous.repeats);
+                notice.repetitions = previous.repeats;
                 return false;
             }
         } else if cooldown_after_end(notice.rule) {
@@ -234,12 +237,12 @@ impl NoticeScheduler {
             .is_none_or(|last| after(last, self.cfg.min_gap_s) <= notice.at);
         if push && self.waiting.is_empty() && gap_elapsed {
             let at = notice.at;
-            self.prepare(notice, at, 0);
+            self.prepare(vec![notice], at);
         } else {
             if push {
                 self.waiting.insert(notice.episode, notice.clone());
             }
-            self.outbox.push(notice);
+            self.outbox.push(Outgoing::Notice(notice));
         }
     }
 
@@ -247,8 +250,10 @@ impl NoticeScheduler {
         self.outbox
             .iter()
             .rev()
-            .find(|notice| notice.push)
-            .map(|notice| notice.at)
+            .find_map(|outgoing| match outgoing {
+                Outgoing::Prepared { at, .. } => Some(*at),
+                Outgoing::Notice(_) => None,
+            })
             .or(self.last_delivered)
     }
 
@@ -286,30 +291,39 @@ impl NoticeScheduler {
         waiting.sort_by_key(|notice| (Reverse(notice.priority), notice.at, notice.episode));
         if self.cfg.min_gap_s == 0 {
             for notice in waiting {
-                self.prepare(notice, at, 0);
+                self.prepare(vec![notice], at);
             }
         } else {
-            let others = waiting.len().saturating_sub(1);
-            if let Some(winner) = waiting.into_iter().next() {
-                self.prepare(winner, at, others);
-            }
+            self.prepare(waiting, at);
         }
     }
 
-    fn prepare(&mut self, mut notice: Notice, at: LogTime, others: usize) {
-        notice.at = at;
-        notice.push = true;
-        if notice.rule == RuleId::R4 {
-            self.disconnect_pushes.push(DisconnectPush {
-                subject: Subject::of(&notice),
-                at,
-                repeats: 1,
-                last_repeat: None,
-                delivered: false,
-            });
+    fn prepare(&mut self, candidates: Vec<Notice>, at: LogTime) {
+        if !candidates.is_empty() {
+            self.outbox.push(Outgoing::Prepared { at, candidates });
         }
-        add_other_notices(&mut notice.text, others);
-        self.outbox.push(notice);
+    }
+
+    fn cancel_prepared(&mut self, episode: u64) -> bool {
+        let mut cancelled = false;
+        for outgoing in &mut self.outbox {
+            let Outgoing::Prepared { at, candidates } = outgoing else {
+                continue;
+            };
+            let Some(index) = candidates
+                .iter()
+                .position(|notice| notice.episode == episode)
+            else {
+                continue;
+            };
+            cancelled = true;
+            let mut withdrawn = candidates.remove(index);
+            if candidates.is_empty() {
+                withdrawn.at = *at;
+                *outgoing = Outgoing::Notice(withdrawn);
+            }
+        }
+        cancelled
     }
 
     pub(crate) fn live(&self) -> Vec<Notice> {
@@ -369,9 +383,16 @@ impl NoticeScheduler {
     fn cancel_undrained(&mut self, mute: bool) {
         let mut cancelled: BTreeSet<_> = self.waiting.keys().copied().collect();
         self.waiting.clear();
-        for notice in self.outbox.iter_mut().filter(|notice| notice.push) {
-            notice.push = false;
-            cancelled.insert(notice.episode);
+        for outgoing in &mut self.outbox {
+            if let Outgoing::Prepared { at, candidates } = outgoing {
+                cancelled.extend(candidates.iter().map(|notice| notice.episode));
+                if !candidates.is_empty() {
+                    // Preserve the original selection as a non-delivery record.
+                    let mut withdrawn = candidates.remove(0);
+                    withdrawn.at = *at;
+                    *outgoing = Outgoing::Notice(withdrawn);
+                }
+            }
         }
         if mute {
             for episode in &cancelled {
@@ -384,7 +405,6 @@ impl NoticeScheduler {
             end.undrained_episode
                 .is_none_or(|episode| !cancelled.contains(&episode))
         });
-        self.disconnect_pushes.retain(|push| push.delivered);
     }
 
     pub(crate) fn rebuild(&mut self) {
@@ -400,23 +420,74 @@ impl NoticeScheduler {
 
     /// Delivery counts only once the caller takes the notice output.
     pub(crate) fn drain(&mut self) -> Vec<Notice> {
-        let output = std::mem::take(&mut self.outbox);
-        for notice in output.iter().filter(|notice| notice.push) {
-            self.last_delivered = Some(notice.at);
-            if let Some(active) = self.active.get_mut(&notice.episode) {
-                active.delivered = Some(Delivered {
-                    subject: Subject::of(notice),
-                    step: notice.step,
-                });
+        let mut output = Vec::new();
+        let mut delivered_disconnect = false;
+        for outgoing in std::mem::take(&mut self.outbox) {
+            match outgoing {
+                Outgoing::Notice(notice) => output.push(notice),
+                Outgoing::Prepared { at, mut candidates } => {
+                    if delivered_disconnect {
+                        candidates
+                            .retain_mut(|notice| !self.suppress_disconnect(notice, &mut output));
+                    }
+                    let other_count = candidates.len().saturating_sub(1);
+                    if let Some(mut winner) = candidates.into_iter().next() {
+                        winner.at = at;
+                        winner.other_count = other_count;
+                        winner.push = true;
+                        delivered_disconnect |= winner.rule == RuleId::R4;
+                        self.mark_delivered(&winner);
+                        output.push(winner);
+                    }
+                }
             }
         }
-        for push in &mut self.disconnect_pushes {
-            push.delivered = true;
+        if delivered_disconnect {
+            let mut waiting = std::mem::take(&mut self.waiting);
+            waiting.retain(|_, notice| !self.suppress_disconnect(notice, &mut output));
+            self.waiting = waiting;
         }
         for end in &mut self.cooldown_ends {
             end.undrained_episode = None;
         }
         output
+    }
+
+    fn mark_delivered(&mut self, notice: &Notice) {
+        self.last_delivered = Some(notice.at);
+        if let Some(active) = self.active.get_mut(&notice.episode) {
+            active.delivered = Some(Delivered {
+                subject: Subject::of(notice),
+                step: notice.step,
+            });
+        }
+        if notice.rule == RuleId::R4 {
+            self.disconnect_pushes.push(DisconnectPush {
+                subject: Subject::of(notice),
+                at: notice.at,
+                repeats: 1,
+                last_repeat: None,
+            });
+        }
+    }
+
+    fn suppress_disconnect(&mut self, notice: &mut Notice, output: &mut Vec<Notice>) -> bool {
+        if notice.rule != RuleId::R4 || self.eligible(notice, false) {
+            return false;
+        }
+        if let Some(active) = self.active.get_mut(&notice.episode) {
+            active.notice.repetitions = notice.repetitions;
+        }
+        if let Some(original) = output
+            .iter_mut()
+            .rev()
+            .find(|item| item.episode == notice.episode && item.step == notice.step && !item.push)
+        {
+            original.repetitions = notice.repetitions;
+        } else {
+            output.push(notice.clone());
+        }
+        true
     }
 }
 
