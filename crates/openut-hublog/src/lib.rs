@@ -5,3 +5,4 @@ pub mod header;
 mod offset_fill;
 
 pub mod replay;
+pub mod tail;
