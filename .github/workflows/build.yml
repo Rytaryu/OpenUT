@@ -24,9 +24,11 @@ concurrency:
 jobs:
   windows:
     name: build (windows-latest)
-    # Only main is built, also on a manual run: the artifact name is the same
-    # for every run, so a run on another branch must not produce one.
-    if: github.ref == 'refs/heads/main'
+    # main is built on every push. A manual run on another branch builds and
+    # lists the package (to check a change before it is merged) but uploads
+    # nothing: the artifact name is the same for every run, so only main may
+    # produce one.
+    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
@@ -37,14 +39,39 @@ jobs:
       - name: Build the executables
         shell: bash
         run: cargo build --release --locked --workspace --bins
+      - name: Build the SteamVR driver
+        # The driver crate arrives with K2-2; before that this step does nothing.
+        if: hashFiles('crates/openut-driver/Cargo.toml') != ''
+        shell: bash
+        run: cargo build --release --locked -p openut-driver
       - name: Collect the executables
         shell: bash
         run: |
           mkdir -p dist
+          # The SteamVR driver folder (docs/design/walkthrough.md 1.8): the
+          # packaged files plus the built DLL under bin/win64. It is copied
+          # before the executables: in Git Bash on Windows a path named
+          # dist/openut also matches dist/openut.exe, so once openut.exe is
+          # there the folder can no longer be created with cp.
+          if [ -d crates/openut-driver/package/openut ]; then
+            cp -r crates/openut-driver/package/openut dist/openut
+            mkdir -p dist/openut/bin/win64
+            cp target/release/driver_openut.dll dist/openut/bin/win64/driver_openut.dll
+            cp crates/openut-driver/LICENSE-openvr dist/openut/LICENSE-openvr
+            test -f dist/openut/driver.vrdrivermanifest
+          fi
           cp target/release/*.exe dist/
           git rev-parse HEAD > dist/COMMIT.txt
-          ls -l dist
+          # License texts of the third-party code linked into the executables
+          # and the driver (openvr_sys and the OpenVR SDK). Shipped with every
+          # artifact, with or without the driver folder.
+          mkdir -p dist/licenses
+          cp licenses/OpenVR-SDK.txt licenses/openvr_sys.txt dist/licenses/
+          cmp licenses/OpenVR-SDK.txt dist/licenses/OpenVR-SDK.txt
+          cmp licenses/openvr_sys.txt dist/licenses/openvr_sys.txt
+          find dist -type f | sort
       - uses: actions/upload-artifact@v7
+        if: github.ref == 'refs/heads/main'
         with:
           name: openut-windows-x64
           path: dist/
