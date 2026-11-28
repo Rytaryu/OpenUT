@@ -2,6 +2,7 @@
 //! Windows + SteamVR.
 
 pub mod replay;
+pub mod source_fs;
 
 /// The version of this build, from `Cargo.toml`.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

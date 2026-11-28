@@ -7,3 +7,4 @@ mod offset_fill;
 pub mod record;
 
 pub mod replay;
+pub mod tail;
