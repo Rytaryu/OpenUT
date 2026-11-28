@@ -3,6 +3,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use openut::replay::{Expectations, ObservedSummaries, RaisedDetection};
+use openut_hublog::decode::decode_utf16le_text;
+use openut_hublog::header::{ParsedLine, parse_line};
 use openut_hublog::replay::{ReplayCounts, ReplayFile, replay};
 
 struct SavedCase {
@@ -50,27 +52,31 @@ fn fixture_root() -> PathBuf {
 
 fn is_log_file_name(name: &str) -> bool {
     name.strip_prefix("ViveTrackerServer_")
+        .or_else(|| name.strip_prefix("ViveTrackerDriver_"))
         .and_then(|name| name.strip_suffix(".txt"))
         .is_some_and(|date| date.len() == 8 && date.bytes().all(|byte| byte.is_ascii_digit()))
 }
 
 macro_rules! replay_cases {
-    ($($test:ident => $case:literal, $lines:literal);+ $(;)?) => {
+    ($($test:ident => $case:literal, $lines:literal, $meta:literal);+ $(;)?) => {
         const CASES: &[(&str, &str)] = &[$(($case, stringify!($test))),+];
         $(
             #[test]
             fn $test() {
                 let case = SavedCase::load($case);
-                assert_eq!(replay(&case.inputs()), ReplayCounts { lines: $lines, no_header: 0 });
+                assert_eq!(
+                    replay(&case.inputs()),
+                    ReplayCounts { lines: $lines, meta: $meta, no_header: 0 },
+                );
             }
         )+
     };
 }
 
 replay_cases! {
-    synthetic_r1_second_host_command => "synthetic-r1-second-host-command", 116;
-    synthetic_normal_start => "synthetic-normal-start", 11;
-    synthetic_utf16 => "synthetic-utf16", 11;
+    synthetic_r1_second_host_command => "synthetic-r1-second-host-command", 132, 14;
+    synthetic_normal_start => "synthetic-normal-start", 28, 14;
+    synthetic_utf16 => "synthetic-utf16", 28, 14;
 }
 
 #[test]
@@ -102,10 +108,79 @@ fn every_fixture_has_a_matching_test_function() {
 }
 
 #[test]
-fn utf16_has_the_same_counts_as_utf8() {
+fn utf16_matches_utf8_contents_and_record_counts() {
     let utf16 = SavedCase::load("synthetic-utf16");
     let utf8 = SavedCase::load("synthetic-normal-start");
+    let [(_, encoded)] = utf16.files.as_slice() else {
+        panic!("expected a single UTF-16 fixture file");
+    };
+    let [(_, plain)] = utf8.files.as_slice() else {
+        panic!("expected a single UTF-8 fixture file");
+    };
+    let text = std::str::from_utf8(plain).expect("normal-start fixture is UTF-8");
+    assert_eq!(
+        decode_utf16le_text(encoded).expect("UTF-16 fixture must have a LE BOM"),
+        text.replace('\n', "\r\n"),
+    );
     assert_eq!(replay(&utf16.inputs()), replay(&utf8.inputs()));
+}
+
+#[test]
+fn r1_expectation_matches_the_saved_host_and_warning_sequence() {
+    let case = SavedCase::load("synthetic-r1-second-host-command");
+    let [(_, bytes)] = case.files.as_slice() else {
+        panic!("expected a single R1 fixture file");
+    };
+    let log = std::str::from_utf8(bytes).expect("R1 fixture is UTF-8");
+    let entries: Vec<_> = log
+        .lines()
+        .filter_map(|line| match parse_line(line) {
+            ParsedLine::Entry(entry) => Some(entry),
+            _ => None,
+        })
+        .collect();
+    let hosts: Vec<_> = entries
+        .iter()
+        .filter_map(|entry| {
+            entry
+                .body
+                .strip_prefix("Tracker (")?
+                .strip_suffix(") - switch to HOST mode.")?
+                .parse::<u16>()
+                .ok()
+        })
+        .collect();
+    assert_eq!(hosts, [1, 1]);
+
+    let warnings: Vec<_> = entries
+        .iter()
+        .filter(|entry| entry.body == "Wifi info is not yet available.")
+        .collect();
+    assert_eq!(warnings.len(), 110);
+    assert!(warnings.iter().all(|entry| entry.level == "WARN"));
+    assert!(
+        warnings
+            .windows(2)
+            .all(|pair| pair[1].at.0 - pair[0].at.0 == 550)
+    );
+    let first = warnings[0].at;
+    let (index, raised) = warnings
+        .iter()
+        .enumerate()
+        .find(|(_, entry)| entry.at.0 - first.0 >= 15_000)
+        .expect("warning sequence lasts more than 15 seconds");
+    assert_eq!(index, 28);
+    case.expectations
+        .compare(
+            &[RaisedDetection {
+                rule: "R1",
+                tracker: hosts.last().copied(),
+                at: raised.at,
+                offset: raised.offset,
+            }],
+            &ObservedSummaries::new(),
+        )
+        .expect("expected R1 host and time match the fixture");
 }
 
 fn check_detections(name: &str) {
