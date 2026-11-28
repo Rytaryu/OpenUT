@@ -1,5 +1,5 @@
 use std::ffi::{OsStr, OsString};
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, File};
 use std::io::{self, BufReader, Write};
 use std::process::ExitCode;
 
@@ -53,15 +53,7 @@ fn export(mut args: impl Iterator<Item = OsString>) -> Result<(), (u8, String)> 
         })?;
 
     // Verification finishes before the destination is opened, and existing files are retained.
-    let mut output = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(output)
-        .map_err(output_error)?;
-    output
-        .write_all(exported.as_bytes())
-        .map_err(output_error)?;
-    output.flush().map_err(output_error)?;
+    super::write_new_file(output, exported.as_bytes()).map_err(output_error)?;
 
     let mut console = io::stdout().lock();
     writeln!(console, "匿名化した記録を書き出しました。").map_err(output_error)?;
