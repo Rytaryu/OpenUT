@@ -401,11 +401,11 @@ impl State {
             if view.phase == Phase::Disconnected {
                 return false;
             }
-            if !connected {
-                return true;
-            }
             if view.link == Link::Unknown {
                 view.link = reported_link;
+            }
+            if !connected {
+                return true;
             }
             if map_ready
                 && matches!(

@@ -295,6 +295,37 @@ fn status_updates_phase_connection_path_and_host_evidence_independently() {
 }
 
 #[test]
+fn disconnected_report_fills_usb_path_without_ending_the_connection() {
+    let mut state = State::default();
+    apply(&mut state, 10, pose(2, PoseStatus::Ok));
+    let before = state.snapshot(LogTime(10));
+    let inferred = tracker(&before, 2);
+    assert_eq!(
+        (inferred.phase, inferred.link),
+        (Phase::Tracking, Link::Unknown)
+    );
+
+    let update = apply(&mut state, 20, report(2, false, false, true, Some(true)));
+    assert_eq!(
+        update,
+        StateUpdate {
+            out_of_order: true,
+            ..StateUpdate::default()
+        }
+    );
+    assert_eq!(state.out_of_order(), 1);
+    let expected = TrackerView {
+        link: Link::Usb,
+        ..inferred.clone()
+    };
+    assert_eq!(tracker(&state.snapshot(LogTime(20)), 2), &expected);
+
+    assert_idle(&apply(&mut state, 30, Event::DongleRemoved));
+    assert_eq!(tracker(&state.snapshot(LogTime(30)), 2), &expected);
+    assert_eq!(state.out_of_order(), 1);
+}
+
+#[test]
 fn pose_ok_and_oet_relocation_both_set_tracking_once() {
     for first in [pose(2, PoseStatus::Ok), oet(2, OetKind::RelocBack)] {
         let (mut state, _) = with_phase(Phase::Relocalizing);

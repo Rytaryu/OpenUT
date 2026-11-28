@@ -21,11 +21,12 @@ impl State {
                     *queried = true;
                 }
             }
-            Event::HostWifiObtained { .. } | Event::WifiAssigned { .. }
-                if !matches!(self.host_wifi, HostWifi::Held { .. }) =>
-            {
+            Event::HostWifiObtained { .. } => {
                 self.host_wifi = HostWifi::Held { since: at };
-                return matches!(event, Event::WifiAssigned { .. });
+            }
+            Event::WifiAssigned { .. } if !matches!(self.host_wifi, HostWifi::Held { .. }) => {
+                self.host_wifi = HostWifi::Held { since: at };
+                return true;
             }
             Event::WifiRequestUnanswered { .. } => {
                 return matches!(self.host_wifi, HostWifi::Held { .. });
@@ -208,9 +209,10 @@ mod tests {
         assert!(!apply(&mut state, 20, command(3)));
         let obtained = Event::HostWifiObtained { host: None };
         assert!(!apply(&mut state, 25, obtained.clone()));
+        assert_eq!(state.host_wifi, HostWifi::Held { since: LogTime(25) });
         assert!(!apply(&mut state, 26, queried(3)));
         assert!(!apply(&mut state, 28, obtained));
-        assert_eq!(state.host_wifi, HostWifi::Held { since: LogTime(25) });
+        assert_eq!(state.host_wifi, HostWifi::Held { since: LogTime(28) });
         assert_eq!(
             state.host.as_ref().map(|host| host.by),
             Some(HostBy::Command)
