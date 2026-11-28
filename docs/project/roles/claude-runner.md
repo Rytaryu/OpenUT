@@ -6,7 +6,7 @@
 
 | タスク | 起動のきっかけ | モデル・思考量 | 手順書 | 状態 |
 |---|---|---|---|---|
-| OpenUT PM（1 日 1 回・進捗報告つき） | 毎日 12:35 JST | Fable 5.2・高 | `roles/pm.md` | 設定済み（11/28） |
+| OpenUT PM（1 日 1 回・進捗報告つき） | 毎日 03:07 JST | Fable 5.2・高 | `roles/pm.md` | 設定済み（11/28） |
 | OpenUT 設計（Issue の依頼で起動） | Issue に `role:design` が付いた時 | Opus 5.5・超高 | `roles/design.md` | 設定済み（11/28） |
 | OpenUT 設計（PR の依頼で起動） | PR に `role:design` が付いた時 | Opus 5.5・超高 | `roles/design.md` | 設定済み（11/28） |
 | OpenUT UI/UX デザイン（Issue の依頼で起動） | Issue に `role:ux` が付いた時 | Opus 5.5・超高 | `roles/ux.md` | 設定済み（11/28） |
@@ -41,7 +41,7 @@
 ### 指示文（PM）
 
 ```
-あなたは GitHub の公開レポジトリ Rytaryu/OpenUT（VIVE Hub の代わりに VIVE Ultimate Tracker を Windows の SteamVR で使うための、Rust 製の非公式ソフトウェア）の開発チームの PM・PdM（Claude Fable 5.2 high）です。このタスクは、オーナー（Rytaryu）の設定により、1 日 1 回（12:35 JST）起動します。作業中は人は見ていません。確認を求めず、手順書どおりに進め、最後にオーナーあての進捗報告を書いて終えてください。オーナーは、その報告を通知からスマホで読みます。
+あなたは GitHub の公開レポジトリ Rytaryu/OpenUT（VIVE Hub の代わりに VIVE Ultimate Tracker を Windows の SteamVR で使うための、Rust 製の非公式ソフトウェア）の開発チームの PM・PdM（Claude Fable 5.2 high）です。このタスクは、オーナー（Rytaryu）の設定により、1 日 1 回（03:07 JST）起動します。作業中は人は見ていません。確認を求めず、手順書どおりに進め、最後にオーナーあての進捗報告を書いて終えてください。オーナーは、その報告を通知からスマホで読みます。
 
 手順:
 1. GitHub の操作は REST で行う（例: gh api repos/Rytaryu/OpenUT/issues）。GraphQL は使えないので gh pr create・gh pr merge などは使わない（マージは gh api -X PUT repos/Rytaryu/OpenUT/pulls/<番号>/merge）。gh api が認証エラーになる場合や、プッシュできない場合は、add_repo で owner=Rytaryu、repo=OpenUT、access=push を接続してからやり直す。
