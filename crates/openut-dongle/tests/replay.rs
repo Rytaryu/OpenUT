@@ -1,7 +1,7 @@
 use std::io::{BufRead, Cursor};
 
 use openut_dongle::decode::{Decoder, DongleEvent};
-use openut_dongle::record::{EndReason, OmittedReason, RawReport, Record, TrackerLabel};
+use openut_dongle::record::{EndReason, OmittedReason, RawReport, Record, TrackerLabel, VERSION};
 use openut_dongle::replay::Replay;
 use openut_dongle::tracker::{Link, TrackerTable, Transition};
 
@@ -56,7 +56,7 @@ fn footer(mono_us: u64, reports: u64) -> Record {
         wall_ms: Some(fake_wall_ms(mono_us)),
         reports,
         malformed: 0,
-        estimated_lost: 0,
+        estimated_lost: None,
         reason: EndReason::Complete,
         time_reversed: 0,
     }
@@ -73,6 +73,7 @@ fn recording_with_header(
     let header = THREE_TRACKERS.lines().next().expect("fixture header");
     let mut header: serde_json::Value =
         serde_json::from_str(header).expect("decode fixture header");
+    header["version"] = serde_json::Value::from(VERSION);
     header["anonymized"] = serde_json::Value::Bool(anonymized);
     let mut input = serde_json::to_vec(&header).expect("serialize test header");
     input.push(b'\n');

@@ -141,7 +141,7 @@ fn parse_header(bytes: &[u8]) -> Result<Header, ReadError> {
     if envelope.kind != "header" || envelope.format != FORMAT {
         return Err(ReadError::InvalidHeader);
     }
-    if envelope.version != VERSION {
+    if !matches!(envelope.version, 1 | VERSION) {
         return Err(ReadError::UnsupportedVersion(envelope.version));
     }
     serde_json::from_str(line).map_err(|_| ReadError::InvalidHeader)
