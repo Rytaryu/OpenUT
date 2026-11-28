@@ -48,6 +48,18 @@ jobs:
         shell: bash
         run: |
           mkdir -p dist
+          # The SteamVR driver folder (docs/design/walkthrough.md 1.8): the
+          # packaged files plus the built DLL under bin/win64. It is copied
+          # before the executables: in Git Bash on Windows a path named
+          # dist/openut also matches dist/openut.exe, so once openut.exe is
+          # there the folder can no longer be created with cp.
+          if [ -d crates/openut-driver/package/openut ]; then
+            cp -r crates/openut-driver/package/openut dist/openut
+            mkdir -p dist/openut/bin/win64
+            cp target/release/driver_openut.dll dist/openut/bin/win64/driver_openut.dll
+            cp crates/openut-driver/LICENSE-openvr dist/openut/LICENSE-openvr
+            test -f dist/openut/driver.vrdrivermanifest
+          fi
           cp target/release/*.exe dist/
           git rev-parse HEAD > dist/COMMIT.txt
           # License texts of the third-party code linked into the executables
@@ -57,14 +69,6 @@ jobs:
           cp licenses/OpenVR-SDK.txt licenses/openvr_sys.txt dist/licenses/
           cmp licenses/OpenVR-SDK.txt dist/licenses/OpenVR-SDK.txt
           cmp licenses/openvr_sys.txt dist/licenses/openvr_sys.txt
-          # The SteamVR driver folder (docs/design/walkthrough.md 1.8): the
-          # packaged files plus the built DLL under bin/win64.
-          if [ -d crates/openut-driver/package/openut ]; then
-            cp -r crates/openut-driver/package/openut dist/openut
-            mkdir -p dist/openut/bin/win64
-            cp target/release/driver_openut.dll dist/openut/bin/win64/driver_openut.dll
-            cp crates/openut-driver/LICENSE-openvr dist/openut/LICENSE-openvr
-          fi
           find dist -type f | sort
       - uses: actions/upload-artifact@v7
         if: github.ref == 'refs/heads/main'
