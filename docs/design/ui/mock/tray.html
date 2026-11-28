@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OpenUT トレイ</title>
+<link rel="stylesheet" href="tokens.css">
+<script src="glyph.js"></script>
+<style>
+  /* Canvases use data-dpr="2": one icon pixel = one device pixel in a screenshot taken at deviceScaleFactor 2. */
+  body { padding: 24px; }
+  #tray { display: inline-grid; grid-template-columns: auto auto auto; gap: 28px 32px; padding: 24px;
+          background: #E3E7EC; align-items: start; }
+  .cap { font-size: 13px; color: #4D5768; margin-bottom: 8px; }
+  .bar { display: flex; align-items: center; gap: 14px; padding: 0 14px; height: 32px; border-radius: 6px; }
+  .bar.light { background: #F3F3F3; box-shadow: 0 0 0 1px #D9D9D9; }
+  .bar.dark { background: #1C1C1C; }
+  .zoom { display: flex; gap: 16px; }
+  .zoom canvas { box-shadow: 0 0 0 1px #C4CDD8; background:
+      conic-gradient(#F3F3F3 25%, #FFFFFF 0 50%, #F3F3F3 0 75%, #FFFFFF 0) 0 0 / 12px 12px; }
+  .zoom.dark canvas { background: #1C1C1C; box-shadow: none; }
+
+  /* Windows 11 tooltip and menu (drawn by Windows; shown for the wording only) */
+  .tip { display: inline-block; font-size: 12px; padding: 6px 9px; border-radius: 4px;
+         background: #F9F9F9; color: #1B1B1B; box-shadow: 0 0 0 1px #DADADA, 0 4px 10px rgba(0,0,0,.12); }
+  .tip.dark { background: #2B2B2B; color: #FFFFFF; box-shadow: 0 0 0 1px #3A3A3A; }
+  .tips { display: grid; gap: 10px; justify-items: start; }
+  .menu { width: 180px; padding: 4px; border-radius: 8px; background: #F9F9F9; font-size: 14px; color: #1B1B1B;
+          box-shadow: 0 0 0 1px #DADADA, 0 8px 18px rgba(0,0,0,.14); }
+  .menu div { padding: 7px 12px; border-radius: 4px; }
+  .menu div.on { background: #EAEAEA; }
+  .menu hr { border: 0; border-top: 1px solid #E5E5E5; margin: 4px 0; }
+</style>
+</head>
+<body>
+<div id="tray">
+  <div>
+    <div class="cap">明るいタスクバー 16・20・24・32</div>
+    <div class="bar light">
+      <canvas data-glyph="normal" data-size="16" data-dpr="2" data-color="--icon-normal"></canvas>
+      <canvas data-glyph="normal" data-size="20" data-dpr="2" data-color="--icon-normal"></canvas>
+      <canvas data-glyph="normal" data-size="24" data-dpr="2" data-color="--icon-normal"></canvas>
+      <canvas data-glyph="normal" data-size="32" data-dpr="2" data-color="--icon-normal"></canvas>
+    </div>
+    <div class="bar light" style="margin-top:10px">
+      <canvas data-glyph="notice" data-size="16" data-dpr="2" data-color="--icon-normal" data-badge="--icon-badge"></canvas>
+      <canvas data-glyph="notice" data-size="20" data-dpr="2" data-color="--icon-normal" data-badge="--icon-badge"></canvas>
+      <canvas data-glyph="notice" data-size="24" data-dpr="2" data-color="--icon-normal" data-badge="--icon-badge"></canvas>
+      <canvas data-glyph="notice" data-size="32" data-dpr="2" data-color="--icon-normal" data-badge="--icon-badge"></canvas>
+    </div>
+    <div class="bar light" style="margin-top:10px">
+      <canvas data-glyph="blind" data-size="16" data-dpr="2" data-color="--icon-blind"></canvas>
+      <canvas data-glyph="blind" data-size="20" data-dpr="2" data-color="--icon-blind"></canvas>
+      <canvas data-glyph="blind" data-size="24" data-dpr="2" data-color="--icon-blind"></canvas>
+      <canvas data-glyph="blind" data-size="32" data-dpr="2" data-color="--icon-blind"></canvas>
+    </div>
+  </div>
+  <div>
+    <div class="cap">暗いタスクバー 16・20・24・32</div>
+    <div class="bar dark">
+      <canvas data-glyph="normal" data-size="16" data-dpr="2" data-color="--icon-normal"></canvas>
+      <canvas data-glyph="normal" data-size="20" data-dpr="2" data-color="--icon-normal"></canvas>
+      <canvas data-glyph="normal" data-size="24" data-dpr="2" data-color="--icon-normal"></canvas>
+      <canvas data-glyph="normal" data-size="32" data-dpr="2" data-color="--icon-normal"></canvas>
+    </div>
+    <div class="bar dark" style="margin-top:10px">
+      <canvas data-glyph="notice" data-size="16" data-dpr="2" data-color="--icon-normal" data-badge="--icon-badge"></canvas>
+      <canvas data-glyph="notice" data-size="20" data-dpr="2" data-color="--icon-normal" data-badge="--icon-badge"></canvas>
+      <canvas data-glyph="notice" data-size="24" data-dpr="2" data-color="--icon-normal" data-badge="--icon-badge"></canvas>
+      <canvas data-glyph="notice" data-size="32" data-dpr="2" data-color="--icon-normal" data-badge="--icon-badge"></canvas>
+    </div>
+    <div class="bar dark" style="margin-top:10px">
+      <canvas data-glyph="blind" data-size="16" data-dpr="2" data-color="--icon-blind"></canvas>
+      <canvas data-glyph="blind" data-size="20" data-dpr="2" data-color="--icon-blind"></canvas>
+      <canvas data-glyph="blind" data-size="24" data-dpr="2" data-color="--icon-blind"></canvas>
+      <canvas data-glyph="blind" data-size="32" data-dpr="2" data-color="--icon-blind"></canvas>
+    </div>
+  </div>
+  <div>
+    <div class="cap">指を置いたとき</div>
+    <div class="tips">
+      <span class="tip">OpenUT 追跡中 2/3</span>
+      <span class="tip">OpenUT 案内1件</span>
+      <span class="tip dark">OpenUT ログが見つかりません</span>
+    </div>
+  </div>
+
+  <div>
+    <div class="cap">16 の拡大（1 マス = 1 画素）</div>
+    <div class="zoom">
+      <canvas data-glyph="normal" data-size="16" data-scale="8" data-dpr="2" data-color="--icon-normal"></canvas>
+      <canvas data-glyph="notice" data-size="16" data-scale="8" data-dpr="2" data-color="--icon-normal" data-badge="--icon-badge"></canvas>
+      <canvas data-glyph="blind" data-size="16" data-scale="8" data-dpr="2" data-color="--icon-blind"></canvas>
+    </div>
+  </div>
+  <div>
+    <div class="cap">&nbsp;</div>
+    <div class="zoom dark">
+      <canvas data-glyph="normal" data-size="16" data-scale="8" data-dpr="2" data-color="--icon-normal"></canvas>
+      <canvas data-glyph="notice" data-size="16" data-scale="8" data-dpr="2" data-color="--icon-normal" data-badge="--icon-badge"></canvas>
+      <canvas data-glyph="blind" data-size="16" data-scale="8" data-dpr="2" data-color="--icon-blind"></canvas>
+    </div>
+  </div>
+  <div>
+    <div class="cap">右クリック</div>
+    <div class="menu"><div class="on">状態を開く</div><hr><div>終了</div></div>
+  </div>
+</div>
+</body>
+</html>
