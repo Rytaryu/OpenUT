@@ -235,6 +235,7 @@ dependencies = [
  "openvr_sys",
  "serde",
  "serde_json",
+ "sysinfo",
  "toml",
 ]
 

@@ -4,8 +4,22 @@ use std::collections::VecDeque;
 
 use openut_core::time::{LogTime, UtcOffset};
 
-use crate::decode::Decoder;
+use crate::decode::{DecodeStats, Decoder, PositionedLine};
 use crate::header::{Entry, FileKind, FilledEntry, OffsetFill, ParsedLine, parse_line};
+
+/// An exclusive byte offset from the start of this file generation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RecordPosition {
+    pub name: String,
+    pub end: u64,
+    pub generation: u64,
+    pub decode: DecodeStats,
+}
+
+pub(super) struct PositionedRecord {
+    pub record: Record,
+    pub position: Option<RecordPosition>,
+}
 
 /// A record from one of the two file streams, before event classification.
 #[derive(Debug, Eq, PartialEq)]
@@ -77,7 +91,6 @@ impl From<FilledEntry<'_>> for Record {
 }
 
 /// Keeps independent file decoding state and a single offset basis for a session.
-#[derive(Default)]
 pub struct RecordDecoder {
     server: Decoder,
     driver: Decoder,
@@ -85,17 +98,56 @@ pub struct RecordDecoder {
     early_driver: EarlyDriver,
 }
 
+impl Default for RecordDecoder {
+    fn default() -> Self {
+        Self {
+            server: Decoder::positioned(),
+            driver: Decoder::positioned(),
+            offsets: OffsetFill::default(),
+            early_driver: EarlyDriver::default(),
+        }
+    }
+}
+
 impl RecordDecoder {
+    #[cfg(test)]
     pub fn push(&mut self, file: FileKind, bytes: &[u8]) -> Vec<Record> {
-        let lines = self.decoder(file).push(bytes);
-        self.parse(file, lines)
+        self.push_at(file, "test", 0, bytes)
+            .into_iter()
+            .map(|row| row.record)
+            .collect()
+    }
+
+    #[cfg(test)]
+    pub fn finish_file(&mut self, file: FileKind) -> Vec<Record> {
+        self.finish_at(file, "test", 0)
+            .into_iter()
+            .map(|row| row.record)
+            .collect()
+    }
+
+    pub(super) fn push_at(
+        &mut self,
+        file: FileKind,
+        name: &str,
+        generation: u64,
+        bytes: &[u8],
+    ) -> Vec<PositionedRecord> {
+        let lines = self.decoder(file).push_positioned(bytes);
+        self.parse(file, name, generation, lines)
     }
 
     /// End a generation at rotation and start the next with no partial bytes.
     /// The shared offset basis survives rotation. Use a new instance on rebuild.
-    pub fn finish_file(&mut self, file: FileKind) -> Vec<Record> {
-        let lines = std::mem::take(self.decoder(file)).finish();
-        self.parse(file, lines)
+    pub(super) fn finish_at(
+        &mut self,
+        file: FileKind,
+        name: &str,
+        generation: u64,
+    ) -> Vec<PositionedRecord> {
+        let lines =
+            std::mem::replace(self.decoder(file), Decoder::positioned()).finish_positioned();
+        self.parse(file, name, generation, lines)
     }
 
     pub fn bad_offset(&self, file: FileKind) -> usize {
@@ -104,7 +156,7 @@ impl RecordDecoder {
 
     /// Forget an unfinished driver record after its last file has disappeared.
     pub fn clear_driver_file(&mut self) {
-        self.driver = Decoder::new();
+        self.driver = Decoder::positioned();
     }
 
     fn decoder(&mut self, file: FileKind) -> &mut Decoder {
@@ -114,46 +166,81 @@ impl RecordDecoder {
         }
     }
 
-    fn parse(&mut self, file: FileKind, lines: Vec<String>) -> Vec<Record> {
+    fn parse(
+        &mut self,
+        file: FileKind,
+        name: &str,
+        generation: u64,
+        lines: Vec<PositionedLine>,
+    ) -> Vec<PositionedRecord> {
         let mut records = Vec::new();
-        for line in lines {
-            let data = match parse_line(&line) {
+        for PositionedLine { text, end, stats } in lines {
+            let position = RecordPosition {
+                name: name.to_owned(),
+                end,
+                generation,
+                decode: stats,
+            };
+            let data = match parse_line(&text) {
                 ParsedLine::Entry(entry) => {
-                    self.push_entry(file, entry, &mut records);
+                    self.push_entry(file, entry, position, &mut records);
                     continue;
                 }
-                ParsedLine::Meta(_) => RecordData::Meta(line),
-                ParsedLine::NoHeader(_) => RecordData::NoHeader(line),
+                ParsedLine::Meta(_) => RecordData::Meta(text),
+                ParsedLine::NoHeader(_) => RecordData::NoHeader(text),
             };
-            if file == FileKind::Driver && !self.early_driver.following.is_empty() {
-                self.early_driver.buffer_untimed(data);
+            let row = PositionedRecord {
+                record: Record { file, data },
+                position: Some(position),
+            };
+            if file == FileKind::Driver
+                && let Some(group) = self.early_driver.following.back_mut()
+            {
+                group.following.push(row);
             } else {
-                records.push(Record { file, data });
+                records.push(row);
             }
         }
         records
     }
 
-    fn push_entry(&mut self, file: FileKind, entry: Entry<'_>, records: &mut Vec<Record>) {
+    fn push_entry(
+        &mut self,
+        file: FileKind,
+        entry: Entry<'_>,
+        position: RecordPosition,
+        records: &mut Vec<PositionedRecord>,
+    ) {
         let before = self.offsets.bad_offset(FileKind::Driver);
         let early = &mut self.early_driver;
         let mut released_driver = Vec::new();
-        let mut emitted = false;
+        let mut position = Some(position);
         self.offsets.push(file, entry, |filled| {
             if filled.file == file {
-                records.push(Record::from(filled));
-                emitted = true;
+                records.push(PositionedRecord {
+                    record: Record::from(filled),
+                    position: position.take(),
+                });
             } else {
-                released_driver.push(Record::from(filled));
-                early.release_untimed(&mut released_driver);
+                let delayed = early.following.pop_front().unwrap_or_default();
+                released_driver.push(PositionedRecord {
+                    record: Record::from(filled),
+                    position: delayed.position,
+                });
+                released_driver.extend(delayed.following);
             }
         });
-        if !emitted {
+        if let Some(position) = position {
             // OffsetFill counts evictions immediately, before a basis exists.
-            if self.offsets.bad_offset(FileKind::Driver) > before {
-                early.release_untimed(records);
+            if self.offsets.bad_offset(FileKind::Driver) > before
+                && let Some(delayed) = early.following.pop_front()
+            {
+                records.extend(delayed.following);
             }
-            early.following.push_back(Vec::new());
+            early.following.push_back(EarlyDriverEntry {
+                position: Some(position),
+                following: Vec::new(),
+            });
         }
         records.append(&mut released_driver);
     }
@@ -163,26 +250,13 @@ impl RecordDecoder {
 /// An untimed prefix can be passed through immediately when no entry is pending.
 #[derive(Default)]
 struct EarlyDriver {
-    following: VecDeque<Vec<RecordData>>,
+    following: VecDeque<EarlyDriverEntry>,
 }
 
-impl EarlyDriver {
-    fn buffer_untimed(&mut self, data: RecordData) {
-        if let Some(group) = self.following.back_mut() {
-            group.push(data);
-        }
-    }
-
-    fn release_untimed(&mut self, records: &mut Vec<Record>) {
-        if let Some(group) = self.following.pop_front() {
-            for data in group {
-                records.push(Record {
-                    file: FileKind::Driver,
-                    data,
-                });
-            }
-        }
-    }
+#[derive(Default)]
+struct EarlyDriverEntry {
+    position: Option<RecordPosition>,
+    following: Vec<PositionedRecord>,
 }
 
 #[cfg(test)]

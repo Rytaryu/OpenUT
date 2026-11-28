@@ -32,7 +32,7 @@ workspace = true
 [dependencies]
 openut-anonymize = { path = "crates/openut-anonymize" }
 openut-bridge = { path = "crates/openut-bridge" }
-openut-core = { path = "crates/openut-core" }
+openut-core = { path = "crates/openut-core", features = ["serde"] }
 openut-dongle = { path = "crates/openut-dongle" }
 openut-hublog = { path = "crates/openut-hublog" }
 openut-space = { path = "crates/openut-space" }
@@ -42,6 +42,4 @@ toml = "1.2.3"
 
 [target.'cfg(windows)'.dependencies]
 openvr_sys = "=2.1.4"
-
-[dev-dependencies]
-openut-core = { path = "crates/openut-core", features = ["serde"] }
+sysinfo = { version = "0.40.4", default-features = false, features = ["system"] }
