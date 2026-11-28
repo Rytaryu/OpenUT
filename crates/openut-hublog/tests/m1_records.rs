@@ -6,6 +6,8 @@ use openut_hublog::header::{Entry, FileKind, OffsetFill, ParsedLine, parse_line}
 use openut_hublog::map::{MapCounts, map_entry};
 use openut_hublog::record::{Record, classify};
 
+const CAMERA_FRAME_RATE: &str = "Camera frame rate: 50";
+
 fn read_entry(line: &str) -> Entry<'_> {
     let ParsedLine::Entry(entry) = parse_line(line) else {
         panic!("expected a readable test header: {line}");
@@ -238,7 +240,7 @@ fn command_sample_shapes_preserve_the_target_and_command_kind() {
         ("standby_dongle", None, "Set dongle into standby."),
         ("power_off", Some(2), "PowerOff tracker (2) failed, err: -1"),
         ("power_off", Some(2), "FAILED TO POWER OFF. index: 2"),
-        ("camera_rate", None, "Camera frame rate: 50"),
+        ("camera_rate", None, CAMERA_FRAME_RATE),
     ];
     let mut counts = MapCounts::default();
     for (kind, tracker, body) in cases {
@@ -264,6 +266,17 @@ fn command_sample_shapes_preserve_the_target_and_command_kind() {
         );
     }
     assert_eq!(counts.server.unparsed + counts.server.other, 0);
+}
+
+#[test]
+fn camera_frame_rate_from_config_is_other_and_does_not_map_to_a_command() {
+    let line = server_line("OETServer::ParseConfig", "INFO", CAMERA_FRAME_RATE);
+    let entry = read_entry(&line);
+    assert_eq!(classify(&entry, FileKind::Server), Record::Other);
+    assert_eq!(
+        map_entry(&entry, FileKind::Server, &mut MapCounts::default()),
+        None,
+    );
 }
 
 #[test]

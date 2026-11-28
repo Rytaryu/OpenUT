@@ -3,7 +3,7 @@
 use crate::decode::Decoder;
 use crate::header::{ParsedLine, parse_line};
 
-/// A saved `ViveTrackerServer_YYYYMMDD.txt` file, already read by the caller.
+/// A saved Hub server or driver log file, already read by the caller.
 pub struct ReplayFile<'a> {
     pub name: &'a str,
     pub bytes: &'a [u8],
@@ -12,13 +12,14 @@ pub struct ReplayFile<'a> {
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct ReplayCounts {
     pub lines: usize,
+    pub meta: usize,
     pub no_header: usize,
 }
 
-/// Process files in filename date order and lines in their original order.
+/// Count records in saved files using a fresh decoder for each file.
 pub fn replay(files: &[ReplayFile<'_>]) -> ReplayCounts {
     let mut files: Vec<_> = files.iter().collect();
-    // The fixed-width date suffix sorts in calendar order.
+    // The fixed-width date suffix sorts in calendar order within each file kind.
     files.sort_by_key(|file| file.name);
 
     let mut counts = ReplayCounts::default();
@@ -35,8 +36,10 @@ pub fn replay(files: &[ReplayFile<'_>]) -> ReplayCounts {
 fn count_lines(lines: Vec<String>, counts: &mut ReplayCounts) {
     for line in lines {
         counts.lines += 1;
-        if matches!(parse_line(&line), ParsedLine::NoHeader(_)) {
-            counts.no_header += 1;
+        match parse_line(&line) {
+            ParsedLine::Meta(_) => counts.meta += 1,
+            ParsedLine::NoHeader(_) => counts.no_header += 1,
+            ParsedLine::Entry(_) => {}
         }
     }
 }
@@ -67,6 +70,7 @@ mod tests {
             }]),
             ReplayCounts {
                 lines: 5,
+                meta: 1,
                 no_header: 1,
             },
         );
@@ -95,8 +99,30 @@ mod tests {
             replay(&files),
             ReplayCounts {
                 lines: 3,
-                no_header: 1
+                meta: 0,
+                no_header: 1,
             }
+        );
+    }
+
+    #[test]
+    fn replays_driver_metadata_and_timeout_with_embedded_lf() {
+        let driver = concat!(
+            "# Log begin at 2026-11-28 00:00:53.613\r\n",
+            "# WriteTimeInterval=5000\r\n",
+            "[2026-11-28 00:00:54.000 +9 0x1 INFO TrackerDongleHID::DataDispatchThreadProc] [1] ",
+            "Wait for HID data got timeout.\n\r\n",
+        );
+        assert_eq!(
+            replay(&[ReplayFile {
+                name: "ViveTrackerDriver_20261128.txt",
+                bytes: driver.as_bytes(),
+            }]),
+            ReplayCounts {
+                lines: 3,
+                meta: 2,
+                no_header: 0,
+            },
         );
     }
 }
