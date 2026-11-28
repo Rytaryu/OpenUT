@@ -16,7 +16,8 @@
 // the work on. Env: GITHUB_TOKEN, REPO (owner/name),
 // WAKE_PR (the number of the wake PR), WAKE_TOKEN (optional; a token of the
 // owner, so that wake comments start the ChatGPT tasks), CI_WORKFLOW (default
-// ci.yml), DRY_RUN=true (print the writes instead of making them).
+// ci.yml), BUILD_WORKFLOW (default build.yml; empty: no build is started),
+// DRY_RUN=true (print the writes instead of making them).
 //
 // Based on the hand-off of Rytaryu/Solfege, without its Actions budget and its
 // check-after-approval: this repository is public, so CI runs on every PR (D-8).
@@ -243,6 +244,7 @@ export async function run({
   repo,
   wakePr,
   ciWorkflow = 'ci.yml',
+  buildWorkflow = 'build.yml',
   log = console.log,
   sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
 }) {
@@ -479,6 +481,15 @@ export async function run({
     }
   }
 
+  // For the same reason the Windows build (build.yml: the executables the owner
+  // downloads for checks on real hardware) does not start after these merges,
+  // so start it, once per batch. It builds main only. A failure to start it
+  // is logged and does not stop the hand-off: the build is not a check.
+  if (mergedNow.length > 0 && buildWorkflow) {
+    const r = await gh.call('POST', `/actions/workflows/${buildWorkflow}/dispatches`, { ref: main });
+    log(r.ok ? `build started on ${main}` : `build not started on ${main} (${r.status})`);
+  }
+
   // Close the Issues that merged PRs complete ("Closes #N" in the PR body).
   // GitHub's own auto-close is not relied on, and a backlog condition
   // "#N が閉じている" waits for it. Recently merged PRs are looked at again on
@@ -607,7 +618,7 @@ export async function run({
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  const { GITHUB_TOKEN, REPO, WAKE_TOKEN, WAKE_PR, CI_WORKFLOW } = process.env;
+  const { GITHUB_TOKEN, REPO, WAKE_TOKEN, WAKE_PR, CI_WORKFLOW, BUILD_WORKFLOW } = process.env;
   if (!GITHUB_TOKEN || !REPO) throw new Error('GITHUB_TOKEN and REPO are required');
   let gh = createClient({ repo: REPO, token: GITHUB_TOKEN, wakeToken: WAKE_TOKEN });
   if (process.env.DRY_RUN === 'true') {
@@ -628,5 +639,11 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       wake: async (wakePr, line) => console.log(`[dry-run] ${line}`),
     };
   }
-  await run({ gh, repo: REPO, wakePr: Number(WAKE_PR), ciWorkflow: CI_WORKFLOW || 'ci.yml' });
+  await run({
+    gh,
+    repo: REPO,
+    wakePr: Number(WAKE_PR),
+    ciWorkflow: CI_WORKFLOW || 'ci.yml',
+    buildWorkflow: BUILD_WORKFLOW ?? 'build.yml',
+  });
 }
