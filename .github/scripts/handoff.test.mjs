@@ -185,7 +185,7 @@ test('closing keywords in a PR body', () => {
 
 // An in-memory GitHub with just what the sweep touches.
 function fakeGitHub({ pulls = [], issues = [], paused = false, mainConclusion = 'success', failMerge = [] } = {}) {
-  const state = { pulls, issues, wakes: [], dispatched: 0, mainTip: 'tip0', ciTips: new Set(['tip0']), mainRunId: 1, mainConclusion, failWakes: 0, failLabels: 0, failComments: 0 };
+  const state = { pulls, issues, wakes: [], dispatched: 0, built: 0, failBuild: false, throwBuild: false, mainTip: 'tip0', ciTips: new Set(['tip0']), mainRunId: 1, mainConclusion, failWakes: 0, failLabels: 0, failComments: 0 };
   const find = (n) => [...state.pulls, ...state.issues].find((x) => x.number === Number(n));
   const asIssue = (x) => ({ ...x, user: { login: x.author ?? OWNER }, labels: x.labels.map((name) => ({ name })) });
   const asPull = (p) => ({
@@ -213,6 +213,10 @@ function fakeGitHub({ pulls = [], issues = [], paused = false, mainConclusion = 
       return { workflow_runs: [{ id: state.mainRunId, event: 'push', conclusion: state.mainConclusion, html_url: 'https://ci/run' }] };
     }
     if (path === '/actions/workflows/ci.yml/dispatches') return void (state.dispatched++, state.ciTips.add(state.mainTip)) ?? {};
+    if (path === '/actions/workflows/build.yml/dispatches') {
+      if (state.throwBuild) throw new Error('fetch failed');
+      return state.failBuild ? null : void state.built++ ?? {};
+    }
     if (path === '/commits/main') return { sha: state.mainTip };
     if ((m = path.match(/^\/commits\/([^/]+)$/))) {
       const ref = decodeURIComponent(m[1]);
@@ -360,6 +364,44 @@ test('merges an approved PR whose CI passed, then the PR stacked on it, and rele
   assert.deepEqual(world.state.wakes, ['1: WAKE role:impl #52']);
   // A merge made by the job does not start CI on main by itself: the sweep starts it, once.
   assert.equal(world.state.dispatched, 1);
+  // The same holds for the Windows build: it is started once for the batch of merges.
+  assert.equal(world.state.built, 1);
+});
+
+test('the Windows build is started after a merge only, and a failure to start it does not stop the hand-off', async () => {
+  // Nothing merged: no build.
+  const idle = fakeGitHub({ pulls: [pull(6)], issues: [] });
+  await sweep(idle);
+  assert.equal(idle.state.built, 0);
+
+  // The build workflow cannot be started (for example it does not exist): the merge and the rest still happen.
+  const p = approved(7, { body: 'Closes #8' });
+  const world = fakeGitHub({ pulls: [p], issues: [issue(8, 'x', ['role:impl'])] });
+  world.state.failBuild = true;
+  await sweep(world);
+  assert.equal(p.merged, true);
+  assert.equal(world.state.built, 0);
+  assert.equal(world.state.dispatched, 1);
+  assert.equal(world.find(8).state, 'closed');
+});
+
+test('an exception while starting the Windows build does not stop the hand-off', async () => {
+  // The call itself throws (a network failure, a reply that is not JSON).
+  const p = approved(7, { body: 'Closes #8' });
+  const world = fakeGitHub({
+    pulls: [p],
+    issues: [issue(8, 'x', ['role:impl']), issue(9, '担当: role:impl\n着手の条件: #8 が閉じている')],
+  });
+  world.state.throwBuild = true;
+  const lines = [];
+  await sweep(world, { log: (line) => lines.push(line) });
+  assert.equal(p.merged, true);
+  assert.equal(world.state.dispatched, 1);
+  // The linked Issue is closed and the next work, whose condition is now met, is handed over.
+  assert.equal(world.find(8).state, 'closed');
+  assert.deepEqual(world.find(9).labels, ['role:impl']);
+  assert.deepEqual(world.state.wakes, ['1: WAKE role:impl #9']);
+  assert.ok(lines.some((line) => /build not started on main \(fetch failed\)/.test(line)));
 });
 
 test('documents are squashed; the Claude side cannot approve', async () => {
