@@ -213,7 +213,24 @@ export function createClient({ repo, token, wakeToken, fetchImpl = fetch }) {
     get: (path) => call('GET', path),
     must,
     list,
-    wake: (wakePr, line) => must('POST', `/issues/${wakePr}/comments`, { body: line }, wakeToken || token),
+    // The wake PR is kept locked, so that nobody outside can start the roles
+    // (the repository is public). The owner's token can write there; the job's
+    // own account cannot comment on a locked conversation, so the PR is opened
+    // for this one comment and locked again, whether the comment went out or not.
+    wake: async (wakePr, line) => {
+      const path = `/issues/${wakePr}/comments`;
+      const post = () => call('POST', path, { body: line }, wakeToken || token);
+      let r = await post();
+      if (r.status === 403 && /locked/i.test(r.data?.message ?? '')) {
+        await must('DELETE', `/issues/${wakePr}/lock`);
+        try {
+          r = await post();
+        } finally {
+          await must('PUT', `/issues/${wakePr}/lock`, {});
+        }
+      }
+      if (!r.ok) throw new Error(`POST ${path} -> ${r.status} ${JSON.stringify(r.data)?.slice(0, 200)}`);
+    },
   };
 }
 

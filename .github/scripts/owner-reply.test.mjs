@@ -79,6 +79,7 @@ if (!issue) fail(404);
 let output;
 if (method === 'GET' && !suffix) {
   if (query === '.state') output = issue.state;
+  else if (query === '.locked') output = String(Boolean(issue.locked));
   else if (query === '.labels[].name | select(startswith("role:") or . == "backlog")')
     output = issue.labels.filter((label) => label.startsWith('role:') || label === 'backlog').join('\n');
   else if (!query) output = JSON.stringify({ ...issue, labels: issue.labels.map((name) => ({ name })) });
@@ -96,8 +97,13 @@ if (method === 'GET' && !suffix) {
   output = '{}';
 } else if (method === 'POST' && suffix === 'comments') {
   if (!fields.body) throw new Error('Missing comment body');
+  // A locked conversation takes comments only from the owner's token.
+  if (issue.locked && process.env.GH_TOKEN !== 'owner-token') fail(403);
   issue.comments.push(fields.body);
   output = '{}';
+} else if ((method === 'DELETE' || method === 'PUT') && suffix === 'lock') {
+  issue.locked = method === 'PUT';
+  output = '';
 } else throw new Error('Unexpected fake API operation: ' + JSON.stringify(call));
 save();
 emit(200, output);
@@ -117,6 +123,8 @@ function harness(
     targetState = 'open',
     omitTarget = false,
     locale = 'C.UTF-8',
+    wakeLocked = false,
+    wakeToken = '',
   } = {},
 ) {
   const directory = mkdtempSync(join(tmpdir(), 'owner-reply-test-'));
@@ -128,7 +136,7 @@ function harness(
   writeFileSync(ghPath, `#!${process.execPath}\n${fakeGh}`, { mode: 0o755 });
   const issues = {
     [source]: issue(body, labels),
-    [wakePr]: issue('Wake comments only', ['wake']),
+    [wakePr]: { ...issue('Wake comments only', ['wake']), locked: wakeLocked },
     14: issue('UX work', ['backlog']),
     41: issue('Unrelated review', ['role:review', 'enhancement']),
   };
@@ -158,6 +166,7 @@ function harness(
           COMMENT_URL: 'https://example.invalid/owner-comment',
           GH_TOKEN: 'fake-token-unused',
           GITHUB_TOKEN: '',
+          WAKE_TOKEN: wakeToken,
           LC_ALL: locale,
           OWNER_REPLY_FAKE_STATE: statePath,
         },
@@ -396,3 +405,43 @@ for (const [name, method, path] of [
     assertCompletionFlagLast(state);
   });
 }
+
+test('wakes through a locked wake PR by opening it for the one comment, and locks it again', (t) => {
+  const fixture = harness(t, { body: '返事の行き先: role:review #55', wakeLocked: true });
+  succeeded(fixture.run());
+  const state = fixture.read();
+  assert.deepEqual(state.issues[wakePr].comments, ['WAKE role:review #55']);
+  assert.equal(state.issues[wakePr].locked, true);
+  const onWakePr = mutations(state)
+    .filter(({ path }) => path.startsWith(`${base}/issues/${wakePr}/`))
+    .map(({ method, path, failed }) => `${method} ${path.split('/').at(-1)}${failed ? ` (${failed})` : ''}`);
+  assert.deepEqual(onWakePr, ['POST comments (403)', 'DELETE lock', 'POST comments', 'PUT lock']);
+  assertCompletionFlagLast(state);
+});
+
+test('the owner\'s token writes to the locked wake PR as it is', (t) => {
+  const fixture = harness(t, { body: '返事の行き先: role:review #55', wakeLocked: true, wakeToken: 'owner-token' });
+  succeeded(fixture.run());
+  const state = fixture.read();
+  assert.deepEqual(state.issues[wakePr].comments, ['WAKE role:review #55']);
+  assert.equal(mutations(state).some(({ path }) => path.endsWith('/lock')), false);
+});
+
+test('a wake that fails on the opened wake PR leaves it locked and keeps needs-human for the retry', (t) => {
+  const fixture = harness(t, {
+    body: '返事の行き先: role:review #55',
+    wakeLocked: true,
+    // Both attempts of the first run fail: the one on the locked PR and the one on the opened PR.
+    failures: [{ method: 'POST', path: `${base}/issues/${wakePr}/comments`, remaining: 2, status: 502 }],
+  });
+  const first = fixture.run();
+  assert.notEqual(first.status, 0);
+  let state = fixture.read();
+  assert.equal(state.issues[wakePr].locked, true);
+  assert.ok(state.issues[source].labels.includes('needs-human'));
+  succeeded(fixture.run());
+  state = fixture.read();
+  assert.deepEqual(state.issues[wakePr].comments, ['WAKE role:review #55']);
+  assert.equal(state.issues[wakePr].locked, true);
+  assert.equal(state.issues[source].labels.includes('needs-human'), false);
+});

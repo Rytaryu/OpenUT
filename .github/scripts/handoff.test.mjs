@@ -4,6 +4,7 @@ import {
   authorRole,
   ciState,
   closingIssues,
+  createClient,
   isApprovalOf,
   isHeld,
   isImplementationPr,
@@ -739,4 +740,58 @@ test('taking a cut-short notice up again does not move a label the role has move
   world = fakeGitHub({ pulls: [r] });
   await sweep(world);
   assert.deepEqual([r.labels, world.state.wakes], [['role:impl'], ['1: WAKE role:impl #312']]);
+});
+
+test('a wake goes out although the wake PR is locked, and the PR is locked again', async () => {
+  // A stand-in for the API: a locked conversation takes comments only from the owner's token.
+  const server = ({ locked = true, failPost = 0 } = {}) => {
+    const state = { locked, comments: [], calls: [], failPost };
+    const reply = (status, data) => ({ ok: status < 300, status, text: async () => (data ? JSON.stringify(data) : '') });
+    const fetchImpl = async (url, { method, headers, body }) => {
+      const path = url.replace('https://api.github.com/repos/o/r', '');
+      const token = headers.authorization.replace('Bearer ', '');
+      state.calls.push(`${method} ${path} ${token}`);
+      if (path === '/issues/1/lock') {
+        state.locked = method === 'PUT';
+        return reply(204);
+      }
+      if (method === 'POST' && path === '/issues/1/comments') {
+        if (state.locked && token !== 'owner') return reply(403, { message: 'Unable to create comment because issue is locked.' });
+        if (state.failPost-- > 0) return reply(502, { message: 'Bad Gateway' });
+        state.comments.push(JSON.parse(body).body);
+        return reply(201, { id: 1 });
+      }
+      return reply(404, { message: 'Not Found' });
+    };
+    return { state, fetchImpl };
+  };
+
+  // The job's own account: open, comment, lock again.
+  let s = server();
+  await createClient({ repo: 'o/r', token: 'job', fetchImpl: s.fetchImpl }).wake(1, 'WAKE role:impl #9');
+  assert.deepEqual([s.state.comments, s.state.locked], [['WAKE role:impl #9'], true]);
+  assert.deepEqual(s.state.calls, [
+    'POST /issues/1/comments job',
+    'DELETE /issues/1/lock job',
+    'POST /issues/1/comments job',
+    'PUT /issues/1/lock job',
+  ]);
+
+  // The comment fails after the PR was opened: the error is reported, and the PR is locked again all the same.
+  s = server({ failPost: 1 });
+  await assert.rejects(createClient({ repo: 'o/r', token: 'job', fetchImpl: s.fetchImpl }).wake(1, 'WAKE role:impl #9'), /502/);
+  assert.deepEqual([s.state.comments, s.state.locked], [[], true]);
+
+  // The owner's token writes to the locked PR as it is.
+  s = server();
+  await createClient({ repo: 'o/r', token: 'job', wakeToken: 'owner', fetchImpl: s.fetchImpl }).wake(1, 'WAKE role:review #3');
+  assert.deepEqual(s.state.calls, ['POST /issues/1/comments owner']);
+
+  // A PR that is not locked is not locked by a wake, and another refusal is not taken for a lock.
+  s = server({ locked: false });
+  await createClient({ repo: 'o/r', token: 'job', fetchImpl: s.fetchImpl }).wake(1, 'WAKE role:impl #9');
+  assert.deepEqual([s.state.calls.length, s.state.locked], [1, false]);
+  s = server({ locked: false, failPost: 1 });
+  await assert.rejects(createClient({ repo: 'o/r', token: 'job', fetchImpl: s.fetchImpl }).wake(1, 'WAKE role:impl #9'), /502/);
+  assert.deepEqual([s.state.calls.length, s.state.locked], [1, false]);
 });
