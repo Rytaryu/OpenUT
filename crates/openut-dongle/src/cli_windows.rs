@@ -338,13 +338,12 @@ impl<W: Write> Console<W> {
             Notice::Tick {
                 at,
                 reports_per_second,
-                estimated_lost,
                 table,
                 decoder,
             } => {
                 writeln!(
                     self.out,
-                    "{} 秒 / 受信 {reports_per_second} 件/秒 / 取りこぼし（推定）{estimated_lost} 件",
+                    "{} 秒 / 受信 {reports_per_second} 件/秒",
                     elapsed(at.mono_us),
                 )?;
                 for tracker in table.views() {
@@ -413,8 +412,8 @@ impl<W: Write> Console<W> {
         writeln!(self.out, "{reason}。記録先: {destination}")?;
         writeln!(
             self.out,
-            "受信 {} 件 / 不正 {} 件 / 取りこぼし（推定）{} 件",
-            result.stats.reports, result.stats.malformed, result.stats.estimated_lost,
+            "受信 {} 件 / 不正 {} 件",
+            result.stats.reports, result.stats.malformed,
         )?;
         for (&kind, &count) in &result.stats.report_types {
             writeln!(self.out, "報告 0x{kind:02X}: {count} 件")?;

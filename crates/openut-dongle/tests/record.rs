@@ -5,6 +5,7 @@ use openut_dongle::record::{
     Device, EndReason, Header, Mode, Note, OmittedReason, RawReport, ReadError, Record,
     RecordReader, RecordWriter, TrackerLabel,
 };
+use openut_dongle::replay::Replay;
 use serde_json::{Value, json};
 
 const FIXTURE: &str = include_str!("../../../tests/fixtures/dongle/m2-1-record.jsonl");
@@ -83,7 +84,7 @@ fn reads_synthetic_fixture_and_round_trips_records() {
             wall_ms: None,
             reports: 1,
             malformed: 0,
-            estimated_lost: 0,
+            estimated_lost: Some(0),
             reason: EndReason::Duration,
             time_reversed: 0,
         },
@@ -96,24 +97,28 @@ fn reads_synthetic_fixture_and_round_trips_records() {
     assert_eq!(reader.stats().time_reversed, 0);
 
     let written = write(&header(), &expected);
-    assert_eq!(json_rows(&written), json_rows(FIXTURE.as_bytes()));
+    let mut expected_json = json_rows(FIXTURE.as_bytes());
+    assert_eq!(expected_json[0]["version"], 1);
+    expected_json[0]["version"] = json!(2);
+    assert_eq!(json_rows(&written), expected_json);
     let mut reader = RecordReader::new(Cursor::new(written)).expect("read written header");
     assert_eq!(reader.header(), &header());
     assert_eq!(read_rows(&mut reader), expected);
 }
 
 #[test]
-fn preserves_footer_wall_time_on_round_trip() {
+fn preserves_footer_wall_time_and_legacy_loss_estimate_on_round_trip() {
     let first_line = FIXTURE.lines().next().expect("fixture header");
-    let footer = r#"{"type":"footer","mono_us":250,"wall_ms":123456,"reports":1,"malformed":0,"estimated_lost":0,"reason":"duration"}"#;
+    let footer = r#"{"type":"footer","mono_us":250,"wall_ms":123456,"reports":1,"malformed":0,"estimated_lost":42,"reason":"duration"}"#;
     let bytes = [first_line, footer].join("\n");
-    let mut reader = RecordReader::new(Cursor::new(bytes)).expect("read header");
+    let mut reader = RecordReader::new(Cursor::new(bytes.as_bytes())).expect("read header");
     let rows = read_rows(&mut reader);
     assert!(matches!(
         rows.as_slice(),
         [Record::Footer {
             mono_us: 250,
             wall_ms: Some(123_456),
+            estimated_lost: Some(42),
             ..
         }]
     ));
@@ -122,6 +127,10 @@ fn preserves_footer_wall_time_on_round_trip() {
         json_rows(&write(reader.header(), &rows))[1],
         serde_json::from_str::<Value>(footer).expect("footer fixture is valid JSON")
     );
+
+    let mut replay = Replay::new(Cursor::new(bytes)).expect("open legacy replay");
+    assert!(replay.read_step().expect("read legacy footer").is_some());
+    assert_eq!(replay.stats().estimated_lost, Some(42));
 }
 
 #[test]

@@ -176,7 +176,7 @@ impl Summary {
             .count();
         let lost = stats.estimated_lost.map_or_else(
             || "不明（締めの行に記録なし）".to_owned(),
-            |n| format!("{n} 件"),
+            |n| format!("{n} 件（旧版に記録された参考値）"),
         );
         writeln!(out, "記録の終わり: {}", self.last.text(offset))?;
         writeln!(
