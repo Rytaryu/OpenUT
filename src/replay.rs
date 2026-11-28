@@ -1,6 +1,6 @@
 //! Comparison of saved replay expectations with observed output.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::fmt::Write;
 
 use openut_core::time::{LogDate, LogTime, UtcOffset};
@@ -112,35 +112,33 @@ impl Expectations {
         Ok(expectations)
     }
 
-    /// Pair each expected detection with the first unused matching observation in time order.
+    /// Pair expectations and observations chronologically, reassigning a match when needed.
     pub fn compare(
         &self,
         detections: &[RaisedDetection<'_>],
         summaries: &ObservedSummaries,
     ) -> Result<(), String> {
         let mut expected: Vec<_> = self.detections.iter().collect();
-        expected.sort_by_key(|entry| (entry.after, entry.before));
+        expected.sort_by_key(|entry| {
+            (
+                entry.after,
+                entry.rule.as_str(),
+                entry.tracker,
+                entry.before,
+            )
+        });
         let mut actual: Vec<_> = detections.iter().collect();
-        actual.sort_by_key(|entry| entry.at.0);
-        let mut used = vec![false; actual.len()];
-        let mut report = String::new();
+        actual.sort_by_key(|entry| (entry.at, entry.rule, entry.tracker, entry.offset.0));
 
-        for entry in &expected {
-            if let Some(index) = actual.iter().zip(&used).position(|(observation, used)| {
-                !*used
-                    && observation.rule == entry.rule
-                    && entry
-                        .tracker
-                        .is_none_or(|tracker| observation.tracker == Some(tracker))
-                    && (entry.after..entry.before).contains(&observation.local_time())
-            }) {
-                used[index] = true;
-            } else {
+        let mut report = String::new();
+        let mut matched = vec![None; actual.len()];
+        for (index, entry) in expected.iter().enumerate() {
+            if !match_detection(index, &expected, &actual, &mut matched) {
                 let _ = writeln!(report, "見つからない検出　{}", describe_expected(entry));
             }
         }
-        for (entry, used) in actual.iter().zip(used) {
-            if !used && self.check_rules.iter().any(|rule| rule == entry.rule) {
+        for (entry, expected_index) in actual.iter().zip(matched) {
+            if expected_index.is_none() && self.check_rules.iter().any(|rule| rule == entry.rule) {
                 let _ = writeln!(report, "余分な検出　{}", describe_observation(entry));
             }
         }
@@ -171,11 +169,63 @@ impl Expectations {
     }
 }
 
+fn match_detection(
+    requested: usize,
+    expected: &[&ExpectedDetection],
+    actual: &[&RaisedDetection<'_>],
+    matched: &mut [Option<usize>],
+) -> bool {
+    // Search in chronological order for an unused observation. If all compatible
+    // observations are taken, look for another observation for one of their expectations.
+    let mut pending = VecDeque::from([(requested, None)]);
+    let mut previous = vec![None; actual.len()];
+    while let Some((expected_index, displaced)) = pending.pop_front() {
+        let entry = expected[expected_index];
+        for (index, observation) in actual.iter().enumerate() {
+            if previous[index].is_some() || !matches_detection(entry, observation) {
+                continue;
+            }
+            previous[index] = Some((expected_index, displaced));
+            if let Some(owner) = matched[index] {
+                pending.push_back((owner, Some(index)));
+                continue;
+            }
+
+            // An unused observation completes the chain. Keep all the displaced
+            // expectations matched by moving them along this chain.
+            let mut current = Some(index);
+            while let Some(index) = current {
+                let Some((owner, displaced)) = previous[index] else {
+                    break;
+                };
+                matched[index] = Some(owner);
+                current = displaced;
+            }
+            return true;
+        }
+    }
+    false
+}
+
+fn matches_detection(entry: &ExpectedDetection, observation: &RaisedDetection<'_>) -> bool {
+    entry.rule == observation.rule
+        && entry
+            .tracker
+            .is_none_or(|tracker| observation.tracker == Some(tracker))
+        && (entry.after..entry.before).contains(&observation.local_time())
+}
+
 fn summary_value<'a>(summary: &'a Table, path: &str) -> Option<&'a Value> {
     let mut segments = path.split('.');
     let mut value = summary.get(segments.next()?)?;
     for segment in segments {
-        value = value.as_table()?.get(segment)?;
+        value = match value {
+            Value::Table(table) => table.get(segment)?,
+            Value::Array(array) if segment.bytes().all(|byte| byte.is_ascii_digit()) => {
+                array.get(segment.parse::<usize>().ok()?)?
+            }
+            _ => return None,
+        };
     }
     Some(value)
 }
@@ -285,6 +335,56 @@ before = "2026-11-28 12:00:01"
     }
 
     #[test]
+    fn reserves_same_time_detections_for_explicit_trackers_in_either_order() {
+        for tracker in [1, 2] {
+            let expected = Expectations::parse(&format!(
+                r#"
+check_rules = ["R1"]
+
+[[detection]]
+rule = "R1"
+after = "2026-11-28 12:00:00"
+before = "2026-11-28 12:00:02"
+
+[[detection]]
+rule = "R1"
+tracker = {tracker}
+after = "2026-11-28 12:00:00.250"
+before = "2026-11-28 12:00:01"
+"#
+            ))
+            .unwrap();
+            for [first, second] in [[1, 2], [2, 1]] {
+                let observed = [raised("R1", first, 500), raised("R1", second, 500)];
+                assert_eq!(expected.compare(&observed, &BTreeMap::new()), Ok(()));
+            }
+        }
+    }
+
+    #[test]
+    fn reassigns_an_earlier_detection_when_only_it_fits_the_shorter_window() {
+        let expected = Expectations::parse(
+            r#"
+check_rules = ["R1"]
+
+[[detection]]
+rule = "R1"
+tracker = 2
+after = "2026-11-28 12:00:00"
+before = "2026-11-28 12:00:02"
+
+[[detection]]
+rule = "R1"
+after = "2026-11-28 12:00:00.250"
+before = "2026-11-28 12:00:00.600"
+"#,
+        )
+        .unwrap();
+        let observed = [raised("R1", 2, 500), raised("R1", 2, 900)];
+        assert_eq!(expected.compare(&observed, &BTreeMap::new()), Ok(()));
+    }
+
+    #[test]
     fn includes_after_boundary_and_excludes_before_boundary() {
         let expected = Expectations::parse(ONE_DETECTION).unwrap();
         assert!(
@@ -345,5 +445,38 @@ other = 12
                 .unwrap_err()
                 .contains("期待 1　実際 2")
         );
+    }
+
+    #[test]
+    fn compares_one_tracker_summary_field_after_midnight() {
+        let expected = Expectations::parse(
+            r#"
+check_rules = []
+[summary."2026-11-28"]
+"trackers.0.tracking_s" = 1530.0
+"#,
+        )
+        .unwrap();
+        // §8.1's next-day-only replay, with an extra tracker and a prior day
+        // that this expectation does not check.
+        let summaries = |tracking_s| {
+            toml::from_str::<ObservedSummaries>(&format!(
+                r#"
+["2026-11-27"]
+trackers = [{{ key = 1, tracking_s = 240.0 }}]
+
+["2026-11-28"]
+unobserved_s = 240.0
+trackers = [
+    {{ key = 1, connected_s = 1560.0, tracking_s = {tracking_s} }},
+    {{ key = 2, tracking_s = 1530.0 }},
+]
+"#
+            ))
+            .unwrap()
+        };
+        assert_eq!(expected.compare(&[], &summaries("1530.0")), Ok(()));
+        let report = expected.compare(&[], &summaries("240.0")).unwrap_err();
+        assert!(report.contains("集計 2026-11-28 trackers.0.tracking_s　期待 1530.0　実際 240.0"));
     }
 }
