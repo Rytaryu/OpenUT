@@ -1,0 +1,21 @@
+# Log begin at 2026-11-27 18:00:00.000
+# WriteTimeInterval=5000
+# OpenType=1
+# FileType=0
+# EncodeType=0
+# Truncate=0
+# MaxFileSize=15728640
+# MaxRollingCount=5
+# WriteThrough=1
+# HardFlush=0
+# FilenameWithProcessID=0
+# InitialLogLevel=2
+# ThreadPriority=0
+# AllPackagesAccess=0
+[2026-11-27 18:00:00.000 +9 0x1 INFO ] [1] ==================== Log Start ====================
+[2026-11-27 18:00:00.000 +9 0x1 INFO main] [1] Tracker Server Starts.
+[2026-11-27 18:00:00.000 +9 0x1 INFO OETServer::AddTrackerCB] [1] Add new tracker: (1), connection type: 1
+[2026-11-27 18:00:00.008 +9 0x1 INFO OETServer::GetDeviceInfoAndResponse] [1] Response - cmd type: 214, cmd key: (AAAA), device index: 1, result: 0, sn: (00XX000000001), model name: (VIVE Ultimate Tracker 1), fw version: (1.0.999.178), role: (0), device type: 0, force update: 0, type: 1
+[2026-11-27 18:00:01.000 +9 0x1 INFO Tracker::CopyFromDriverThreadProc] [1] (SteamVR: 5)(1)[12]Pose status is changed: Pose data - status: 2, pos: (0.123456, 0.000000, 0.000000), rotation: (0.000000, 0.000000, 0.000000, w 1.000000), vel: (0.000000, 0.000000, 0.000000), angular vel: (0.000000, 0.000000, 0.000000)
+[2026-11-27 23:50:00.000 +9 0x1 INFO Tracker::CopyFromDriverThreadProc] [1] (SteamVR: 5)(1)[12]Pose status is changed: Pose data - status: 2, pos: (0.123456, 0.000000, 0.000000), rotation: (0.000000, 0.000000, 0.000000, w 1.000000), vel: (0.000000, 0.000000, 0.000000), angular vel: (0.000000, 0.000000, 0.000000)
+[2026-11-27 23:59:00.000 +9 0x1 INFO OETServer::CheckHostIsStarted] [1] Host running state:2 to 2

@@ -6,7 +6,7 @@ mod tracking;
 
 use crate::event::Timed;
 use crate::state::{ConnId, ConnectionChange, State};
-use crate::time::LogTime;
+use crate::time::{LogTime, UtcOffset};
 use crate::tracker::{Serial, TrackerKey};
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -50,6 +50,14 @@ pub struct Detection {
     pub host_wifi_queried: Option<bool>,
     pub at: LogTime,
     pub step: Step,
+}
+
+pub(crate) struct PowerOffCut {
+    pub at: LogTime,
+    pub offset: UtcOffset,
+    pub tracker: TrackerKey,
+    pub conn: Option<ConnId>,
+    pub serial: Option<Serial>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -246,18 +254,14 @@ impl Rules {
         state: &State,
         cfg: &RulesConfig,
         output: &mut Vec<Detection>,
-    ) -> u64 {
-        let mut power_offs = 0_u64;
+    ) -> Vec<PowerOffCut> {
+        let mut power_offs = Vec::new();
         while let Some((at, rule, _)) = self.earliest().filter(|(at, _, _)| *at < to) {
             match rule {
                 RuleId::R1 => self.r1.fire(at, state, output),
                 RuleId::R4 => {
-                    if self
-                        .r4
-                        .fire(at, &cfg.r4, output, &mut self.next_episode)
-                        .is_some()
-                    {
-                        power_offs = power_offs.saturating_add(1);
+                    if let Some(cut) = self.r4.fire(at, &cfg.r4, output, &mut self.next_episode) {
+                        power_offs.push(cut);
                     }
                 }
                 RuleId::R2 | RuleId::R3 | RuleId::R5 => {

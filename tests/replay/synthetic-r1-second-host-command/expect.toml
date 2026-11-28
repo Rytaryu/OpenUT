@@ -5,3 +5,9 @@ rule = "R1"
 tracker = 1
 after = "2026-11-28 12:00:25.600"
 before = "2026-11-28 12:00:25.601"
+
+[summary."2026-11-28"]
+observed_until = "2026-11-28 12:01:10.150"
+"faults.wifi_info_missing" = 1
+"detections.R1" = 1
+"host_starts" = 2

@@ -42,3 +42,6 @@ toml = "1.2.3"
 
 [target.'cfg(windows)'.dependencies]
 openvr_sys = "=2.1.4"
+
+[dev-dependencies]
+openut-core = { path = "crates/openut-core", features = ["serde"] }

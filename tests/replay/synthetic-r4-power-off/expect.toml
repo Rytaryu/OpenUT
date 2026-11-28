@@ -5,3 +5,11 @@ rule = "R4"
 tracker = 2
 after = "2026-11-28 12:01:20.250"
 before = "2026-11-28 12:01:20.251"
+
+[summary."2026-11-28"]
+"faults.unexpected_disconnects" = 1
+"detections.R4" = 1
+"source.driver.found" = true
+"source.driver.meta" = 14
+"trackers.0.slots" = [1]
+"trackers.0.power_offs" = 1

@@ -8,9 +8,10 @@ use openut_core::engine::{
 use openut_core::event::Timed;
 use openut_core::rules::Detection;
 use openut_core::state::Snapshot;
+use openut_core::summary::Summary;
 use openut_core::time::{LogDate, LogTime, UtcOffset};
 
-use crate::decode::Decoder;
+use crate::decode::{DecodeStats, Decoder};
 use crate::header::{FileKind, FilledEntry, OffsetFill, ParsedLine, parse_line};
 use crate::map::{MapCounts, map_entry};
 use crate::tail::parse_log_name;
@@ -39,12 +40,13 @@ impl ReplayCounts {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq)]
 pub struct ReplayResult {
     pub counts: ReplayCounts,
     pub detections: Vec<Detection>,
     pub stats: EngineStats,
     pub snapshot: Snapshot,
+    pub summaries: Vec<Summary>,
     /// Server rows with an unreadable or discarded offset.
     pub bad_offset: usize,
     /// Driver rows with an unreadable or discarded offset.
@@ -66,6 +68,7 @@ pub fn replay_with_engine(files: &[ReplayFile<'_>], cfg: EngineConfig) -> Replay
 }
 
 /// Replay the saved logs and explicitly advance the final server time by `flush_s` seconds.
+/// Pending prior days are finalized at end of input.
 pub fn replay_with_flush(
     files: &[ReplayFile<'_>],
     cfg: EngineConfig,
@@ -75,13 +78,28 @@ pub fn replay_with_flush(
     let mut engine = Engine::new(cfg);
     let mut stats = EngineStats::default();
     let mut detections = Vec::new();
+    let mut summaries = Vec::new();
 
     while let Some((source, record)) = input.next_record() {
         match record {
-            ReplayRecord::Event(event) => engine.apply(event),
-            ReplayRecord::Line(at, quality) => engine.note_line_at(source, at, quality),
+            ReplayRecord::Event(event, bad_offset) => {
+                let date = event.at.to_local(event.offset).0;
+                engine.apply(event);
+                if bad_offset {
+                    record_bad_offset(&mut engine, source, date);
+                }
+            }
+            ReplayRecord::Line(at, quality, file_date, bad_offset) => {
+                engine.note_line_in_file(source, file_date, at, quality);
+                if let (true, Some((at, offset))) = (bad_offset, at) {
+                    record_bad_offset(&mut engine, source, at.to_local(offset).0);
+                }
+            }
+            ReplayRecord::FileSource { date, meta, decode } => {
+                record_file_source(&mut engine, source, date, meta, decode);
+            }
             ReplayRecord::Rebuild(_) => {
-                collect_segment(&mut engine, &mut detections, &mut stats);
+                collect_segment(&mut engine, &mut detections, &mut summaries, &mut stats);
                 engine.rebuild();
             }
         }
@@ -92,7 +110,8 @@ pub fn replay_with_flush(
         let millis = i64::try_from(flush_s.saturating_mul(1_000)).unwrap_or(i64::MAX);
         engine.advance_to(LogTime(last.0.saturating_add(millis)));
     }
-    collect_segment(&mut engine, &mut detections, &mut stats);
+    engine.finish_summaries();
+    collect_segment(&mut engine, &mut detections, &mut summaries, &mut stats);
     stats.pushes = engine.stats().pushes;
 
     ReplayResult {
@@ -100,21 +119,26 @@ pub fn replay_with_flush(
         detections,
         stats,
         snapshot: engine.snapshot(),
+        summaries,
         bad_offset: input.offsets.bad_offset(FileKind::Server),
         driver_bad_offset: input.offsets.bad_offset(FileKind::Driver),
     }
 }
 
-fn collect_segment(engine: &mut Engine, detections: &mut Vec<Detection>, stats: &mut EngineStats) {
-    detections.extend(
-        engine
-            .drain()
-            .into_iter()
-            .filter_map(|output| match output {
-                Output::Detection(detection) => Some(detection),
-                Output::Notice(_) => None,
-            }),
-    );
+fn collect_segment(
+    engine: &mut Engine,
+    detections: &mut Vec<Detection>,
+    summaries: &mut Vec<Summary>,
+    stats: &mut EngineStats,
+) {
+    for output in engine.drain() {
+        match output {
+            Output::Detection(detection) => detections.push(detection),
+            Output::DayClosed(summary) => summaries.push(*summary),
+            Output::Notice(_) => {}
+        }
+    }
+    summaries.extend(engine.open_summaries());
     stats.merge(EngineStats {
         // Engine keeps deliveries from this run across rebuilds.
         pushes: 0,
@@ -122,7 +146,42 @@ fn collect_segment(engine: &mut Engine, detections: &mut Vec<Detection>, stats: 
     });
 }
 
-fn read_lines(file: &ReplayFile<'_>, mut visit: impl FnMut(ParsedLine<'_>)) {
+fn record_bad_offset(engine: &mut Engine, file: Source, date: LogDate) {
+    let driver = file == Source::Driver;
+    if let Some(source) = engine.summary_source(driver.then_some(date)) {
+        let count = if driver {
+            &mut source.driver.bad_offset
+        } else {
+            &mut source.bad_offset
+        };
+        *count = count.saturating_add(1);
+    }
+}
+
+fn record_file_source(
+    engine: &mut Engine,
+    file: Source,
+    date: LogDate,
+    meta: u64,
+    decode: DecodeStats,
+) {
+    let Some(source) = engine.summary_source(Some(date)) else {
+        return;
+    };
+    if file == Source::Driver {
+        let driver = &mut source.driver;
+        driver.found = true;
+        driver.meta = driver.meta.saturating_add(meta);
+        driver.long_lines = driver.long_lines.saturating_add(decode.long_lines);
+        driver.replaced_chars = driver.replaced_chars.saturating_add(decode.replaced_chars);
+    } else {
+        source.meta = source.meta.saturating_add(meta);
+        source.long_lines = source.long_lines.saturating_add(decode.long_lines);
+        source.replaced_chars = source.replaced_chars.saturating_add(decode.replaced_chars);
+    }
+}
+
+fn read_lines(file: &ReplayFile<'_>, mut visit: impl FnMut(ParsedLine<'_>)) -> DecodeStats {
     let mut decoder = Decoder::new();
     for chunk in file.bytes.chunks(8192) {
         for line in decoder.push(chunk) {
@@ -132,6 +191,7 @@ fn read_lines(file: &ReplayFile<'_>, mut visit: impl FnMut(ParsedLine<'_>)) {
     for line in decoder.finish() {
         visit(parse_line(&line));
     }
+    decoder.stats()
 }
 
 #[derive(Default)]
@@ -173,18 +233,33 @@ impl ReplayInput {
                     &mut input.driver
                 }
             };
-            read_lines(file, |line| {
+            let first = records.len();
+            let mut meta = 0_u64;
+            let decode = read_lines(file, |line| {
                 input.counts.observe(&line);
                 match line {
                     ParsedLine::Entry(entry) => input.offsets.push(name.kind, entry, |filled| {
                         records.push_back(ReplayRecord::from(filled));
                     }),
                     ParsedLine::NoHeader(_) => {
-                        records.push_back(ReplayRecord::Line(None, LineQuality::NoHeader));
+                        records.push_back(ReplayRecord::Line(
+                            None,
+                            LineQuality::NoHeader,
+                            Some(name.date),
+                            false,
+                        ));
                     }
-                    ParsedLine::Meta(_) => {}
+                    ParsedLine::Meta(_) => meta = meta.saturating_add(1),
                 }
             });
+            records.insert(
+                first,
+                ReplayRecord::FileSource {
+                    date: name.date,
+                    meta,
+                    decode,
+                },
+            );
         }
         input
     }
@@ -195,9 +270,13 @@ impl ReplayInput {
         // can move the engine past that time.
         let driver_first = self.driver.front().is_some_and(|driver| {
             self.server.front().is_none_or(|server| match server {
-                ReplayRecord::Rebuild(date) => driver
-                    .time()
-                    .is_none_or(|(at, offset)| at.to_local(offset).0 < *date),
+                ReplayRecord::Rebuild(date) => {
+                    driver.date().is_none_or(|row_date| row_date < *date)
+                }
+                _ if driver.time().is_none() => match (driver.date(), server.date()) {
+                    (Some(driver), Some(server)) => driver <= server,
+                    _ => true,
+                },
                 _ => driver.time().map(|(at, _)| at) < server.time().map(|(at, _)| at),
             })
         });
@@ -214,17 +293,35 @@ impl ReplayInput {
 }
 
 enum ReplayRecord {
-    Event(Timed),
-    Line(Option<(LogTime, UtcOffset)>, LineQuality),
+    Event(Timed, bool),
+    Line(
+        Option<(LogTime, UtcOffset)>,
+        LineQuality,
+        Option<LogDate>,
+        bool,
+    ),
+    FileSource {
+        date: LogDate,
+        meta: u64,
+        decode: DecodeStats,
+    },
     Rebuild(LogDate),
 }
 
 impl ReplayRecord {
     fn time(&self) -> Option<(LogTime, UtcOffset)> {
         match self {
-            Self::Event(event) => Some((event.at, event.offset)),
-            Self::Line(at, _) => *at,
-            Self::Rebuild(_) => None,
+            Self::Event(event, _) => Some((event.at, event.offset)),
+            Self::Line(at, _, _, _) => *at,
+            Self::FileSource { .. } | Self::Rebuild(_) => None,
+        }
+    }
+
+    fn date(&self) -> Option<LogDate> {
+        match self {
+            Self::FileSource { date, .. } => Some(*date),
+            Self::Line(None, _, file_date, _) => *file_date,
+            _ => self.time().map(|(at, offset)| at.to_local(offset).0),
         }
     }
 }
@@ -233,14 +330,19 @@ impl From<FilledEntry<'_>> for ReplayRecord {
     fn from(filled: FilledEntry<'_>) -> Self {
         let mut counts = MapCounts::default();
         if let Some(event) = map_entry(&filled.entry, filled.file, &mut counts) {
-            return Self::Event(event);
+            return Self::Event(event, filled.bad_offset);
         }
         let quality = if counts.server.unparsed + counts.driver.unparsed > 0 {
             LineQuality::Unparsed
         } else {
             LineQuality::Other
         };
-        Self::Line(Some((filled.entry.at, filled.entry.offset)), quality)
+        Self::Line(
+            Some((filled.entry.at, filled.entry.offset)),
+            quality,
+            None,
+            filled.bad_offset,
+        )
     }
 }
 
@@ -335,6 +437,46 @@ mod tests {
                 no_header: 0,
             },
         );
+    }
+
+    #[test]
+    fn attaches_reader_and_parser_counts_to_the_daily_summary() {
+        let server = b"# File header\ninvalid\n[2026-11-28 14:00:00.000 +9 0x1 INFO Test] [1] valid \xff\n[2026-11-28 14:00:01.000 0x1 INFO Test] [1] Add new tracker: (invalid), connection type: 1\n";
+        let driver = concat!(
+            "# File header\n",
+            "invalid\n",
+            "[2026-11-28 14:00:01.000 0x1 INFO Test] [1] driver activity\n",
+        );
+        let result = replay_with_engine(
+            &[
+                ReplayFile {
+                    name: SERVER,
+                    bytes: server,
+                },
+                file(DRIVER, driver),
+            ],
+            EngineConfig::default(),
+        );
+        let [summary] = &result.summaries[..] else {
+            panic!("expected one server day");
+        };
+        let source = &summary.source;
+        assert_eq!((source.lines, source.meta, source.no_header), (3, 1, 1));
+        assert_eq!(
+            (source.other, source.unparsed, source.bad_offset),
+            (1, 1, 1)
+        );
+        assert_eq!(source.replaced_chars, 1);
+        assert!(source.driver.found);
+        assert_eq!(
+            (
+                source.driver.lines,
+                source.driver.meta,
+                source.driver.no_header
+            ),
+            (2, 1, 1)
+        );
+        assert_eq!(source.driver.bad_offset, 1);
     }
 
     #[test]
@@ -457,5 +599,31 @@ mod tests {
         assert_eq!(result.snapshot.at.to_string(), "2026-11-28 05:00:00.000");
         assert_eq!(result.stats.server.lines, 5);
         assert_eq!(result.stats.pushes, 1);
+    }
+
+    #[test]
+    fn skipped_server_day_keeps_metadata_from_the_next_driver_file() {
+        let earlier = "[2026-11-26 14:00:00.000 +9 0x1 INFO Test] [1] server activity\n";
+        let later = "[2026-11-28 14:00:00.000 +9 0x1 INFO Test] [1] server activity\n";
+        let driver = "# File header\ninvalid\n";
+        let result = replay_with_engine(
+            &[
+                file(SERVER, later),
+                file("ViveTrackerServer_20261126.txt", earlier),
+                file(DRIVER, driver),
+            ],
+            EngineConfig::default(),
+        );
+        let [earlier, later] = &result.summaries[..] else {
+            panic!("expected two recorded days and no summary for the skipped day");
+        };
+        assert!(!earlier.is_final);
+        assert!(!later.is_final);
+        assert!(!earlier.source.driver.found);
+        assert!(later.source.driver.found);
+        assert_eq!(
+            (later.source.driver.meta, later.source.driver.no_header),
+            (1, 1)
+        );
     }
 }
