@@ -1,0 +1,50 @@
+/* OpenUT design tokens, 6th version (mirrors docs/design/ui/m1.md, section 1).
+   The app is drawn with egui / fontdue, not with this CSS. This file only feeds the mockups. */
+
+:root {
+  /* One family (owner policy). The app loads Yu Gothic UI from the Windows font folder.
+     The screenshots in shots/ were taken on Linux with Noto Sans JP standing in. */
+  --font: "Yu Gothic UI", "Meiryo UI", "Noto Sans JP", sans-serif;
+
+  /* Main window: one dark navy theme, quiet like the VR apps it sits next to (1.2) */
+  --bg: #141821;        /* window ground */
+  --panel: #1C212B;     /* status panel, operation panels, the tracker table */
+  --panel-2: #262C38;   /* a button under the pointer, the row menu, the table header */
+  --line: #2F3644;      /* dividers, rules between rows, outlines of buttons at rest */
+  --ink: #ECEFF4;       /* text; the body of a connected tracker or dongle */
+  --ink-2: #A2ABBA;     /* column headers, the part of a serial before the tail, values shown greyed */
+  --muted: #8B94A4;     /* marks and words shown greyed (last values, not current) */
+  --idle: #6B7588;      /* not connected: the outline of a tracker, the empty ring */
+  --dark-body: #252B36; /* not connected: the body of a tracker or dongle, close to the panel */
+  --on-ink: #10131A;    /* text on a filled ink button ("フォルダーを選ぶ") */
+
+  /* The three states of W-10, in the colours VIVE Hub uses (green done, blue syncing), red added by OpenUT */
+  --ok: #45C486;        /* 正常、接続済み */
+  --wait: #4BA3FF;      /* 待機中、同期中 */
+  --fault: #FF7266;     /* 異常 */
+  --on-state: #10131A;  /* the "!" cut in the fault mark */
+
+  /* Tray, toast notification logo, window icon: one colour each that works on light and dark Windows surfaces */
+  --icon-ok: #2F9466;
+  --icon-wait: #3A7BD5;
+  --icon-fault: #D64A3C;
+
+  /* SteamVR notice overlay (provisional, 4th version) */
+  --vr-panel: rgba(30, 34, 40, 0.94);
+  --vr-edge: rgba(255, 255, 255, 0.14);
+  --vr-ink: #F3F6FA;
+  --vr-ink-2: #C3CEDC;
+
+  /* Mockups of the 4th version (tray, toast, VR) still read these names */
+  --accent: #9DB2FF;
+  --on-accent: #15181C;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  font-family: var(--font);
+  color: var(--ink);
+  background: #0C0F14;
+}

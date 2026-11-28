@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OpenUT VR 内のオーバーレイ（仮）</title>
+<link rel="stylesheet" href="tokens.css">
+<script src="wrap.js"></script>
+<script src="icons.js"></script>
+<script src="text.js"></script>
+<script src="scenarios.js"></script>
+<style>
+  body { padding: 24px; background: #6F7A86; }
+  .cap { font-size: 13px; color: #F2F4F7; margin: 0 0 8px 2px; }
+
+  /* Notice overlay (5.1, provisional: 4th version), laid out in texture pixels (1280 wide). zoom 0.5 = one texture pixel per device pixel
+     in a deviceScaleFactor 2 screenshot. Text broken with wrap.js (5.4), no limit on the number of lines. */
+  .panel { width: 1280px; display: grid; grid-template-columns: 80px 1fr; column-gap: 36px; align-items: start;
+           padding: 52px 64px 56px 56px; border-radius: 28px; background: var(--vr-panel);
+           box-shadow: inset 0 0 0 3px var(--vr-edge); font-family: var(--font); }
+  .panel .h { margin: 0; font-size: 64px; line-height: 80px; font-weight: 700; color: var(--vr-ink); }
+  .panel .a { margin: 12px 0 0; font-size: 54px; line-height: 73px; font-weight: 400; color: var(--vr-ink-2); }
+  #vr-panels, #vr-long, #vr-serial32 { display: inline-grid; gap: 20px; padding: 24px; background: #8A949E; align-items: start; }
+  #vr-panels .panel, #vr-long .panel, #vr-serial32 .panel { zoom: 0.5; }
+
+  /* Field of view: 100 degrees across the frame. Overlay 24.1 degrees wide, centre 10.6 degrees below. */
+  #vr-view { display: inline-grid; grid-template-columns: 800px 800px; gap: 16px; padding: 16px; background: #E3E7EC; }
+  .view { position: relative; width: 800px; height: 450px; overflow: hidden; border-radius: 6px; }
+  .view .anchor { position: absolute; left: 50%; top: calc(50% + 85px); transform: translate(-50%, -50%); z-index: 1; }
+  .view .panel { zoom: 0.1508; }
+  .room { background: linear-gradient(to bottom, #3B3F47 0%, #565A60 52%, #2C2A28 52%, #46403A 100%); }
+  .room::before { content: ""; position: absolute; inset: 52% 0 0; background:
+      repeating-linear-gradient(90deg, rgba(255,255,255,.05) 0 2px, transparent 2px 80px); }
+  .room::after { content: ""; position: absolute; left: 140px; top: 70px; width: 220px; height: 150px;
+      background: #D9C99A; opacity: .55; border-radius: 4px; box-shadow: 380px 30px 0 -20px #8FA4B8; }
+  .day { background: linear-gradient(to bottom, #BFD8EE 0%, #E9F1F6 50%, #B9C49A 50%, #7E8F5E 100%); }
+  .day::after { content: ""; position: absolute; left: 520px; top: 60px; width: 120px; height: 120px;
+      border-radius: 50%; background: #FFF8DC; filter: blur(8px); }
+  .cross { position: absolute; left: 50%; top: 50%; width: 14px; height: 14px; transform: translate(-50%, -50%);
+           border: 1.5px solid rgba(255,255,255,.7); border-radius: 50%; z-index: 1; }
+  .day .cross { border-color: rgba(0,0,0,.45); }
+
+</style>
+</head>
+<body>
+<p class="cap">案内のオーバーレイ（仮。テクスチャーの画素のまま。幅1280）</p>
+<div id="vr-panels"></div>
+<p class="cap" style="margin-top:28px">長い呼び名、まとめた案内、長いしきい値</p>
+<div id="vr-long"></div>
+<p class="cap" style="margin-top:28px">末尾が32文字の呼び名（末尾31文字が重なる2台。番号のない台を含む）</p>
+<div id="vr-serial32"></div>
+<p class="cap" style="margin-top:28px">視野の中（横100°。オーバーレイは幅24°、中心は10.6°下）</p>
+<div id="vr-view"></div>
+<script>
+(() => {
+  const I = window.OpenUTIcons, X = window.OpenUTText, W = X.words;
+  const fam = getComputedStyle(document.documentElement).getPropertyValue("--font").trim();
+  const esc = (s) => s.replace(/[&<>]/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[m]));
+  const wrapH = (s, font, w) => window.OpenUTWrap.wrap(s, font, w).map(esc).join("<br>");
+  const L = (hub, tail, host) => X.label({ hub, tail, host });
+
+  // One notice overlay: glyph 80 (fault or ok), headline 64 Bold, action 54 Regular, width 1044 (5.1).
+  function panel(n, ok) {
+    const g = I.state(ok ? "ok" : "fault", 80, ok ? "var(--ok)" : "var(--fault)");
+    return `<div class="panel">${g}<div><p class="h">${wrapH(n.headline, `700 64px ${fam}`, 1044)}</p>` +
+      (n.action ? `<p class="a">${wrapH(n.action, `400 54px ${fam}`, 1044)}</p>` : "") + `</div></div>`;
+  }
+  const H = L(2, "0001"), T = L(1, "0002");
+  document.getElementById("vr-panels").innerHTML =
+    panel(X.notice("R1", "Raised", "", H)) +
+    panel(X.notice("R4", "Raised", L(null, "0003"), "")) +
+    panel(X.notice("R2", "Raised", T, H)) +
+    panel(X.notice("R1", "Resolved", "", ""), true);
+
+  // Long: a tail of the whole serial (13 characters), the unknown host, 99 merged notices, r5.wait_s = 86399.
+  const longT = L(5, "00XX0000A0001"), noHost = L(null, null, true);
+  document.getElementById("vr-long").innerHTML =
+    panel(X.notice("R1", "Escalated", "", longT, { more: 99 })) +
+    panel(X.notice("R2", "Raised", longT, noHost, { more: 99 })) +
+    panel(X.notice("R5", "Raised", longT, "", { wait: 86399, more: 99 })) +
+    panel(X.notice("R1", "Resolved", "", "", { more: 99 }), true);
+
+  // The longest tails (design 3.2, 4.4): the two made-up serials of window.html?s=j, 32 characters each,
+  // sharing their last 31. Rule 3 of 5.4 breaks the run of serial characters where the line is full.
+  const [SA, SB] = window.OpenUTLong32;
+  document.getElementById("vr-serial32").innerHTML =
+    panel(X.notice("R1", "Raised", "", L(1, SA), { more: 1 })) +
+    panel(X.notice("R4", "Raised", L(null, SB), "")) +
+    panel(X.notice("R2", "Raised", L(3, SB), L(1, SA), { more: 99 }));
+
+  const v = (cls, n) => `<div class="view ${cls}"><span class="cross"></span><div class="anchor">${panel(n)}</div></div>`;
+  document.getElementById("vr-view").innerHTML = v("room", X.notice("R1", "Raised", "", H)) + v("day", X.notice("R2", "Raised", T, H));
+
+})();
+</script>
+</body>
+</html>

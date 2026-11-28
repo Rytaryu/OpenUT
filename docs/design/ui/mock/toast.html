@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OpenUT トースト通知（仮）</title>
+<link rel="stylesheet" href="tokens.css">
+<script src="glyph.js"></script>
+<style>
+  /* Windows draws the toast notification. Only the content (logo, title, text lines) is ours.
+     The frame below approximates Windows 11 so the wording can be judged in place. */
+  body { padding: 24px; }
+  #toast { display: inline-grid; grid-template-columns: 364px 364px 364px; gap: 24px; padding: 24px;
+           background: #AEB9C4; align-items: start; }
+  .toast { border-radius: 8px; background: #F9F9F9; color: #1B1B1B; padding: 12px 16px 16px;
+           box-shadow: 0 0 0 1px rgba(0,0,0,.08), 0 10px 30px rgba(0,0,0,.22); }
+  .toast.dark { background: #2C2C2C; color: #FFFFFF; box-shadow: 0 0 0 1px rgba(255,255,255,.08), 0 10px 30px rgba(0,0,0,.4); }
+  .head { display: flex; align-items: center; gap: 8px; font-size: 12px; height: 20px; }
+  .head .sender { width: 16px; height: 16px; border-radius: 3px; background: #8A8F98; }
+  .head .x { margin-left: auto; opacity: .7; }
+  .content { display: grid; grid-template-columns: 48px 1fr; column-gap: 12px; margin-top: 12px; }
+  .t { margin: 0; font-size: 14px; font-weight: 700; line-height: 20px; }
+  .b { margin: 2px 0 0; font-size: 14px; line-height: 20px; }
+  .by { margin: 4px 0 0; font-size: 14px; line-height: 20px; opacity: .72; }
+</style>
+</head>
+<body>
+<div id="toast">
+  <div class="toast">
+    <div class="head"><span class="sender"></span>Windows PowerShell<span class="x">✕</span></div>
+    <div class="content">
+      <canvas data-glyph="fault" data-size="96" data-dpr="2" data-color="--icon-fault"></canvas>
+      <div><p class="t">トラッキングが始まりません</p>
+        <p class="b">トラッカー2（…0001）の電源だけを入れ直してください。<br>ほかのトラッカーとドングルは、そのままにしてください</p>
+        <p class="by">OpenUT</p></div>
+    </div>
+  </div>
+  <div class="toast">
+    <div class="head"><span class="sender"></span>Windows PowerShell<span class="x">✕</span></div>
+    <div class="content">
+      <canvas data-glyph="ok" data-size="96" data-dpr="2" data-color="--icon-ok"></canvas>
+      <div><p class="t">トラッキングが始まらない問題が直りました</p>
+        <p class="by">OpenUT</p></div>
+    </div>
+  </div>
+  <div class="toast dark">
+    <div class="head"><span class="sender"></span>Windows PowerShell<span class="x">✕</span></div>
+    <div class="content">
+      <canvas data-glyph="fault" data-size="96" data-dpr="2" data-color="--icon-fault"></canvas>
+      <div><p class="t">トラッカー1（…0002）の準備に時間がかかっています（ほ&#x2060;か&#x2060;1&#x2060;件）</p>
+        <p class="b">トラッカー2（…0001）の近くに置いて、待ってください</p>
+        <p class="by">OpenUT</p></div>
+    </div>
+  </div>
+</div>
+</body>
+</html>
