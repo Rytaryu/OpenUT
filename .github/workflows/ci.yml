@@ -1,0 +1,51 @@
+name: CI
+# The checks of every PR and of main (docs/project/roles/README.md, section 6. D-8, D-15).
+# The hand-off (handoff.yml) merges an approved PR only when this workflow has
+# passed on the PR's latest commit, and stops merging while it fails on main.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [main]
+  schedule:
+    # 03:23 JST, every day: main is checked even on days without a push.
+    - cron: '23 18 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: verify (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install the pinned Rust toolchain (rust-toolchain.toml)
+        shell: bash
+        run: rustup show active-toolchain || rustup toolchain install
+      - name: Verify
+        shell: bash
+        env:
+          OPENUT_SKIP_SCRIPT_TESTS: '1'
+        run: bash .github/scripts/verify.sh
+
+  scripts:
+    name: hand-off scripts
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - run: node --test .github/scripts/*.test.mjs

@@ -1,11 +1,5 @@
-__pycache__/
-*.pyc
-.venv/
-.pytest_cache/
-.ruff_cache/
-dist/
-build/
-*.egg-info/
-# never commit raw logs
+/target/
+# never commit raw logs or the tables that map real values to replacements
 *.tgz
 raw-logs/
+*.anonymize-map.*
