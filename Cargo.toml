@@ -32,3 +32,5 @@ workspace = true
 [dependencies]
 openut-core = { path = "crates/openut-core" }
 openut-hublog = { path = "crates/openut-hublog" }
+serde = { version = "1.0.229", features = ["derive"] }
+toml = "1.2.3"
