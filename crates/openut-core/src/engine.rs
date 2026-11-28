@@ -82,6 +82,7 @@ impl LineCounts {
 pub struct EngineStats {
     pub time_regressions: u64,
     pub power_offs: u64,
+    pub long_losses: u64,
     /// Notification deliveries committed by `Engine::drain`.
     pub pushes: u64,
     pub server: LineCounts,
@@ -94,6 +95,7 @@ impl EngineStats {
     pub fn merge(&mut self, other: Self) {
         self.time_regressions = self.time_regressions.saturating_add(other.time_regressions);
         self.power_offs = self.power_offs.saturating_add(other.power_offs);
+        self.long_losses = self.long_losses.saturating_add(other.long_losses);
         self.pushes = self.pushes.saturating_add(other.pushes);
         self.server.merge(other.server);
         self.driver.merge(other.driver);
@@ -125,7 +127,15 @@ pub struct Engine {
 }
 
 impl Engine {
-    pub fn new(cfg: EngineConfig) -> Self {
+    pub fn new(mut cfg: EngineConfig) -> Self {
+        let r4 = &cfg.rules.r4;
+        cfg.summary.finalize_delay_s = cfg
+            .summary
+            .finalize_delay_s
+            .max(r4.notice_after_s)
+            .max(r4.burst_s)
+            .max(r4.server_s)
+            .max(cfg.rules.r5.wait_s);
         Self {
             state: State::new(cfg.state.dup_ms),
             notices: NoticeScheduler::new(cfg.notice.clone()),
@@ -145,9 +155,23 @@ impl Engine {
         self.now
     }
 
-    /// Runs deadlines strictly before `at`. Server records at `at` can still cancel
-    /// or update timers scheduled for the same instant.
+    /// Runs rule timers and closes summaries with deadlines strictly before `at`.
+    /// Server records at `at` can still cancel rule timers scheduled for that instant.
     pub fn advance_to(&mut self, at: LogTime) {
+        let delay_s = self.cfg.summary.finalize_delay_s;
+        while let Some(cutoff) = self
+            .summaries
+            .next_close_deadline(delay_s)
+            .filter(|&cutoff| cutoff < at)
+        {
+            self.advance_timers_to(cutoff);
+            self.closed_days
+                .extend(self.summaries.close_days(cutoff, delay_s));
+        }
+        self.advance_timers_to(at);
+    }
+
+    fn advance_timers_to(&mut self, at: LogTime) {
         if self.now.is_some_and(|now| now >= at) {
             return;
         }
@@ -162,7 +186,7 @@ impl Engine {
         for cut in power_offs {
             self.summaries.power_off(
                 cut.at,
-                self.offset,
+                cut.offset,
                 cut.tracker,
                 cut.conn,
                 cut.serial.as_ref(),
@@ -170,8 +194,10 @@ impl Engine {
         }
         self.record_detections(first);
         self.notices.advance_to(at);
-        self.summaries
+        let long_losses = self
+            .summaries
             .advance_to(at, self.offset, self.cfg.rules.r5.wait_s);
+        self.stats.long_losses = self.stats.long_losses.saturating_add(long_losses);
         self.now = Some(at);
     }
 
@@ -190,10 +216,10 @@ impl Engine {
         timed.offset = self.offset;
         let update = self.state.apply(&timed);
         let after = self.snapshot();
-        self.summaries
-            .event(&timed, &before, &after, &update, self.cfg.rules.r5.wait_s);
-        if update.out_of_order {
-            let source = self.summaries.source(None);
+        self.summaries.event(&timed, &before, &after, &update);
+        if update.out_of_order
+            && let Some(source) = self.summaries.source(None)
+        {
             source.out_of_order = source.out_of_order.saturating_add(1);
         }
         let first = self.detections.len();
@@ -205,7 +231,6 @@ impl Engine {
             &mut self.detections,
         );
         self.record_detections(first);
-        self.closed_days.extend(self.summaries.close_days());
     }
 
     pub fn note_line(&mut self, file: FileKind, at: Option<LogTime>, quality: LineQuality) {
@@ -237,7 +262,6 @@ impl Engine {
                 if let Some((at, offset)) = at {
                     let before = self.snapshot();
                     self.observe_server_line(at, offset, &before, Some(quality));
-                    self.closed_days.extend(self.summaries.close_days());
                 } else if let Some(source) = self.summary_source(file_date) {
                     count_server_record(source, Some(quality));
                 }
@@ -250,7 +274,7 @@ impl Engine {
     /// time can move beyond it.
     pub fn driver_needed_through(&self) -> Option<LogTime> {
         let now = self.now?;
-        // Wall-time ticks cannot close a day, so use the last actual server row.
+        // Wall ticks may close summaries without changing the server's input day.
         let basis = self.last_server_row.unwrap_or(now);
         let local_ms =
             (basis.0.rem_euclid(DAY_MS) + i64::from(self.offset.0) * 60_000).rem_euclid(DAY_MS);
@@ -264,10 +288,16 @@ impl Engine {
     }
 
     pub fn next_deadline(&self) -> Option<LogTime> {
+        // An idle tick closes a summary as soon as the clock passes its cutoff.
+        let summary_tick = self
+            .summaries
+            .next_close_deadline(self.cfg.summary.finalize_delay_s)
+            .and_then(|cutoff| cutoff.0.checked_add(1).map(LogTime));
         self.rules
             .next_deadline()
             .into_iter()
             .chain(self.notices.next_deadline())
+            .chain(summary_tick)
             .min()
     }
 
@@ -326,12 +356,15 @@ impl Engine {
         days
     }
 
+    /// Freezes pending prior days at end of input without advancing time.
+    /// The latest observed day stays open if its normal cutoff has not arrived.
+    pub fn finish_summaries(&mut self) {
+        self.closed_days.extend(self.summaries.finish());
+    }
+
     /// Additional parser or reader counters with no effect on observed time.
     pub fn summary_source(&mut self, date: Option<LogDate>) -> Option<&mut SummarySource> {
-        if date.is_some_and(|date| self.summaries.is_closed(date)) {
-            return None;
-        }
-        Some(self.summaries.source(date))
+        self.summaries.source(date)
     }
 
     pub fn snapshot(&self) -> Snapshot {
@@ -363,10 +396,17 @@ impl Engine {
         self.last_server_row = Some(effective);
         self.summaries
             .observe(effective, self.offset, before, self.cfg.summary.gap_s);
-        let source = self.summaries.source(None);
-        count_server_record(source, quality);
-        if effective != at {
-            source.time_regressions = source.time_regressions.saturating_add(1);
+        // An exact-cutoff row establishes the observation interval before the day
+        // closes. Its event and source counters are processed after closure.
+        self.closed_days.extend(
+            self.summaries
+                .close_days(effective, self.cfg.summary.finalize_delay_s),
+        );
+        if let Some(source) = self.summaries.source(None) {
+            count_server_record(source, quality);
+            if effective != at {
+                source.time_regressions = source.time_regressions.saturating_add(1);
+            }
         }
         effective
     }

@@ -5,7 +5,8 @@ use std::path::{Path, PathBuf};
 use openut::replay::{Expectations, ObservedSummaries, RaisedDetection};
 use openut_core::engine::{Engine, EngineConfig, FileKind as Source, LineQuality, Output};
 use openut_core::rules::{RuleId, Step};
-use openut_core::time::{LogTime, UtcOffset};
+use openut_core::summary::Summary;
+use openut_core::time::{LogDate, LogTime, UtcOffset};
 use openut_core::tracker::TrackerKey;
 use openut_hublog::decode::decode_utf16le_text;
 use openut_hublog::header::{FileKind, ParsedLine, parse_line};
@@ -266,32 +267,53 @@ fn check_midnight(case: &SavedCase) {
 }
 
 fn apply_midnight_file(engine: &mut Engine, input: &ReplayFile<'_>) {
-    let date = parse_log_name(input.name).expect("known log name").date;
+    let file = parse_log_name(input.name).expect("known log name");
+    let source = match file.kind {
+        FileKind::Server => Source::Server,
+        FileKind::Driver => {
+            engine
+                .summary_source(Some(file.date))
+                .expect("fixture day is still open")
+                .driver
+                .found = true;
+            Source::Driver
+        }
+    };
     let log = std::str::from_utf8(input.bytes).expect("midnight fixture is UTF-8");
     for line in log.lines() {
         match parse_line(line) {
             ParsedLine::Meta(_) => {
-                engine
-                    .summary_source(Some(date))
-                    .expect("fixture day is still open")
-                    .meta += 1;
+                let counts = engine
+                    .summary_source(Some(file.date))
+                    .expect("fixture day is still open");
+                match source {
+                    Source::Server => counts.meta += 1,
+                    Source::Driver => counts.driver.meta += 1,
+                }
             }
             ParsedLine::Entry(entry) => {
                 let mut counts = MapCounts::default();
-                if let Some(event) = map_entry(&entry, FileKind::Server, &mut counts) {
+                if let Some(event) = map_entry(&entry, file.kind, &mut counts) {
                     engine.apply(event);
                 } else {
-                    assert_eq!(counts.server.other, 1);
-                    engine.note_line_at(
-                        Source::Server,
-                        Some((entry.at, entry.offset)),
-                        LineQuality::Other,
-                    );
+                    assert_eq!(counts.server.unparsed + counts.driver.unparsed, 0);
+                    engine.note_line_at(source, Some((entry.at, entry.offset)), LineQuality::Other);
                 }
             }
             ParsedLine::NoHeader(_) => panic!("all midnight fixture rows are readable"),
         }
     }
+}
+
+fn drain_summaries(engine: &mut Engine) -> Vec<Summary> {
+    engine
+        .drain()
+        .into_iter()
+        .filter_map(|output| match output {
+            Output::DayClosed(summary) => Some(*summary),
+            Output::Detection(_) | Output::Notice(_) => None,
+        })
+        .collect()
 }
 
 #[test]
@@ -317,20 +339,150 @@ fn steady_watch_and_rebuilding_reproduce_both_days_of_the_midnight_replay() {
             assert!(!days[0].is_final);
         }
         apply_midnight_file(&mut engine, next);
-        let mut summaries: Vec<_> = engine
-            .drain()
-            .into_iter()
-            .filter_map(|output| match output {
-                Output::DayClosed(summary) => Some(*summary),
-                Output::Detection(_) | Output::Notice(_) => None,
-            })
-            .collect();
+        let mut summaries = drain_summaries(&mut engine);
         summaries.extend(engine.open_summaries());
         assert_eq!(summaries, expected.summaries, "rebuilt = {rebuilt}");
     }
 }
 
 const NEXT_DAY_LOG: &str = "ViveTrackerServer_20261128.txt";
+const PREVIOUS_DAY_LOG: &str = "ViveTrackerServer_20261127.txt";
+
+fn grace_cutoff() -> LogTime {
+    let date = LogDate {
+        year: 2026,
+        month: 11,
+        day: 28,
+    };
+    LogTime::from_local(date, 0, 10, 0, 0, UtcOffset(9 * 60)).unwrap()
+}
+
+fn watch_and_replay_at_eof(files: &[ReplayFile<'_>]) -> ReplayResult {
+    let mut watch = Engine::new(EngineConfig::default());
+    for file in files {
+        apply_midnight_file(&mut watch, file);
+    }
+    let last_observed = watch.now().unwrap();
+    let cutoff = grace_cutoff();
+    watch.advance_to(cutoff);
+    assert!(drain_summaries(&mut watch).is_empty());
+    watch.advance_to(LogTime(cutoff.0 + 1));
+    let mut summaries = drain_summaries(&mut watch);
+    assert_eq!(summaries.len(), 1);
+    assert_eq!(summaries[0].date, "2026-11-27");
+    assert!(summaries[0].is_final);
+    summaries.extend(watch.open_summaries());
+
+    // Replay observes the same rows and reaches EOF earlier than the wall clock.
+    let replay = replay_with_flush(files, EngineConfig::default(), 0);
+    assert_eq!(replay.summaries, summaries);
+    assert_eq!(replay.snapshot.at, last_observed);
+    replay
+}
+
+#[test]
+fn a_power_off_decided_after_midnight_is_counted_on_the_cut_day() {
+    let previous = concat!(
+        "[2026-11-27 23:58:00.000 +9 0x1 INFO OETServer::AddTrackerCB] [1] Add new tracker: (1), connection type: 1\n",
+        "[2026-11-27 23:59:59.500 +9 0x1 INFO OETServer::RemoveTrackerCB] [1] Remove tracker (1), connection type: 1, power state:11\n",
+    );
+    let driver = "[2026-11-27 23:59:59.500 +9 0x1 INFO TrackerDongleHID::ParseIndication] [1] (1) Tracker is going to power-off.\n";
+    let early = "[2026-11-28 00:00:00.100 +9 0x1 INFO OETServer::CheckHostIsStarted] [1] Host running state:2 to 2\n";
+    let late = "[2026-11-28 00:00:05.000 +9 0x1 INFO OETServer::CheckHostIsStarted] [1] Host running state:2 to 2\n";
+    for next in [late.to_owned(), format!("{early}{late}")] {
+        let result = watch_and_replay_at_eof(&[
+            ReplayFile {
+                name: PREVIOUS_DAY_LOG,
+                bytes: previous.as_bytes(),
+            },
+            ReplayFile {
+                name: "ViveTrackerDriver_20261127.txt",
+                bytes: driver.as_bytes(),
+            },
+            ReplayFile {
+                name: NEXT_DAY_LOG,
+                bytes: next.as_bytes(),
+            },
+        ]);
+        assert_eq!(result.stats.power_offs, 1);
+        assert_eq!(result.summaries[0].trackers[0].power_offs, 1);
+        assert!(
+            result.summaries[1]
+                .trackers
+                .iter()
+                .all(|tracker| tracker.power_offs == 0)
+        );
+    }
+}
+
+#[test]
+fn a_serial_learned_after_midnight_labels_the_previous_days_connection() {
+    let previous = "[2026-11-27 23:59:59.000 +9 0x1 INFO OETServer::AddTrackerCB] [1] Add new tracker: (1), connection type: 1\n";
+    let early = "[2026-11-28 00:00:00.100 +9 0x1 INFO OETServer::CheckHostIsStarted] [1] Host running state:2 to 2\n";
+    let serial = "[2026-11-28 00:00:00.200 +9 0x1 INFO OETServer::GetDeviceInfoAndResponse] [1] Response - cmd type: 214, cmd key: (AAAA), device index: 1, result: 0, sn: (00XX000000009)\n";
+    for next in [serial.to_owned(), format!("{early}{serial}")] {
+        let result = watch_and_replay_at_eof(&[
+            ReplayFile {
+                name: PREVIOUS_DAY_LOG,
+                bytes: previous.as_bytes(),
+            },
+            ReplayFile {
+                name: NEXT_DAY_LOG,
+                bytes: next.as_bytes(),
+            },
+        ]);
+        let [tracker] = result.summaries[0].trackers.as_slice() else {
+            panic!("the entire previous connection belongs to one summary row");
+        };
+        assert_eq!(tracker.serial.as_deref(), Some("00XX000000009"));
+        assert_eq!(tracker.connected_s, 1.0);
+    }
+
+    let at_cutoff = serial.replace("00:00:00.200", "00:10:00.000");
+    let next = format!("{early}{at_cutoff}");
+    let files = [
+        ReplayFile {
+            name: PREVIOUS_DAY_LOG,
+            bytes: previous.as_bytes(),
+        },
+        ReplayFile {
+            name: NEXT_DAY_LOG,
+            bytes: next.as_bytes(),
+        },
+    ];
+    let result = replay_with_flush(&files, EngineConfig::default(), 0);
+    let mut watch = Engine::new(EngineConfig::default());
+    apply_midnight_file(&mut watch, &files[0]);
+    apply_midnight_file(
+        &mut watch,
+        &ReplayFile {
+            name: NEXT_DAY_LOG,
+            bytes: early.as_bytes(),
+        },
+    );
+    watch.advance_to(grace_cutoff());
+    assert!(drain_summaries(&mut watch).is_empty());
+    apply_midnight_file(
+        &mut watch,
+        &ReplayFile {
+            name: NEXT_DAY_LOG,
+            bytes: at_cutoff.as_bytes(),
+        },
+    );
+    let mut summaries = drain_summaries(&mut watch);
+    assert_eq!(summaries.len(), 1);
+    summaries.extend(watch.open_summaries());
+    assert_eq!(result.summaries, summaries);
+
+    let [previous, current] = result.summaries.as_slice() else {
+        panic!("expected the finalized previous day and the open current day");
+    };
+    assert!(previous.is_final);
+    assert_eq!(previous.trackers[0].serial, None);
+    assert_eq!(previous.trackers[0].connected_s, 1.0);
+    assert!(!current.is_final);
+    assert_eq!(current.trackers[0].serial.as_deref(), Some("00XX000000009"));
+}
 
 fn edit_next_day(case: &mut SavedCase, edit: impl FnOnce(&str) -> String) {
     let (_, bytes) = case

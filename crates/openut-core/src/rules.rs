@@ -6,7 +6,7 @@ mod tracking;
 
 use crate::event::Timed;
 use crate::state::{ConnId, ConnectionChange, State};
-use crate::time::LogTime;
+use crate::time::{LogTime, UtcOffset};
 use crate::tracker::{Serial, TrackerKey};
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -54,6 +54,7 @@ pub struct Detection {
 
 pub(crate) struct PowerOffCut {
     pub at: LogTime,
+    pub offset: UtcOffset,
     pub tracker: TrackerKey,
     pub conn: Option<ConnId>,
     pub serial: Option<Serial>,

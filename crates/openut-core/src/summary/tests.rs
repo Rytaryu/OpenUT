@@ -7,6 +7,9 @@ const A: TrackerKey = TrackerKey(2);
 const B: TrackerKey = TrackerKey(4);
 const WAIT_S: u64 = 2;
 const GAP_S: u64 = 600;
+const FINALIZE_S: u64 = 600;
+const MIDNIGHT: i64 = 86_400_000;
+const CUTOFF: i64 = MIDNIGHT + 600_000;
 
 #[derive(Default)]
 struct Case {
@@ -26,8 +29,7 @@ impl Case {
         let timed = Timed { at, offset, event };
         let update = self.state.apply(&timed);
         let after = self.state.snapshot(at);
-        self.summaries
-            .event(&timed, &before, &after, &update, WAIT_S);
+        self.summaries.event(&timed, &before, &after, &update);
     }
 
     fn add(&mut self, ms: i64, tracker: TrackerKey, usb: bool) {
@@ -141,9 +143,12 @@ fn splits_at_local_midnight_without_creating_unobserved_days() {
             status: PoseStatus::Ok,
         },
     );
-    case.summaries.source(Some(next_day)).driver.lines = 3;
+    case.summaries.source(Some(next_day)).unwrap().driver.lines = 3;
     assert_eq!(case.current().source.driver.lines, 0);
-    assert!(case.summaries.close_days().is_empty());
+    assert_eq!(
+        case.summaries.next_close_deadline(FINALIZE_S),
+        Some(local(next_day, 0, 10))
+    );
     case.apply_at(
         local(next_day, 0, 4),
         offset,
@@ -153,7 +158,17 @@ fn splits_at_local_midnight_without_creating_unobserved_days() {
         },
     );
 
-    let [closed]: [_; 1] = case.summaries.close_days().try_into().unwrap();
+    assert!(
+        case.summaries
+            .close_days(LogTime(local(next_day, 0, 10).0 - 1), FINALIZE_S)
+            .is_empty()
+    );
+    assert_eq!(case.summaries.open_summaries().len(), 2);
+    let [closed]: [_; 1] = case
+        .summaries
+        .close_days(local(next_day, 0, 10), FINALIZE_S)
+        .try_into()
+        .unwrap();
     assert_eq!(closed.date, "2026-11-27");
     assert!(closed.is_final);
     assert_eq!(closed.observed_until, "2026-11-28 00:00:00.000");
@@ -165,12 +180,166 @@ fn splits_at_local_midnight_without_creating_unobserved_days() {
     assert_eq!(next.trackers[0].losses, 1);
     assert_eq!(next.source.driver.lines, 3);
 
-    case.apply_at(local(later_day, 0, 1), offset, Event::ServerStopped);
-    let [closed]: [_; 1] = case.summaries.close_days().try_into().unwrap();
+    let [closed]: [_; 1] = case
+        .summaries
+        .close_days(local(later_day, 0, 1), FINALIZE_S)
+        .try_into()
+        .unwrap();
     assert_eq!(closed.date, "2026-11-28");
-    assert_eq!(closed.unobserved_s, 86_160.0);
+    assert_eq!(closed.observed_until, "2026-11-28 00:04:00.000");
+    assert_eq!(closed.unobserved_s, 0.0);
+    case.apply_at(local(later_day, 0, 1), offset, Event::ServerStopped);
     assert_eq!(case.current().unobserved_s, 60.0);
-    assert!(case.summaries.close_days().is_empty());
+    assert!(
+        case.summaries
+            .close_days(local(later_day, 0, 1), FINALIZE_S)
+            .is_empty()
+    );
+}
+
+#[test]
+fn the_open_prior_day_accepts_late_serial_power_and_loss_updates() {
+    let mut case = Case::default();
+    case.add(MIDNIGHT - 5_000, A, false);
+    case.add(MIDNIGHT - 5_000, B, false);
+    case.pose(MIDNIGHT - 3_000, A, PoseStatus::Ok);
+    case.pose(MIDNIGHT - 1_000, A, PoseStatus::Lost);
+    case.remove(MIDNIGHT - 500, B);
+    case.identify(MIDNIGHT + 500, A, "SYNTHETIC-A", 1);
+    case.summaries.power_off(
+        LogTime(MIDNIGHT - 500),
+        UtcOffset(0),
+        B,
+        Some(ConnId(2)),
+        None,
+    );
+    assert_eq!(
+        case.summaries
+            .advance_to(LogTime(MIDNIGHT + 1_000), UtcOffset(0), WAIT_S),
+        0
+    );
+    assert_eq!(
+        case.summaries
+            .advance_to(LogTime(MIDNIGHT + 1_001), UtcOffset(0), WAIT_S),
+        1
+    );
+    assert!(
+        case.summaries
+            .close_days(LogTime(CUTOFF - 1), FINALIZE_S)
+            .is_empty()
+    );
+    let [old]: [_; 1] = case
+        .summaries
+        .close_days(LogTime(CUTOFF), FINALIZE_S)
+        .try_into()
+        .unwrap();
+    assert_eq!(old.observed_until, "1970-01-02 00:00:00.000");
+    assert_eq!(old.trackers[0].serial.as_deref(), Some("SYNTHETIC-A"));
+    assert_eq!(old.trackers[0].long_losses, 1);
+    assert_eq!(old.trackers[1].power_offs, 1);
+    assert!(
+        case.summaries
+            .close_days(LogTime(CUTOFF + 1), FINALIZE_S)
+            .is_empty()
+    );
+}
+
+#[test]
+fn a_wall_close_freezes_observed_time_before_the_first_next_day_row() {
+    let mut case = Case::default();
+    let old_date = LogTime(MIDNIGHT - 1).to_local(UtcOffset(0)).0;
+    case.add(MIDNIGHT - 5_000, A, false);
+    case.pose(MIDNIGHT - 1_000, A, PoseStatus::Ok);
+    let [old]: [_; 1] = case
+        .summaries
+        .close_days(LogTime(CUTOFF), FINALIZE_S)
+        .try_into()
+        .unwrap();
+    assert_eq!(old.observed_until, "1970-01-01 23:59:59.000");
+    assert_eq!(old.trackers[0].connected_s, 4.0);
+    assert_eq!(old.trackers[0].serial, None);
+    assert!(case.summaries.is_closed(old_date));
+    assert!(case.summaries.source(None).is_none());
+    assert!(case.summaries.source(Some(old_date)).is_none());
+
+    case.summaries.power_off(
+        LogTime(MIDNIGHT - 500),
+        UtcOffset(0),
+        A,
+        Some(ConnId(1)),
+        None,
+    );
+    case.summaries.observe(
+        LogTime(MIDNIGHT - 1),
+        UtcOffset(0),
+        &case.state.snapshot(LogTime(MIDNIGHT - 1)),
+        GAP_S,
+    );
+    assert!(case.summaries.open_summaries().is_empty());
+
+    case.identify(CUTOFF, A, "SYNTHETIC-A", 1);
+    assert_eq!(case.current().date, "1970-01-02");
+    assert_eq!(
+        case.current().trackers[0].serial.as_deref(),
+        Some("SYNTHETIC-A")
+    );
+    assert!(
+        case.summaries
+            .close_days(LogTime(CUTOFF), FINALIZE_S)
+            .is_empty()
+    );
+}
+
+#[test]
+fn long_losses_that_mature_after_closure_count_only_in_the_run() {
+    let mut case = Case::default();
+    let loss = MIDNIGHT - 1_000;
+    case.add(loss - 2_000, A, false);
+    case.pose(loss - 1_000, A, PoseStatus::Ok);
+    case.pose(loss, A, PoseStatus::Lost);
+    assert_eq!(
+        case.summaries
+            .advance_to(LogTime(CUTOFF), UtcOffset(0), 900),
+        0
+    );
+    let [old]: [_; 1] = case
+        .summaries
+        .close_days(LogTime(CUTOFF), FINALIZE_S)
+        .try_into()
+        .unwrap();
+    assert_eq!(old.trackers[0].long_losses, 0);
+    assert_eq!(
+        case.summaries
+            .advance_to(LogTime(loss + 900_001), UtcOffset(0), 900),
+        1
+    );
+    assert_eq!(
+        case.summaries
+            .advance_to(LogTime(loss + 1_000_000), UtcOffset(0), 900),
+        0
+    );
+    assert!(case.summaries.open_summaries().is_empty());
+}
+
+#[test]
+fn eof_finalizes_only_prior_observed_days_without_advancing_time() {
+    let mut case = Case::default();
+    case.add(MIDNIGHT - 5_000, A, false);
+    assert!(case.summaries.finish().is_empty());
+    case.pose(MIDNIGHT + 2_000, A, PoseStatus::Ok);
+    let future = LogTime(MIDNIGHT * 2).to_local(UtcOffset(0)).0;
+    case.summaries.source(Some(future)).unwrap().driver.lines = 1;
+    let [old]: [_; 1] = case.summaries.finish().try_into().unwrap();
+    assert!(old.is_final);
+    assert_eq!(old.observed_until, "1970-01-02 00:00:00.000");
+    assert_eq!(old.trackers[0].connected_s, 5.0);
+    assert_eq!(case.current().observed_until, "1970-01-02 00:00:02.000");
+    assert!(!case.current().is_final);
+    assert!(case.summaries.finish().is_empty());
+    assert_eq!(
+        case.summaries.next_close_deadline(FINALIZE_S),
+        Some(LogTime(MIDNIGHT + CUTOFF))
+    );
 }
 
 #[test]

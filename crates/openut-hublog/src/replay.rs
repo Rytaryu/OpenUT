@@ -68,6 +68,7 @@ pub fn replay_with_engine(files: &[ReplayFile<'_>], cfg: EngineConfig) -> Replay
 }
 
 /// Replay the saved logs and explicitly advance the final server time by `flush_s` seconds.
+/// Pending prior days are finalized at end of input.
 pub fn replay_with_flush(
     files: &[ReplayFile<'_>],
     cfg: EngineConfig,
@@ -109,6 +110,7 @@ pub fn replay_with_flush(
         let millis = i64::try_from(flush_s.saturating_mul(1_000)).unwrap_or(i64::MAX);
         engine.advance_to(LogTime(last.0.saturating_add(millis)));
     }
+    engine.finish_summaries();
     collect_segment(&mut engine, &mut detections, &mut summaries, &mut stats);
     stats.pushes = engine.stats().pushes;
 
@@ -615,6 +617,8 @@ mod tests {
         let [earlier, later] = &result.summaries[..] else {
             panic!("expected two recorded days and no summary for the skipped day");
         };
+        assert!(!earlier.is_final);
+        assert!(!later.is_final);
         assert!(!earlier.source.driver.found);
         assert!(later.source.driver.found);
         assert_eq!(

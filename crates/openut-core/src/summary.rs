@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::mem;
 
 use crate::event::{Event, Timed};
-use crate::rules::{Detection, RuleId, Step};
+use crate::rules::{Detection, RuleId, Step, after};
 use crate::state::{
     ConnId, ConnectionChangeKind, Phase, Snapshot, StateTally, StateUpdate, TrackerView,
 };
@@ -17,11 +17,15 @@ mod tests;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SummaryConfig {
     pub gap_s: u64,
+    pub finalize_delay_s: u64,
 }
 
 impl Default for SummaryConfig {
     fn default() -> Self {
-        Self { gap_s: 600 }
+        Self {
+            gap_s: 600,
+            finalize_delay_s: 600,
+        }
     }
 }
 
@@ -175,6 +179,7 @@ impl Observation {
 #[derive(Default)]
 pub(crate) struct Summaries {
     last: Option<Observation>,
+    closed_through: Option<LogDate>,
     days: BTreeMap<LogDate, Day>,
     unplaced_source: SummarySource,
     active: BTreeMap<ConnId, Active>,
@@ -191,6 +196,9 @@ impl Summaries {
     ) {
         let now = Observation { at, offset };
         let date = now.date();
+        if self.is_closed(date) {
+            return;
+        }
         if let Some(previous) = self.last {
             let previous_date = previous.date();
             if at < previous.at || date < previous_date {
@@ -203,12 +211,14 @@ impl Summaries {
                     .or_default()
                     .span(previous.at, at, before, gap);
             } else {
-                let old_end = next_midnight(previous_date, offset).clamp(previous.at, at);
+                let boundary = next_midnight(previous_date, offset);
+                let old_end = boundary.clamp(previous.at, at);
                 let day_start = midnight(date, offset).max(old_end);
-                self.days
-                    .entry(previous_date)
-                    .or_default()
-                    .span(previous.at, old_end, before, gap);
+                // The prior day may already have closed on a wall-clock tick.
+                if let Some(day) = self.days.get_mut(&previous_date) {
+                    day.span(previous.at, old_end, before, gap);
+                    day.crossed_midnight = old_end == boundary;
+                }
                 self.days
                     .entry(date)
                     .or_default()
@@ -230,16 +240,14 @@ impl Summaries {
         before: &Snapshot,
         after: &Snapshot,
         update: &StateUpdate,
-        r5_wait_s: u64,
     ) {
-        self.advance_to(timed.at, timed.offset, r5_wait_s);
         let date = timed.at.to_local(timed.offset).0;
-        if self.is_closed(date) && !self.days.contains_key(&date) {
+        if self.is_closed(date) {
             return;
         }
 
         // Serial evidence can apply to earlier rows for the same connection.
-        // It can also arrive on the first row after midnight, before the prior day is drained.
+        // It can also arrive after midnight while the prior day is still open.
         for tracker in after
             .trackers
             .iter()
@@ -324,11 +332,13 @@ impl Summaries {
         }
     }
 
-    pub(crate) fn advance_to(&mut self, at: LogTime, _offset: UtcOffset, wait_s: u64) {
+    pub(crate) fn advance_to(&mut self, at: LogTime, _offset: UtcOffset, wait_s: u64) -> u64 {
+        let mut matured = 0_u64;
         for (&conn, active) in &mut self.active {
             if let Some(loss) = active.loss_at
                 && elapsed_ms(loss.at, at) > wait_s.saturating_mul(1_000)
             {
+                matured = matured.saturating_add(1);
                 if let Some(day) = self.days.get_mut(&loss.date())
                     && let Some(row) = day.connections.get_mut(&RowKey::Conn(conn))
                 {
@@ -337,6 +347,7 @@ impl Summaries {
                 active.loss_at = None;
             }
         }
+        matured
     }
 
     pub(crate) fn detection(&mut self, detection: &Detection, offset: UtcOffset) {
@@ -344,7 +355,7 @@ impl Summaries {
             return;
         }
         let date = detection.at.to_local(offset).0;
-        if self.is_closed(date) && !self.days.contains_key(&date) {
+        if self.is_closed(date) {
             return;
         }
         let day = self.days.entry(date).or_default();
@@ -366,7 +377,7 @@ impl Summaries {
         serial: Option<&Serial>,
     ) {
         let date = at.to_local(offset).0;
-        if self.is_closed(date) && !self.days.contains_key(&date) {
+        if self.is_closed(date) {
             return;
         }
         let row = self
@@ -377,24 +388,47 @@ impl Summaries {
         row.totals.power_offs = row.totals.power_offs.saturating_add(1);
     }
 
-    pub(crate) fn source(&mut self, date: Option<LogDate>) -> &mut SummarySource {
+    pub(crate) fn source(&mut self, date: Option<LogDate>) -> Option<&mut SummarySource> {
         match date.or_else(|| self.last.map(Observation::date)) {
-            Some(date) => &mut self.days.entry(date).or_default().source,
-            None => &mut self.unplaced_source,
+            Some(date) if self.is_closed(date) => None,
+            Some(date) => Some(&mut self.days.entry(date).or_default().source),
+            None => Some(&mut self.unplaced_source),
         }
     }
 
     pub(crate) fn is_closed(&self, date: LogDate) -> bool {
-        self.last.is_some_and(|last| date < last.date())
+        self.closed_through.is_some_and(|last| date <= last)
     }
 
-    pub(crate) fn close_days(&mut self) -> Vec<Summary> {
-        let Some(last) = self.last else {
-            return Vec::new();
-        };
-        let retained = self.days.split_off(&last.date());
-        mem::replace(&mut self.days, retained)
-            .into_iter()
+    pub(crate) fn next_close_deadline(&self, delay_s: u64) -> Option<LogTime> {
+        self.days
+            .iter()
+            .find_map(|(&date, day)| day.close_deadline(date, delay_s))
+    }
+
+    pub(crate) fn close_days(&mut self, at: LogTime, delay_s: u64) -> Vec<Summary> {
+        let due = self
+            .days
+            .iter()
+            .filter_map(|(&date, day)| Some((date, day.close_deadline(date, delay_s)?)))
+            .take_while(|&(_, deadline)| deadline <= at)
+            .last();
+        due.map_or_else(Vec::new, |(date, _)| self.close_through(date))
+    }
+
+    /// Finalizes prior days at EOF. The last observed day keeps its normal deadline.
+    pub(crate) fn finish(&mut self) -> Vec<Summary> {
+        let prior = self
+            .last
+            .and_then(|last| last.date().days_since_epoch())
+            .and_then(|last| LogDate::from_days_since_epoch(last - 1));
+        prior.map_or_else(Vec::new, |date| self.close_through(date))
+    }
+
+    fn close_through(&mut self, date: LogDate) -> Vec<Summary> {
+        self.closed_through = Some(self.closed_through.map_or(date, |old| old.max(date)));
+        self.days
+            .extract_if(..=date, |_, _| true)
             .filter_map(|(date, day)| day.summary(date, true))
             .collect()
     }
@@ -430,6 +464,7 @@ enum RowKey {
 #[derive(Default)]
 struct Day {
     observed: Option<Observation>,
+    crossed_midnight: bool,
     source: SummarySource,
     unobserved_ms: u64,
     connections: BTreeMap<RowKey, ConnectionRow>,
@@ -438,6 +473,11 @@ struct Day {
 }
 
 impl Day {
+    fn close_deadline(&self, date: LogDate, delay_s: u64) -> Option<LogTime> {
+        let observed = self.observed?;
+        Some(after(next_midnight(date, observed.offset), delay_s))
+    }
+
     fn span(&mut self, from: LogTime, to: LogTime, before: &Snapshot, unobserved: bool) {
         let duration = elapsed_ms(from, to);
         if duration == 0 {
@@ -493,7 +533,7 @@ impl Day {
 
     fn summary(&self, date: LogDate, is_final: bool) -> Option<Summary> {
         let observed = self.observed?;
-        let observed_until = if is_final {
+        let observed_until = if self.crossed_midnight {
             format!("{} 00:00:00.000", next_date(date))
         } else {
             let (date, clock) = observed.at.to_local(observed.offset);

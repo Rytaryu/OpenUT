@@ -116,9 +116,13 @@ name = "openut"
 version = "0.0.0"
 dependencies = [
  "openut-anonymize",
+ "openut-bridge",
  "openut-core",
+ "openut-dongle",
  "openut-hublog",
+ "openut-space",
  "serde",
+ "serde_json",
  "toml",
 ]
 

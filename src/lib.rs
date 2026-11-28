@@ -1,7 +1,11 @@
 //! OpenUT: an unofficial runtime and tools for VIVE Ultimate Tracker on
 //! Windows + SteamVR.
 
+pub mod bridge_out;
+pub mod config;
+pub mod driver_reg;
 pub mod replay;
+pub mod run;
 pub mod source_fs;
 
 /// The version of this build, from `Cargo.toml`.
