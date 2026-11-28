@@ -77,6 +77,7 @@ replay_cases! {
     synthetic_r1_second_host_command => "synthetic-r1-second-host-command", 132, 14;
     synthetic_normal_start => "synthetic-normal-start", 28, 14;
     synthetic_utf16 => "synthetic-utf16", 28, 14;
+    hub_2026_11_23_28 => "hub-2026-11-23-28", 91_356, 317;
 }
 
 #[test]
