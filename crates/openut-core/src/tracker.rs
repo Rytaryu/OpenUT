@@ -12,3 +12,11 @@ pub struct Serial(pub String);
 /// The number VIVE Hub shows for the tracker's current connection.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct HubNumber(pub u16);
+
+/// User-facing tracker name made from the current Hub number and serial suffix.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct TrackerLabel {
+    pub hub_number: Option<HubNumber>,
+    pub serial_tail: Option<String>,
+    pub host: bool,
+}

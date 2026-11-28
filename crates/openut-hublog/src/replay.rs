@@ -93,6 +93,7 @@ pub fn replay_with_flush(
         engine.advance_to(LogTime(last.0.saturating_add(millis)));
     }
     collect_segment(&mut engine, &mut detections, &mut stats);
+    stats.pushes = engine.stats().pushes;
 
     ReplayResult {
         counts: input.counts,
@@ -109,9 +110,16 @@ fn collect_segment(engine: &mut Engine, detections: &mut Vec<Detection>, stats: 
         engine
             .drain()
             .into_iter()
-            .map(|Output::Detection(detection)| detection),
+            .filter_map(|output| match output {
+                Output::Detection(detection) => Some(detection),
+                Output::Notice(_) => None,
+            }),
     );
-    stats.merge(engine.stats().clone());
+    stats.merge(EngineStats {
+        // Engine keeps deliveries from this run across rebuilds.
+        pushes: 0,
+        ..engine.stats().clone()
+    });
 }
 
 fn read_lines(file: &ReplayFile<'_>, mut visit: impl FnMut(ParsedLine<'_>)) {
@@ -361,7 +369,13 @@ mod tests {
             assert_eq!(detection.rule, RuleId::R2);
             assert_eq!(detection.step, Step::Raised);
             assert_eq!(detection.at.to_string(), "2026-11-28 05:00:20.000");
-            assert_eq!(past_due.stats, result.stats);
+            assert_eq!(
+                past_due.stats,
+                EngineStats {
+                    pushes: 1,
+                    ..result.stats
+                }
+            );
         }
     }
 
@@ -442,5 +456,6 @@ mod tests {
         assert!(result.snapshot.trackers.is_empty());
         assert_eq!(result.snapshot.at.to_string(), "2026-11-28 05:00:00.000");
         assert_eq!(result.stats.server.lines, 5);
+        assert_eq!(result.stats.pushes, 1);
     }
 }

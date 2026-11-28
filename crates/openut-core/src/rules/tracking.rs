@@ -218,7 +218,10 @@ mod tests {
         engine
             .drain()
             .into_iter()
-            .map(|Output::Detection(detection)| detection)
+            .filter_map(|output| match output {
+                Output::Detection(detection) => Some(detection),
+                Output::Notice(_) => None,
+            })
             .collect()
     }
 

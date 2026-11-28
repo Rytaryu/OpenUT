@@ -172,7 +172,7 @@ impl Target {
     }
 }
 
-fn after(at: LogTime, seconds: u64) -> LogTime {
+pub(crate) fn after(at: LogTime, seconds: u64) -> LogTime {
     let millis = i128::from(at.0) + i128::from(seconds) * 1_000;
     LogTime(i64::try_from(millis).unwrap_or(i64::MAX))
 }
