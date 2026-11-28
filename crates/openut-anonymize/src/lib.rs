@@ -110,7 +110,12 @@ pub fn anonymize(logs: &[&str], pc_name: Option<&str>) -> Result<Batch, Anonymiz
         let mut written = 0;
         for span in scan.spans {
             text.push_str(&log[written..span.range.start]);
-            if span.kind != Kind::PcSerialBody {
+            if span.kind == Kind::PcSerialBody {
+                // Deleting the intervening text must not turn body characters into CRLF.
+                if text.ends_with('\r') && log[span.range.end..].starts_with('\n') {
+                    text.push(' ');
+                }
+            } else {
                 let original = &log[span.range.clone()];
                 let alias = aliases.replace(span.kind, original, &originals).ok_or(
                     AnonymizeError::AliasUnavailable {

@@ -2,5 +2,6 @@
 
 pub mod decode;
 pub mod header;
+mod offset_fill;
 
 pub mod replay;

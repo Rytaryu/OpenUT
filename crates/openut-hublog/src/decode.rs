@@ -47,19 +47,46 @@ enum Encoding {
     Utf16Be,
 }
 
-/// Counts of malformed input sequences and overlong physical lines.
+/// Record delimiters are selected once per file from its first LF.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LineEnding {
+    Lf,
+    CrLf,
+}
+
+impl LineEnding {
+    /// Detects the record delimiter without altering the decoded text.
+    pub fn detect(text: &str) -> Option<Self> {
+        text.split_once('\n')
+            .map(|(first, _)| Self::from_previous_cr(first.ends_with('\r')))
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Lf => "\n",
+            Self::CrLf => "\r\n",
+        }
+    }
+
+    fn from_previous_cr(previous_cr: bool) -> Self {
+        if previous_cr { Self::CrLf } else { Self::Lf }
+    }
+}
+
+/// Counts of malformed input sequences and overlong records.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct DecodeStats {
     pub replaced_chars: u64,
     pub long_lines: u64,
 }
 
-/// Decodes one file, retaining partial character and line data between reads.
+/// Decodes one file, retaining partial character and record data between reads.
 #[derive(Default)]
 pub struct Decoder {
     encoding: Option<Encoding>,
     pending: Vec<u8>,
     high_surrogate: Option<u16>,
+    line_ending: Option<LineEnding>,
     line: String,
     pending_cr: bool,
     discarding_line_tail: bool,
@@ -75,7 +102,12 @@ impl Decoder {
         self.stats
     }
 
-    /// Emits complete lines or the retained prefix of each overlong line.
+    /// Returns the file's delimiter once the first LF has been decoded.
+    pub fn line_ending(&self) -> Option<LineEnding> {
+        self.line_ending
+    }
+
+    /// Emits complete records or the retained prefix of each overlong record.
     pub fn push(&mut self, mut bytes: &[u8]) -> Vec<String> {
         let mut lines = Vec::new();
         if self.encoding.is_none() {
@@ -89,7 +121,7 @@ impl Decoder {
         lines
     }
 
-    /// Flushes incomplete data at EOF, including an unterminated final line.
+    /// Flushes incomplete data at EOF, including an unterminated final record.
     pub fn finish(&mut self) -> Vec<String> {
         let mut lines = Vec::new();
         if self.encoding.is_none() {
@@ -102,7 +134,7 @@ impl Decoder {
             self.pending.clear();
             self.replace(&mut lines);
         }
-        if std::mem::take(&mut self.pending_cr) {
+        if std::mem::take(&mut self.pending_cr) && !self.discarding_line_tail {
             self.push_content('\r', &mut lines);
         }
         if !self.line.is_empty() {
@@ -225,34 +257,40 @@ impl Decoder {
 
     fn push_char(&mut self, character: char, lines: &mut Vec<String>) {
         if character == '\n' {
-            self.pending_cr = false;
-            if !std::mem::take(&mut self.discarding_line_tail) {
-                lines.push(std::mem::take(&mut self.line));
-            }
-            return;
-        }
-        if self.discarding_line_tail {
-            return;
-        }
-
-        // Defer CR so that a CRLF terminator does not count toward the line limit.
-        if std::mem::take(&mut self.pending_cr) {
-            self.push_content('\r', lines);
-            if self.discarding_line_tail {
+            let ending = self
+                .line_ending
+                .get_or_insert_with(|| LineEnding::from_previous_cr(self.pending_cr));
+            if self.pending_cr || *ending == LineEnding::Lf {
+                self.pending_cr = false;
+                // A truncated first record still has its prefix buffered.
+                if !std::mem::take(&mut self.discarding_line_tail) || !self.line.is_empty() {
+                    lines.push(std::mem::take(&mut self.line));
+                }
                 return;
             }
         }
-        if character == '\r' {
-            self.pending_cr = true;
-        } else {
+
+        // Track CR even while discarding an overlong record, so the next
+        // delimiter (including the first in the file) can still be found.
+        let previous_cr = std::mem::replace(&mut self.pending_cr, character == '\r');
+        if self.discarding_line_tail {
+            return;
+        }
+        if previous_cr {
+            self.push_content('\r', lines);
+        }
+        if character != '\r' && !self.discarding_line_tail {
             self.push_content(character, lines);
         }
     }
 
     fn push_content(&mut self, character: char, lines: &mut Vec<String>) {
-        // Emit only the valid UTF-8 prefix of an oversized physical line.
+        // Keep a valid UTF-8 prefix. The first record waits for detection
+        // of its delimiter before being emitted.
         if self.line.len() + character.len_utf8() > MAX_LINE_BYTES {
-            lines.push(std::mem::take(&mut self.line));
+            if self.line_ending.is_some() {
+                lines.push(std::mem::take(&mut self.line));
+            }
             self.stats.long_lines = self.stats.long_lines.saturating_add(1);
             self.discarding_line_tail = true;
         } else {
@@ -313,6 +351,61 @@ mod tests {
     }
 
     #[test]
+    fn preserves_bare_lf_and_cr_in_utf16le_crlf_records_across_reads() {
+        let meta = "# Log begin at 2026-11-28 00:00:53.613";
+        let timeout =
+            "[2026-11-28 00:00:54.000 +9 0x1 INFO Dispatch] [1] Wait for HID data got timeout.\n";
+        let save = "[2026-11-28 00:00:55.000 +9 0x1 INFO Save] [1] Save map creation time: Wed Nov 25 21:00:00 2026\n.";
+        let bare_cr = "before\rafter\r";
+        let input_text = format!("{meta}\r\n{timeout}\r\n{save}\r\n{bare_cr}\r\n");
+        let mut input = vec![0xff, 0xfe];
+        input.extend(utf16le(&input_text));
+        for chunk_size in 1..=input.len() {
+            let (records, stats) = decode_in_chunks(&input, chunk_size);
+            assert_eq!(records, [meta, timeout, save, bare_cr]);
+            assert_eq!(stats, DecodeStats::default());
+        }
+    }
+
+    #[test]
+    fn selects_crlf_only_after_the_first_lf() {
+        let mut decoder = Decoder::new();
+        assert!(
+            decoder
+                .push(b"# Log begin at 2026-11-28 00:00:53.613\r")
+                .is_empty()
+        );
+        assert_eq!(decoder.line_ending(), None);
+        assert_eq!(
+            decoder.push(b"\n"),
+            ["# Log begin at 2026-11-28 00:00:53.613"]
+        );
+        assert_eq!(decoder.line_ending(), Some(LineEnding::CrLf));
+        assert_eq!(
+            LineEnding::detect("# meta\r\nbody\n\r\n"),
+            decoder.line_ending()
+        );
+        assert_eq!(LineEnding::CrLf.as_str(), "\r\n");
+    }
+
+    #[test]
+    fn first_lf_keeps_lf_mode_when_crlf_appears_later() {
+        let mut decoder = Decoder::new();
+        assert_eq!(
+            decoder.push(b"first\nsecond\r\nthird\rfourth\n\n"),
+            ["first", "second", "third\rfourth", ""]
+        );
+        assert!(decoder.finish().is_empty());
+        assert_eq!(decoder.line_ending(), Some(LineEnding::Lf));
+        assert_eq!(
+            LineEnding::detect("first\nsecond\r\n"),
+            decoder.line_ending()
+        );
+        assert_eq!(LineEnding::Lf.as_str(), "\n");
+        assert_eq!(LineEnding::detect("trailing CR\r"), None);
+    }
+
+    #[test]
     fn carries_a_surrogate_pair_across_reads() {
         let mut decoder = Decoder::new();
         assert!(decoder.push(&[0xff, 0xfe, 0x3d, 0xd8]).is_empty());
@@ -365,13 +458,14 @@ mod tests {
     #[test]
     fn finish_flushes_only_the_unterminated_line() {
         let mut decoder = Decoder::new();
-        assert_eq!(decoder.push(b"first\r\n\nlast\r"), ["first", ""]);
-        assert_eq!(decoder.finish(), ["last\r"]);
+        assert_eq!(decoder.push(b"first\r\n\r\n\nlast\r"), ["first", ""]);
+        assert_eq!(decoder.finish(), ["\nlast\r"]);
         assert!(decoder.finish().is_empty());
 
         let mut short = Decoder::new();
         assert!(short.push(b"x").is_empty());
         assert_eq!(short.finish(), ["x"]);
+        assert_eq!(short.line_ending(), None);
     }
 
     #[test]
@@ -383,11 +477,12 @@ mod tests {
     }
 
     #[test]
-    fn emits_one_truncated_row_and_preserves_the_next_physical_line() {
+    fn emits_one_truncated_record_and_discards_until_the_next_crlf() {
         let first = "x".repeat(MAX_LINE_BYTES);
         let second = "y".repeat(MAX_LINE_BYTES - 1);
         let ignored_header = "[2026-11-28 12:00:00.000 +9 0x0 INFO Test] ignored";
-        let input = format!("{first}{ignored_header}\r\n{second}éignored\nnext\n\n");
+        let input =
+            format!("{first}{ignored_header}\r\n{second}éignored\nstill ignored\r\nnext\r\n\r\n");
         for chunk_size in [1, 4096, input.len()] {
             let (lines, stats) = decode_in_chunks(input.as_bytes(), chunk_size);
             assert_eq!(lines, [first.as_str(), second.as_str(), "next", ""]);
@@ -396,14 +491,46 @@ mod tests {
     }
 
     #[test]
+    fn bare_lf_counts_toward_the_crlf_record_limit() {
+        let mut decoder = Decoder::new();
+        assert_eq!(decoder.push(b"# meta\r\n"), ["# meta"]);
+        let prefix = "x".repeat(MAX_LINE_BYTES - 1);
+        assert!(decoder.push(prefix.as_bytes()).is_empty());
+        assert!(decoder.push(b"\n").is_empty());
+        assert_eq!(decoder.push(b"tail"), [format!("{prefix}\n")]);
+        assert_eq!(decoder.push(b"\r\nnext\r\n"), ["next"]);
+        assert_eq!(decoder.stats().long_lines, 1);
+    }
+
+    #[test]
     fn finish_does_not_emit_the_discarded_tail_of_an_unterminated_line() {
         let full_line = "x".repeat(MAX_LINE_BYTES);
         let mut decoder = Decoder::new();
+        assert_eq!(decoder.push(b"# meta\n"), ["# meta"]);
         assert!(decoder.push(full_line.as_bytes()).is_empty());
         assert_eq!(decoder.push(b"tail\r\xff"), [full_line]);
         assert!(decoder.finish().is_empty());
         assert_eq!(decoder.stats().long_lines, 1);
         assert_eq!(decoder.stats().replaced_chars, 1);
+    }
+
+    #[test]
+    fn overlong_first_record_waits_for_the_first_lf_or_eof() {
+        let full_line = "x".repeat(MAX_LINE_BYTES);
+        let mut decoder = Decoder::new();
+        assert!(decoder.push(full_line.as_bytes()).is_empty());
+        assert!(decoder.push(b"tail\r").is_empty());
+        assert_eq!(decoder.stats().long_lines, 1);
+        assert_eq!(decoder.line_ending(), None);
+        assert_eq!(decoder.push(b"\nnext\r\n"), [full_line.as_str(), "next"]);
+        assert_eq!(decoder.line_ending(), Some(LineEnding::CrLf));
+
+        let mut decoder = Decoder::new();
+        assert!(decoder.push(full_line.as_bytes()).is_empty());
+        assert!(decoder.push(b"tail\r").is_empty());
+        assert_eq!(decoder.finish(), [full_line]);
+        assert!(decoder.finish().is_empty());
+        assert_eq!(decoder.stats().long_lines, 1);
     }
 
     #[test]
