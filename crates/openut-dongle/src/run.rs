@@ -91,17 +91,54 @@ impl SourceItem {
             Self::Idle(at) | Self::ReadError { at, .. } | Self::Removed(at) => *at,
         }
     }
+
+    fn clamp_to_deadline(self, deadline_us: u64) -> Self {
+        let at = self.stamp();
+        if at.mono_us <= deadline_us {
+            return self;
+        }
+
+        // Estimate UTC at the monotonic cutoff from the reader's clock sample.
+        let excess_ms = (at.mono_us / 1_000 - deadline_us / 1_000) as i64;
+        Self::Idle(Stamp {
+            mono_us: deadline_us,
+            wall_ms: at.wall_ms.saturating_sub(excess_ms),
+        })
+    }
 }
 
 /// Samples the clock after each read, then sends the item without decoding or writing it.
 pub fn reader_loop(
+    source: impl ReportSource,
+    clock: impl Clock,
+    emit: impl FnMut(SourceItem) -> bool,
+    stop: &AtomicBool,
+) {
+    reader_loop_until(source, clock, emit, stop, None);
+}
+
+fn reader_loop_until(
     mut source: impl ReportSource,
     mut clock: impl Clock,
     mut emit: impl FnMut(SourceItem) -> bool,
     stop: &AtomicBool,
+    deadline_us: Option<u64>,
 ) {
     while !stop.load(Ordering::Relaxed) {
-        let received = source.read_timeout(READ_TIMEOUT);
+        let timeout = if let Some(deadline_us) = deadline_us {
+            let now = clock.now();
+            if now.mono_us >= deadline_us {
+                emit(SourceItem::Idle(now).clamp_to_deadline(deadline_us));
+                break;
+            }
+            // The HID backend accepts only whole milliseconds.
+            READ_TIMEOUT.min(Duration::from_millis(
+                (deadline_us - now.mono_us).div_ceil(1_000),
+            ))
+        } else {
+            READ_TIMEOUT
+        };
+        let received = source.read_timeout(timeout);
         let at = clock.now();
         if stop.load(Ordering::Relaxed) {
             break;
@@ -116,7 +153,12 @@ pub fn reader_loop(
             ReadOutcome::ReadError(os_code) => SourceItem::ReadError { at, os_code },
             ReadOutcome::Removed => SourceItem::Removed(at),
         };
-        let terminal = matches!(item, SourceItem::ReadError { .. } | SourceItem::Removed(_));
+        let terminal = matches!(item, SourceItem::ReadError { .. } | SourceItem::Removed(_))
+            || deadline_us.is_some_and(|deadline_us| at.mono_us >= deadline_us);
+        let item = match deadline_us {
+            Some(deadline_us) => item.clamp_to_deadline(deadline_us),
+            None => item,
+        };
         if !emit(item) || terminal {
             break;
         }
@@ -128,6 +170,13 @@ pub struct RunOptions {
     pub start: Stamp,
     pub duration: Duration,
     pub mode: Mode,
+}
+
+impl RunOptions {
+    fn probe_deadline(self) -> Option<u64> {
+        (self.mode == Mode::ProbeSharing)
+            .then(|| self.start.mono_us.saturating_add(micros(self.duration)))
+    }
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -165,6 +214,7 @@ pub enum Notice<'a> {
         at: Stamp,
         note: Note,
     },
+    ProbeServerStopped,
     ProbeOpened,
     ProbeOpenFailed(i32),
 }
@@ -199,18 +249,25 @@ pub fn run_probe<S: ReportSource + Send, C: Clock + Send, W: Write>(
     mut clock: C,
     duration: Duration,
     wait_baseline: impl FnOnce(Duration),
+    server_running: impl FnOnce() -> bool,
     open: impl FnOnce() -> Result<S, i32>,
     mut display: impl FnMut(Notice<'_>) -> io::Result<()>,
 ) -> io::Result<RunResult> {
     write_window(writer, clock.now(), Note::WindowBaseStart, &mut display)?;
     wait_baseline(duration);
     write_window(writer, clock.now(), Note::WindowBaseEnd, &mut display)?;
-    let start = clock.now();
-    write_window(writer, start, Note::WindowProbeStart, &mut display)?;
+    let attempt_start = clock.now();
+    if !server_running() {
+        let end = clock.now();
+        write_note(writer, end, Note::ProbeServerStopped)?;
+        display(Notice::ProbeServerStopped)?;
+        return finish_without_capture(writer, end, EndReason::ServerNotRunning);
+    }
     match open() {
         Ok(source) => {
-            display(Notice::ProbeOpened)?;
             let read_start = clock.now();
+            write_window(writer, read_start, Note::WindowProbeStart, &mut display)?;
+            display(Notice::ProbeOpened)?;
             capture(
                 source,
                 clock,
@@ -227,20 +284,29 @@ pub fn run_probe<S: ReportSource + Send, C: Clock + Send, W: Write>(
         Err(code) => {
             // No reader was started, so the clock remains with the probe setup.
             let end = clock.now();
+            write_window(writer, attempt_start, Note::WindowProbeStart, &mut display)?;
             write_note(writer, end, Note::OpenFailed(code))?;
             display(Notice::ProbeOpenFailed(code))?;
             write_window(writer, end, Note::WindowProbeEnd, &mut display)?;
-            let result = RunResult {
-                reason: EndReason::ReadError,
-                end,
-                stats: RunStats::default(),
-                time_reversed: 0,
-                table: TrackerTable::default(),
-            };
-            write_footer(writer, &result)?;
-            Ok(result)
+            finish_without_capture(writer, end, EndReason::ReadError)
         }
     }
+}
+
+fn finish_without_capture<W: Write>(
+    writer: &mut RecordWriter<W>,
+    end: Stamp,
+    reason: EndReason,
+) -> io::Result<RunResult> {
+    let result = RunResult {
+        reason,
+        end,
+        stats: RunStats::default(),
+        time_reversed: 0,
+        table: TrackerTable::default(),
+    };
+    write_footer(writer, &result)?;
+    Ok(result)
 }
 
 fn capture<S: ReportSource + Send, C: Clock + Send, W: Write>(
@@ -256,7 +322,13 @@ fn capture<S: ReportSource + Send, C: Clock + Send, W: Write>(
         let (send, stream) = mpsc::channel();
         let read_stop = &stop;
         let reader = thread::Builder::new().spawn_scoped(scope, move || {
-            reader_loop(source, clock, |item| send.send(item).is_ok(), read_stop);
+            reader_loop_until(
+                source,
+                clock,
+                |item| send.send(item).is_ok(),
+                read_stop,
+                settings.probe_deadline(),
+            );
         })?;
         let result = main_loop(&stream, &stop, writer, settings, server_running, display);
         stop.store(true, Ordering::Relaxed);
@@ -283,9 +355,14 @@ pub fn main_loop<W: Write>(
     let mut checked_at = settings.start.mono_us;
     let duration_us = micros(settings.duration);
     let guard_enabled = settings.mode == Mode::Record;
-    let (mut reason, mut note) = loop {
+    let probe_deadline = settings.probe_deadline();
+    let (reason, note) = loop {
         match stream.recv_timeout(STREAM_TIMEOUT) {
             Ok(item) => {
+                let item = match probe_deadline {
+                    Some(deadline_us) => item.clamp_to_deadline(deadline_us),
+                    None => item,
+                };
                 if let Some(end) = capture.apply(item)? {
                     break end;
                 }
@@ -296,7 +373,11 @@ pub fn main_loop<W: Write>(
                         break (EndReason::ServerAppeared, Note::ServerAppeared);
                     }
                 }
-                if now - settings.start.mono_us >= duration_us {
+                let reached_duration = match probe_deadline {
+                    Some(deadline_us) => now >= deadline_us,
+                    None => now - settings.start.mono_us >= duration_us,
+                };
+                if reached_duration {
                     break (EndReason::Duration, Note::Duration);
                 }
             }
@@ -313,17 +394,8 @@ pub fn main_loop<W: Write>(
     };
 
     stop.store(true, Ordering::Relaxed);
-    let probing = settings.mode == Mode::ProbeSharing;
-    if probing && reason == EndReason::Duration {
-        // The probe ends after the reader stops and all already-sent items have been applied.
-        for item in stream {
-            if let Some(terminal) = capture.apply(item)? {
-                (reason, note) = terminal;
-            }
-        }
-    }
     write_note(capture.writer, capture.last, note)?;
-    if probing {
+    if probe_deadline.is_some() {
         write_window(
             capture.writer,
             capture.last,

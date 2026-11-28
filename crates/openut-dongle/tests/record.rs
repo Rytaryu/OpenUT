@@ -264,6 +264,7 @@ fn note_text_is_limited_to_documented_words_and_numeric_error_codes() {
         (Note::WindowBaseEnd, "window_base_end"),
         (Note::WindowProbeStart, "window_probe_start"),
         (Note::WindowProbeEnd, "window_probe_end"),
+        (Note::ProbeServerStopped, "probe_server_stopped"),
         (Note::OpenFailed(5), "open_failed:5"),
     ];
     let expected_text = notes.each_ref().map(|(_, text)| *text);

@@ -182,6 +182,7 @@ impl Options {
                     clock,
                     self.length,
                     std::thread::sleep,
+                    || processes.server_running(&guard),
                     || devices.open_dongle().map_err(|error| error.os_code()),
                     |notice| display.notice(notice),
                 )
@@ -193,6 +194,7 @@ impl Options {
             .map_err(Failure::output)?;
         Ok(match result.reason {
             EndReason::Duration | EndReason::Complete => 0,
+            EndReason::ServerNotRunning => 1,
             EndReason::ServerAppeared => 2,
             EndReason::ReadError | EndReason::DeviceRemoved => 3,
         })
@@ -392,6 +394,9 @@ impl<W: Write> Console<W> {
                     "ドングルを共有で開けませんでした（OS の番号 {code}）。"
                 )?;
             }
+            Notice::ProbeServerStopped => {
+                writeln!(self.out, "ドングルを開かずに共有の確認を中止しました。")?;
+            }
         }
         self.out.flush()
     }
@@ -400,6 +405,7 @@ impl<W: Write> Console<W> {
         let reason = match result.reason {
             EndReason::Duration => "指定した時間に達しました",
             EndReason::ServerAppeared => "VIVE Hub のトラッカー用サーバーが起動しました",
+            EndReason::ServerNotRunning => "VIVE Hub のトラッカー用サーバーが停止しました",
             EndReason::ReadError => "ドングルを読み取れませんでした",
             EndReason::DeviceRemoved => "ドングルが外れました",
             EndReason::Complete => "終了しました",

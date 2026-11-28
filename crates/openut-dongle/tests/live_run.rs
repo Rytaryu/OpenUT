@@ -117,7 +117,7 @@ struct FakeSource {
 
 impl ReportSource for FakeSource {
     fn read_timeout(&mut self, timeout: Duration) -> ReadOutcome {
-        assert_eq!(timeout, Duration::from_millis(100));
+        assert!(!timeout.is_zero() && timeout <= Duration::from_millis(100));
         let Some((at_us, read)) = self.reads.pop_front() else {
             return ReadOutcome::Removed;
         };
@@ -285,19 +285,15 @@ fn collect_items(reads: impl IntoIterator<Item = (u64, ReadOutcome)>) -> Vec<Sou
 fn run_main(
     stream: &mpsc::Receiver<SourceItem>,
     stop: &AtomicBool,
-    duration: Duration,
+    settings: RunOptions,
 ) -> (Vec<u8>, Vec<Transition>, RunResult) {
-    let mut writer = RecordWriter::new(Vec::new(), &header(Mode::Record)).expect("write header");
+    let mut writer = RecordWriter::new(Vec::new(), &header(settings.mode)).expect("write header");
     let mut transitions = Vec::new();
     let state = main_loop(
         stream,
         stop,
         &mut writer,
-        RunOptions {
-            start: stamp(0),
-            duration,
-            mode: Mode::Record,
-        },
+        settings,
         || false,
         |notice| {
             if let Notice::Transition(change) = notice {
@@ -310,13 +306,16 @@ fn run_main(
     (writer.into_inner(), transitions, state)
 }
 
-fn run_queued(items: Vec<SourceItem>, duration: Duration) -> (Vec<u8>, Vec<Transition>, RunResult) {
+fn run_queued(
+    items: Vec<SourceItem>,
+    settings: RunOptions,
+) -> (Vec<u8>, Vec<Transition>, RunResult) {
     let (tx, rx) = mpsc::channel();
     for item in items {
         tx.send(item).expect("enqueue synthetic item");
     }
     drop(tx);
-    run_main(&rx, &AtomicBool::new(false), duration)
+    run_main(&rx, &AtomicBool::new(false), settings)
 }
 
 fn ticks(recording: &[u8]) -> Vec<u64> {
@@ -353,7 +352,14 @@ fn idle_polls_keep_ticks_moving_and_expire_all_trackers_at_the_same_deadline() {
             .map(|poll| 10_000_000 + poll * 100_000)
             .collect::<Vec<_>>()
     );
-    let (recording, transitions, result) = run_queued(items, Duration::from_secs(13));
+    let (recording, transitions, result) = run_queued(
+        items,
+        RunOptions {
+            start: stamp(0),
+            duration: Duration::from_secs(13),
+            mode: Mode::Record,
+        },
+    );
     assert_eq!(
         ticks(&recording),
         [10_000_000, 11_000_000, 12_000_000, 13_000_000]
@@ -389,8 +395,12 @@ fn processing_a_backlog_matches_per_item_processing_and_replay() {
             (12_100_000, ReadOutcome::Idle),
         ]
     };
-    let duration = Duration::from_millis(12_100);
-    let (queued, queued_changes, queued_result) = run_queued(collect_items(reads()), duration);
+    let settings = RunOptions {
+        start: stamp(0),
+        duration: Duration::from_millis(12_100),
+        mode: Mode::Record,
+    };
+    let (queued, queued_changes, queued_result) = run_queued(collect_items(reads()), settings);
     let (per_item, per_item_changes, per_item_result) = thread::scope(|scope| {
         let (tx, rx) = mpsc::sync_channel(0);
         let (source, clock) = script(reads());
@@ -399,7 +409,7 @@ fn processing_a_backlog_matches_per_item_processing_and_replay() {
         let reader = scope.spawn(move || {
             reader_loop(source, clock, |item| tx.send(item).is_ok(), &reader_stop);
         });
-        let result = run_main(&rx, &stop, duration);
+        let result = run_main(&rx, &stop, settings);
         drop(rx);
         reader.join().expect("join unbuffered reader");
         result
@@ -427,12 +437,13 @@ fn probe_opens_only_after_baseline_and_records_both_windows_in_order() {
     let duration = Duration::from_secs(2);
     let (source, clock) = script([
         (2_100_000, ReadOutcome::Report(pose(1, 1))),
-        (3_000_000, ReadOutcome::Idle),
-        (4_000_000, ReadOutcome::Idle),
+        (3_950_000, ReadOutcome::Idle),
+        (4_000_000, ReadOutcome::Report(pose(1, 2))),
+        (4_500_000, ReadOutcome::Report(pose(2, 3))),
     ]);
     let now = Arc::clone(&clock.0);
     let mut writer = RecordWriter::new(Vec::new(), &header(Mode::ProbeSharing)).expect("header");
-    run_probe(
+    let result = run_probe(
         &mut writer,
         clock,
         duration,
@@ -441,6 +452,7 @@ fn probe_opens_only_after_baseline_and_records_both_windows_in_order() {
             assert_eq!(now.load(Ordering::Relaxed), 0);
             now.store(2_000_000, Ordering::Relaxed);
         },
+        || true,
         || {
             assert_eq!(now.load(Ordering::Relaxed), 2_000_000);
             Ok(source)
@@ -449,6 +461,7 @@ fn probe_opens_only_after_baseline_and_records_both_windows_in_order() {
     )
     .expect("write synthetic probe record");
 
+    assert_eq!(now.load(Ordering::Relaxed), 4_000_000);
     let recorded = rows(&writer.into_inner());
     let mut report_times = Vec::new();
     let mut windows = Vec::new();
@@ -469,7 +482,10 @@ fn probe_opens_only_after_baseline_and_records_both_windows_in_order() {
             _ => {}
         }
     }
-    assert_eq!(report_times, [2_100_000]);
+    assert_eq!(result.end, stamp(4_000_000));
+    assert_eq!(result.reason, EndReason::Duration);
+    assert_eq!(result.stats.reports, 2);
+    assert_eq!(report_times, [2_100_000, 4_000_000]);
     assert_eq!(
         windows,
         [
@@ -483,5 +499,150 @@ fn probe_opens_only_after_baseline_and_records_both_windows_in_order() {
         recorded
             .windows(2)
             .all(|pair| pair[0].mono_us() <= pair[1].mono_us())
+    );
+}
+
+#[test]
+fn a_probe_backlog_ends_at_the_deadline_and_counts_only_reports_in_the_window() {
+    let settings = RunOptions {
+        start: stamp(0),
+        duration: Duration::from_secs(1),
+        mode: Mode::ProbeSharing,
+    };
+    let deadline = 1_000_000;
+    let before = 900_000;
+    let cases: [(Option<ReadOutcome>, &[u64]); 3] = [
+        (Some(ReadOutcome::Idle), &[before]),
+        (Some(ReadOutcome::Report(pose(1, 2))), &[before, deadline]),
+        (None, &[before]),
+    ];
+    for (at_deadline, expected_reports) in cases {
+        let items = collect_items(
+            [(before, ReadOutcome::Report(pose(1, 1)))]
+                .into_iter()
+                .chain(at_deadline.map(|read| (deadline, read)))
+                .chain([
+                    (2_500_000, ReadOutcome::Report(pose(2, 3))),
+                    (2_600_000, ReadOutcome::ReadError(5)),
+                ]),
+        );
+        let (recording, transitions, result) = run_queued(items, settings);
+        let on_time_end = if expected_reports.len() == 2 {
+            ReadOutcome::Report(pose(1, 2))
+        } else {
+            ReadOutcome::Idle
+        };
+        let (on_time, _, _) = run_queued(
+            collect_items([
+                (before, ReadOutcome::Report(pose(1, 1))),
+                (deadline, on_time_end),
+            ]),
+            settings,
+        );
+
+        assert_eq!(recording, on_time);
+        assert_eq!(result.end, stamp(deadline));
+        assert_eq!(result.reason, EndReason::Duration);
+        assert_eq!(result.stats.reports, expected_reports.len() as u64);
+        assert_eq!(result.table.now_us(), deadline);
+        assert_eq!(transitions, replay_transitions(&recording));
+        let recorded = rows(&recording);
+        let report_times: Vec<_> = recorded
+            .iter()
+            .filter_map(|row| match row {
+                Record::Input(report) => Some(report.mono_us),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(report_times, expected_reports);
+        assert_eq!(
+            &recorded[recorded.len() - 3..],
+            &[
+                Record::Note {
+                    mono_us: deadline,
+                    wall_ms: wall_ms(deadline),
+                    text: Note::Duration,
+                },
+                Record::Note {
+                    mono_us: deadline,
+                    wall_ms: wall_ms(deadline),
+                    text: Note::WindowProbeEnd,
+                },
+                Record::Footer {
+                    mono_us: deadline,
+                    wall_ms: Some(wall_ms(deadline)),
+                    reports: expected_reports.len() as u64,
+                    malformed: 0,
+                    estimated_lost: 0,
+                    reason: EndReason::Duration,
+                    time_reversed: 0,
+                },
+            ],
+        );
+    }
+}
+
+#[test]
+fn a_probe_skips_opening_if_the_server_stops_during_baseline() {
+    let duration = Duration::from_secs(1);
+    let baseline_end = 1_000_000;
+    let (_, clock) = script([]);
+    let now = Arc::clone(&clock.0);
+    let server_running = AtomicBool::new(true);
+    let mut stopped_notices = 0;
+    let mut writer = RecordWriter::new(Vec::new(), &header(Mode::ProbeSharing)).expect("header");
+    let result = run_probe(
+        &mut writer,
+        clock,
+        duration,
+        |wait| {
+            assert_eq!(wait, duration);
+            assert!(server_running.swap(false, Ordering::Relaxed));
+            now.store(baseline_end, Ordering::Relaxed);
+        },
+        || server_running.load(Ordering::Relaxed),
+        || -> Result<FakeSource, i32> { panic!("probe must skip opening") },
+        |notice| {
+            if let Notice::ProbeServerStopped = notice {
+                stopped_notices += 1;
+            }
+            Ok(())
+        },
+    )
+    .expect("record why the probe was skipped");
+
+    assert_eq!(stopped_notices, 1);
+    assert_eq!(result.end, stamp(baseline_end));
+    assert_eq!(result.reason, EndReason::ServerNotRunning);
+    assert_eq!(result.stats.reports, 0);
+    let recorded = rows(&writer.into_inner());
+    assert_eq!(
+        recorded,
+        [
+            Record::Note {
+                mono_us: 0,
+                wall_ms: wall_ms(0),
+                text: Note::WindowBaseStart,
+            },
+            Record::Note {
+                mono_us: baseline_end,
+                wall_ms: wall_ms(baseline_end),
+                text: Note::WindowBaseEnd,
+            },
+            Record::Note {
+                mono_us: baseline_end,
+                wall_ms: wall_ms(baseline_end),
+                text: Note::ProbeServerStopped,
+            },
+            Record::Footer {
+                mono_us: baseline_end,
+                wall_ms: Some(wall_ms(baseline_end)),
+                reports: 0,
+                malformed: 0,
+                estimated_lost: 0,
+                reason: EndReason::ServerNotRunning,
+                time_reversed: 0,
+            },
+        ],
     );
 }
