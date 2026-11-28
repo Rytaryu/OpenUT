@@ -787,15 +787,38 @@ test('wakes that cannot be posted do not stop the sweep; the owner and the PM ar
   const told = () => world.state.issues.filter((i) => i.title === '受け渡しの仕組みが、起動の合図を書けません');
   assert.equal(told().length, 1);
   assert.deepEqual(told()[0].labels, ['needs-human']);
-  for (const line of ['WAKE role:impl #400', 'WAKE role:impl #402', 'WAKE role:design #403', 'WAKE_TOKEN']) assert.ok(told()[0].body.includes(line), line);
+  for (const line of ['WAKE role:impl #400', 'WAKE role:impl #402', 'WAKE role:design #403']) assert.ok(told()[0].body.includes(line), line);
   // Still refused: no second Issue, and nothing is given twice.
   await assert.rejects(sweep(world), /could not be posted/);
   assert.equal(told().length, 1);
   assert.equal(world.find(402).events.filter((e) => e.event === 'labeled').length, 1);
+  // A new hand-off is refused too: it is added to the same Issue, once.
+  world.state.issues.push(issue(404, '担当: role:ux\n着手の条件: なし'));
+  await assert.rejects(sweep(world), /could not be posted/);
+  await assert.rejects(sweep(world), /could not be posted/);
+  assert.equal(told().length, 1);
+  assert.deepEqual(world.find(404).labels, ['backlog', 'role:ux']);
+  const added = told()[0].comments.filter((c) => c.body.includes('`WAKE role:ux #404`'));
+  assert.equal(added.length, 1);
+  assert.equal(told()[0].comments.some((c) => c.body.includes('`WAKE role:impl #402`')), false);
+  // The fake refuses with a 502, not with the lock: no setting is asked for.
+  assert.ok(!told()[0].body.includes('WAKE_TOKEN') && told()[0].body.includes('設定を変える必要はありません'));
+  assert.ok(!added[0].body.includes('WAKE_TOKEN'));
   // Once wakes can be posted, the unfinished hand-offs are completed.
   world.state.failWakes = 0;
   await sweep(world);
-  assert.deepEqual(world.state.wakes.sort(), ['1: WAKE role:design #403', '1: WAKE role:impl #400', '1: WAKE role:impl #402']);
-  assert.deepEqual([world.find(402).labels, world.find(403).labels], [['role:impl'], ['role:design']]);
+  assert.deepEqual(world.state.wakes.sort(), ['1: WAKE role:design #403', '1: WAKE role:impl #400', '1: WAKE role:impl #402', '1: WAKE role:ux #404']);
+  assert.deepEqual([world.find(402).labels, world.find(403).labels, world.find(404).labels], [['role:impl'], ['role:design'], ['role:ux']]);
   assert.equal(red.comments.filter((c) => /CI が通っていません/.test(c.body)).length, 1);
+});
+
+test('a wake refused by the lock asks for WAKE_TOKEN', async () => {
+  const world = fakeGitHub({ issues: [issue(410, '担当: role:impl\n着手の条件: なし')] });
+  world.gh.wake = async () => {
+    throw new Error('POST /issues/1/comments -> 403 {"message":"Unable to create comment because issue is locked."}');
+  };
+  await assert.rejects(sweep(world), /could not be posted/);
+  const told = world.state.issues.find((i) => i.title === '受け渡しの仕組みが、起動の合図を書けません');
+  assert.ok(told.body.includes('WAKE_TOKEN') && told.body.includes('`WAKE role:impl #410`'));
+  assert.ok(told.body.includes('ロックを外すことはありません'));
 });
