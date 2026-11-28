@@ -37,13 +37,26 @@ jobs:
       - name: Build the executables
         shell: bash
         run: cargo build --release --locked --workspace --bins
+      - name: Build the SteamVR driver
+        # The driver crate arrives with K2-2; before that this step does nothing.
+        if: hashFiles('crates/openut-driver/Cargo.toml') != ''
+        shell: bash
+        run: cargo build --release --locked -p openut-driver
       - name: Collect the executables
         shell: bash
         run: |
           mkdir -p dist
           cp target/release/*.exe dist/
           git rev-parse HEAD > dist/COMMIT.txt
-          ls -l dist
+          # The SteamVR driver folder (docs/design/walkthrough.md 1.8): the
+          # packaged files plus the built DLL under bin/win64.
+          if [ -d crates/openut-driver/package/openut ]; then
+            cp -r crates/openut-driver/package/openut dist/openut
+            mkdir -p dist/openut/bin/win64
+            cp target/release/driver_openut.dll dist/openut/bin/win64/driver_openut.dll
+            cp crates/openut-driver/LICENSE-openvr dist/openut/LICENSE-openvr
+          fi
+          find dist -type f | sort
       - uses: actions/upload-artifact@v7
         with:
           name: openut-windows-x64
