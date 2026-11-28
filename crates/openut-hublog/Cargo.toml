@@ -1,0 +1,15 @@
+[package]
+name = "openut-hublog"
+description = "Decoding and parsing of VIVE Hub log files"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+openut-core = { path = "../openut-core" }
