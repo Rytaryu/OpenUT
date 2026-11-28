@@ -12,7 +12,7 @@
 | ファイル | 書いているもの | 1 日の行数 | 1 日の大きさ |
 |---|---|---|---|
 | `ViveTrackerServer_YYYYMMDD.txt` | トラッカー用のサーバー（`ViveTrackerServer.exe`）。接続、ホストの割り当て、Wi-Fi の受け渡し、地図、姿勢の状態 | 2,002〜15,828 | 0.7〜5.5 MB |
-| `ViveTrackerDriver_YYYYMMDD.txt` | ドングルとの通信（HID）の層。スロットへの接続、電源の状態、トラッカーの電源オフの知らせ | 1,957〜18,775（うち 9 割以上が、下の 3.3 の「待ちの時間切れ」） | 0.5〜4.6 MB |
+| `ViveTrackerDriver_YYYYMMDD.txt` | ドングルとの通信（HID）の層。スロットへの接続、電源の状態、トラッカーの電源オフの予告 | 1,957〜18,775（うち 9 割以上が、下の 3.3 の「待ちの時間切れ」） | 0.5〜4.6 MB |
 | `ViveTrackerDongle_YYYYMMDD.txt` | ドングルの無線の統計（取りこぼしの割合、電波の強さ）と、無線の接続・切断 | 1,355〜5,600 | 0.6〜2.7 MB |
 
 - 同じフォルダーには、ほかに `TrackerStatisticsReport.csv`、`TrackerLatencyReport.csv`、`ManifestAutoRegister_YYYYMMDD.txt`、`SteamVRNotificationHelper.txt`、取り出しツールのログなどがある。中身の書式は調べていない（4 章の語句の検索だけ行った）。
@@ -26,7 +26,7 @@
 - **1 件の記録の終わりは CRLF**。ファイルの最後の記録も CRLF で終わる。
 - **本文の中に、LF だけの改行が入ることがある**。記録を LF で切ると、1 件が 2 行に割れる。CRLF で切ること。
   - サーバー: 6 日で 102 件（`Save map creation time: <曜日 月 日 時刻 年>\n.` の形）。
-  - ドライバー: 47,648 件（`Wait for HID data got timeout.\n`。本文の末尾が LF で、そのあとに記録の終わりの CRLF）。
+  - ドライバー: 47,648 件。内訳は、`Wait for HID data got timeout.\n` が 47,641 件、`thread is Leaving\n` が 7 件（どちらも、本文の末尾が LF で、そのあとに記録の終わりの CRLF）。
   - ドングル: 0 件。
 
 ### 2.2 記録の先頭の形
@@ -159,7 +159,7 @@ VIVE Hub が書いている最中のファイルを、ほかのプログラム�
 - 9 割以上が `TrackerDongleHID::DataDispatchThreadProc` の `Wait for HID data got timeout.\n`（6 日で 47,641 件）。
 - トラッカーの番号は、`slot num: N`、`slot N`、`(N)`、`[N]` の形で出る（サーバーの `device index` と同じ 0〜4）。
 - 見張り役に関わりそうな行:
-  - **`(N) Tracker is going to power-off.`**（`TrackerDongleHID::ParseIndication`）: トラッカーが、電源を切る前に知らせてくる行（3.5）。
+  - **`(N) Tracker is going to power-off.`**（`TrackerDongleHID::ParseIndication`）: 電源が切れることの予告と読める行（3.5。だれが、なぜ切ったかは、この行からは分からない）。
   - `Tracker is paired to slot N, connected: V`、`Add tracker. slot num: N, type: V.`、`Remove tracker. slot num: N, type: V`
   - `(N) set power state: V`、`(N) Set is host: V`、`(N) Set has_map to: V`、`Query wifi info from tracker N`、`Assign wifi info.`
   - `[N] Tracker connected.`、`[N] CONNECTION TIMEOUT! unpair tracker`、`[N] Tracker failed to connect. retry: V.`
@@ -184,8 +184,9 @@ VIVE Hub が書いている最中のファイルを、ほかのプログラム�
 **切断の理由。**
 
 - サーバーの `Remove tracker (N), connection type: V, power state:V ` は、6 日で 128 件。`connection type` は 1 が 109 件、2 が 19 件（2 は USB でつないだとき。推定）。`power state` は 11、21、2、100 が出ていた。
-- **利用者が電源を切ったとき**: ドライバーのファイルに `(N) Tracker is going to power-off.` が出て、15 秒以内にサーバーの `Remove tracker (N)` が続く。128 件のうち 86 件が、この形（知らせは 44 件。サーバーの行は同じ出来事で 2 回出る）。
-- 残りの 42 件は、知らせがない。USB の 19 件、ペアリングの操作（`Unpair All` など）のあとのもの、ほんとうに切れたものが混じっている。**サーバーのファイルだけでは、電源オフと、それ以外の切断を分けられない。** 分けるには、ドライバーのファイルも読む（設計の追補で決める）。
+- **電源オフの予告**: ドライバーのファイルに `(N) Tracker is going to power-off.` が出て、15 秒以内にサーバーの `Remove tracker (N)` が続く形が、128 件のうち 86 件あった（予告は 44 件。サーバーの行は、同じ出来事で 2 回出る）。**ログで確かめたのは、この 2 つの行の時刻の対応まで。** 予告のあった切断が、利用者の操作（ボタンで電源を切った）によるものか、トラッカーが自分で切ったもの（電池切れ、スリープなど）かは、確かめていない。利用者の操作の記録がなく、突き合わせる相手がないため（オーナーが、電源を切った時刻を控えて試せば、確かめられる）。
+- 残りの 42 件は、予告がない。USB でつないでいたものが 19 件。ほかの 23 件には、ペアリングの操作（`Unpair All` など）のあとのものと、理由の分からないものが混じっている（1 件ずつは分けていない）。
+- **サーバーのファイルだけでは、予告のある切断と、ない切断を分けられない。** 分けるには、ドライバーのファイルも読む。予告のある切断を「利用者の操作に伴う切断」（W-4 の除外）として扱ってよいかは、上の確認のあとで、設計で決める。
 
 **ドングル。**
 
@@ -240,7 +241,7 @@ VIVE Hub が書いている最中のファイルを、ほかのプログラム�
 | U-8 | ヘッダーの設定は 5,000 ミリ秒（実測はしていない） | 2.4 |
 | U-9 | 日付が変わったあとの最初の書き込みで切り替わる。古いファイルに、次の日の記録が 1 件入る。起動のたびの切り詰めは、ない | 2.3、2.5 |
 | U-10 | 開始と終了の行。終了の行がないまま次の開始になることがある | 3.5 |
-| U-11 | サーバーのファイルだけでは分からない。ドライバーのファイルの `Tracker is going to power-off.` で分かる | 3.5 |
+| U-11 | 電源オフの予告の行（`Tracker is going to power-off.`）は、ドライバーのファイルにだけ出る。予告と、サーバーの `Remove tracker` の時刻が対応することまでを確かめた。予告のある切断が利用者の操作によるものかは、**未確認** | 3.5 |
 | U-12 | ドングルが付いた・抜けた・待機にした、の行。抜けたときは、トラッカーの `Remove tracker` が出ない | 3.5 |
 | U-13 | **未確認のまま** | 2.6 |
 | U-14 | `%ProgramData%\HTC\ViveSoftware\ViveUltimateTracker\Log` | 1 |
@@ -251,7 +252,7 @@ VIVE Hub が書いている最中のファイルを、ほかのプログラム�
 
 1. 地図の状態を、状態の行（`DeviceStatusToVHServer`）から取る形に直す。同じ行の `tracking status`、`is host`、`connected` を使うか。
 2. 番号のない `Wifi info is not yet available.` と `Got host wifi info.` の扱い（R1 は、直前の `switch to HOST mode` と `Add new tracker` の並びから、どの台の話かを決められるか）。
-3. 切断の理由のために、ドライバーのファイルも読むか（読むなら、2 つのファイルの時刻の突き合わせ）。
+3. 電源オフの予告のために、ドライバーのファイルも読むか（読むなら、2 つのファイルの時刻の突き合わせ）。予告のある切断を W-4 の除外にしてよいかは、オーナーの確認（電源を切った時刻との突き合わせ）を待つ。
 4. 番号ではなく、シリアル番号（`GetDeviceInfoAndResponse`）をトラッカーのキーにする。
 5. 同じ出来事の行が 2 回出ることへの対処と、`includes NAN.` などの多い行の読み飛ばし。
 6. 0 時の切り替わりで、古いファイルの最後に次の日の記録が 1 件入ること（集計の日付）。

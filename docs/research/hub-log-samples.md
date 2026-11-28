@@ -76,43 +76,29 @@
 
 ## 3. 「Wi-Fi 情報なし」の経過（2026-11-27 22:53。サーバーのファイル）
 
-オーナーがペアリングをし直した直後。22:53:25.377〜22:53:35.000 の 283 行から、状態の繰り返しなどを省いた 36 行。流れは次のとおり。
+オーナーがペアリングをし直した直後の、22:53:25.377〜22:54:35.000 の約 70 秒。この区間の記録は 429 件で、下に 32 件を載せ、397 件を省いた（省いた場所と数は `（中略: n 行）`。省いた中に `Wifi info is not yet available.` があれば、その数も書いた）。載せたのは、接続・切断、ホストの割り当て、Wi-Fi の受け渡し、姿勢の状態の変化、`OET ...` の行のすべてと、`Wifi info is not yet available.` のうち、最初の 3 件、最初の 1 件（22:53:33.658）から 15 秒・30 秒・60 秒の前後の各 2 件、区間の最後の 1 件。
 
-1. トラッカー 2 がつながる（ホスト。状態の行が `is host: 1`、`Start host tracker.`）。
-2. 22:53:26.257 に `Got host wifi info.`。
-3. トラッカー 4 がつながり、Wi-Fi の情報を渡され（`Assign wifi info ...`）、ホストにつながる（`is connected to host: 1`）。
-4. 22:53:32.961 に、**トラッカー 2 へ、もう一度 `switch to HOST mode.`**。このあと `Got host wifi info.` は出ない。
-5. トラッカー 0 がつながる。22:53:33.658 から **`Wifi info is not yet available.`** が続く。
+流れ:
+
+1. トラッカー 2 がつながる（ホスト。`Start host tracker.`）。22:53:26.257 に `Got host wifi info.`。
+2. トラッカー 4 がつながり、Wi-Fi の情報を渡され（`Assign wifi info ...`）、ホストにつながる（`is connected to host: 1`）。
+3. 22:53:32.961 に、**トラッカー 2 へ、もう一度 `switch to HOST mode.`**。このあと、区間の終わりまで `Got host wifi info.` は出ない。
+4. トラッカー 0 がつながる。22:53:33.658 から **`Wifi info is not yet available.`** が続く（この区間に 111 件。22:54:03 からは、この行だけが 0.55 秒ほどの間隔で続く）。
+5. 最初の 1 件から 15 秒（22:53:48.658）の前後に、ほかの種類の記録は出ていない。この区間に、トラッカー 0 への `Assign wifi info ...` と `is connected to host` は、1 件もない。
 
 ```
 [2026-11-27 22:53:25.377 +9 0xF88 INFO OETServer::AddTrackerCB] [3976] Add new tracker: (2), connection type: 1
-[2026-11-27 22:53:25.380 +9 0xF88 INFO OETServer::DeviceStatusToVHServer] [3976] display index: 0, device index: 2, connected: 1, tracking status: 5, charging: 0, percentage: 98, map ID: -1, map status: -1, has map: 1, map state: 0, is host: 1, bIsConnectedOnUSB: 0, has new fw: 0, is unpaired: 0, last update time: 0, error code: -1, indicator event: 1, indicator value: 1
-（中略: 7 行）
-[2026-11-27 22:53:25.382 +9 0x82B0 INFO OETServer::CreateTracker] [33456] Create tracker (2) - power state: 11, data format: 1, host running state: 0
-（中略: 1 行）
-[2026-11-27 22:53:25.382 +9 0x82B0 INFO OETServer::StartTracker] [33456] Start tracker - power state :21, data format: 1
-（中略: 5 行）
-[2026-11-27 22:53:25.383 +9 0xF88 INFO Tracker::UpdateSwitchingMode] [3976] power state: 0, is host: 1
-[2026-11-27 22:53:25.383 +9 0xF88 INFO Tracker::UpdateSwitchingMode] [3976] Tracker (2) Switching mode: OFF
-[2026-11-27 22:53:25.383 +9 0xF88 INFO Tracker::SetSpaceCalibrationInfo] [3976] Transform - rotation:(0.000000, 0.123456, 0.000000, 0.123456 w), pos:(-0.123456, 0.123456, -0.123456), scale: 0.123456
-[2026-11-27 22:53:25.383 +9 0x82B0 INFO Tracker::UpdateSwitchingMode] [33456] power state: 21, is host: 1
-（中略: 5 行）
-[2026-11-27 22:53:25.384 +9 0x2850 INFO OETServer::OnPipeQueryData] [10320] (2) Set SteamVR index: 5
-（中略: 9 行）
+（中略: 35 行）
 [2026-11-27 22:53:25.385 +9 0x82B0 INFO OETServer::CreateTracker] [33456] Start host tracker. ret: 0
-[2026-11-27 22:53:25.385 +9 0x82B0 INFO OETServer::GetDeviceInfoAndResponse] [33456] Response - cmd type: 214, cmd key: (AAAA), device index: 2, result: 0, sn: (00XX000000001), model name: (VIVE Ultimate Tracker 1), fw version: (1.0.999.178), role: (0), device type: 0, force update: 0, type: 1
-（中略: 3 行）
-[2026-11-27 22:53:25.399 +9 0x82B0 ERROR OETServer::CreateDeviceAndResponse] [33456] Fail to create tracker. Device index: 2, tracking mode: 1, tracking format: 11, err: 22
-（中略: 9 行）
+（中略: 13 行）
+[2026-11-27 22:53:25.561 +9 0x3D64 INFO FWUpdater::CheckHasNewFOTAPackage] [15716] This OET has latest firmware
 [2026-11-27 22:53:26.257 +9 0xF88 INFO OETServer::ProcessDeviceMsg] [3976] Got host wifi info.
 [2026-11-27 22:53:27.127 +9 0x497C INFO Tracker::CopyFromDriverThreadProc] [18812] (SteamVR: 5)(2)[49]Pose status is changed: Pose data - status: 3, pos: (0.000000, 0.000000, 0.000000), rotation: (0.123456, -0.123456, -0.123456, w 0.123456), vel: (0.000000, 0.000000, -0.000000), angular vel: (0.123456, -0.123456, -0.123456) 
-（中略: 11 行）
-[2026-11-27 22:53:28.522 +9 0xF88 ERROR OETServer::DeviceInfoCB] [3976] TRACKER NOT FOUND. tracker: 00XX000000002
-（中略: 17 行）
+（中略: 29 行）
 [2026-11-27 22:53:28.857 +9 0xF88 INFO OETServer::AddTrackerCB] [3976] Add new tracker: (4), connection type: 1
-（中略: 14 行）
-[2026-11-27 22:53:28.863 +9 0x82B0 INFO Tracker::UpdateSwitchingMode] [33456] power state: 11, is host: 0
-（中略: 39 行）
+（中略: 49 行）
+[2026-11-27 22:53:29.030 +9 0xB0D4 INFO FWUpdater::CheckHasNewFOTAPackage] [45268] This OET has latest firmware
+（中略: 4 行）
 [2026-11-27 22:53:29.282 +9 0xF88 INFO OETServer::ProcessDeviceMsg] [3976] Assign wifi info to client tracker (index: 4).
 （中略: 8 行）
 [2026-11-27 22:53:30.018 +9 0xF88 INFO OETServer::ProcessDeviceMsg] [3976] Client tracker (index: 4) is connected to host: 1
@@ -122,10 +108,11 @@
 [2026-11-27 22:53:31.503 +9 0x497C INFO Tracker::CopyFromDriverThreadProc] [18812] (SteamVR: 5)(2)[78]Pose status is changed: Pose data - status: 2, pos: (0.123456, -0.123456, -0.123456), rotation: (-0.123456, -0.123456, -0.123456, w 0.123456), vel: (-0.123456, 0.123456, -0.123456), angular vel: (-0.123456, -0.123456, -0.123456) 
 （中略: 5 行）
 [2026-11-27 22:53:32.961 +9 0xF88 INFO Tracker::UpdateSwitchingMode] [3976] Tracker (2) - switch to HOST mode.
-[2026-11-27 22:53:32.961 +9 0xF88 INFO Tracker::UpdateSwitchingMode] [3976] Tracker (2) Switching mode: ON
-（中略: 19 行）
+（中略: 20 行）
 [2026-11-27 22:53:33.244 +9 0xF88 INFO OETServer::AddTrackerCB] [3976] Add new tracker: (0), connection type: 1
-（中略: 54 行）
+（中略: 48 行）
+[2026-11-27 22:53:33.408 +9 0x91E4 INFO FWUpdater::CheckHasNewFOTAPackage] [37348] This OET has latest firmware
+（中略: 5 行）
 [2026-11-27 22:53:33.658 +9 0xF88 WARN OETServer::ProcessDeviceMsg] [3976] Wifi info is not yet available.
 （中略: 12 行）
 [2026-11-27 22:53:34.283 +9 0xF88 WARN OETServer::ProcessDeviceMsg] [3976] Wifi info is not yet available.
@@ -136,10 +123,28 @@
 [2026-11-27 22:53:34.643 +9 0x82B0 INFO OETServer::CancelPairing] [33456] Cancel pairing on dongle.
 [2026-11-27 22:53:34.837 +9 0xF88 WARN OETServer::ProcessDeviceMsg] [3976] Wifi info is not yet available.
 [2026-11-27 22:53:34.867 +9 0x440C INFO Tracker::CopyFromDriverThreadProc] [17420] (SteamVR: 6)(0)[36]Pose status is changed: Pose data - status: 3, pos: (0.000000, 0.000000, 0.000000), rotation: (0.123456, -0.123456, 0.123456, w 0.123456), vel: (0.000000, 0.000000, -0.000000), angular vel: (0.123456, -0.123456, 0.123456) 
-（中略: 4 行）
+（中略: 11 行。うち `Wifi info is not yet available.` が 7 件）
+[2026-11-27 22:53:39.031 +9 0x497C INFO Tracker::CopyFromDriverThreadProc] [18812] (SteamVR: 5)(2)[249]Pose status is changed: Pose data - status: 4, pos: (-0.123456, -0.123456, -0.123456), rotation: (-0.123456, -0.123456, -0.123456, w 0.123456), vel: (0.000000, 0.000000, 0.000000), angular vel: (0.123456, -0.123456, -0.123456) 
+（中略: 13 行。うち `Wifi info is not yet available.` が 7 件）
+[2026-11-27 22:53:42.615 +9 0x497C INFO Tracker::CopyFromDriverThreadProc] [18812] (SteamVR: 5)(2)[185]Pose status is changed: Pose data - status: 2, pos: (-0.123456, -0.123456, 0.123456), rotation: (-0.123456, 0.123456, -0.123456, w 0.123456), vel: (0.123456, -0.123456, -0.123456), angular vel: (-0.123456, -0.123456, 0.123456) 
+（中略: 5 行。うち `Wifi info is not yet available.` が 1 件）
+[2026-11-27 22:53:43.192 +9 0xF88 ERROR OETServer::OnTrackerStatusIndicatorUpdate] [3976] [2] OET OVERSPEED!
+（中略: 5 行。うち `Wifi info is not yet available.` が 5 件）
+[2026-11-27 22:53:46.196 +9 0xF88 ERROR OETServer::OnTrackerStatusIndicatorUpdate] [3976] [2] OET OVERSPEED!
+（中略: 3 行。うち `Wifi info is not yet available.` が 3 件）
+[2026-11-27 22:53:48.163 +9 0xF88 WARN OETServer::ProcessDeviceMsg] [3976] Wifi info is not yet available.
+[2026-11-27 22:53:48.721 +9 0xF88 WARN OETServer::ProcessDeviceMsg] [3976] Wifi info is not yet available.
+（中略: 49 行。うち `Wifi info is not yet available.` が 25 件）
+[2026-11-27 22:54:03.133 +9 0xF88 WARN OETServer::ProcessDeviceMsg] [3976] Wifi info is not yet available.
+[2026-11-27 22:54:03.686 +9 0xF88 WARN OETServer::ProcessDeviceMsg] [3976] Wifi info is not yet available.
+（中略: 52 行。うち `Wifi info is not yet available.` が 52 件）
+[2026-11-27 22:54:33.136 +9 0xF88 WARN OETServer::ProcessDeviceMsg] [3976] Wifi info is not yet available.
+[2026-11-27 22:54:33.683 +9 0xF88 WARN OETServer::ProcessDeviceMsg] [3976] Wifi info is not yet available.
+（中略: 1 行。うち `Wifi info is not yet available.` が 1 件）
+[2026-11-27 22:54:34.827 +9 0xF88 WARN OETServer::ProcessDeviceMsg] [3976] Wifi info is not yet available.
 ```
 
-このあと 23:01 まで、`Wifi info is not yet available.` が 671 件続いた（1 分あたり 29〜108 件）。そのあいだに省いた行の多くは、状態の行（`display index: ...`）、`Host running state:2 to 2`、`Scan status: 1, Cali status: 1`、`[ServiceStatusToVHServer] ...`、`Tracker is not found`（`WARN`）、`TRACKER NOT FOUND. tracker: <シリアル番号>`（`ERROR`）の繰り返し。
+このあと 23:01 まで、`Wifi info is not yet available.` は、合わせて 671 件続いた（1 分あたり 29〜108 件）。省いた行の多くは、状態の行（`display index: ...`）、`Host running state:2 to 2`、`Scan status: 1, Cali status: 1`、`[ServiceStatusToVHServer] ...`、`Tracker is not found`（`WARN`）、`TRACKER NOT FOUND. tracker: <シリアル番号>`（`ERROR`）の繰り返し。`This OET has latest firmware` の 3 件は、`OET ` の語で拾われたもので、追跡の状態とは関係がない。
 
 ## 4. そのほかの種類（サーバー）
 
@@ -186,7 +191,7 @@
 [2026-11-27 22:52:59.298 +9 0xF88 INFO TrackerDongleHID::ParseIndication] [3976] (2) Tracker is going to power-off.
 ```
 
-最後の行（電源オフの知らせ）は、4 章の先頭の `Remove tracker (2), ...`（サーバー。同じ 22:52:59.298）と同じ出来事。
+最後の行（電源オフの予告）は、4 章の先頭の `Remove tracker (2), ...`（サーバー。同じ 22:52:59.298）と同じ出来事。
 
 ドングル（`ViveTrackerDongle_20261127.txt`）:
 
