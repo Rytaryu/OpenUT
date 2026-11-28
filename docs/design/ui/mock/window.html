@@ -11,7 +11,7 @@
 <script src="text.js"></script>
 <script src="scenarios.js"></script>
 <style>
-  /* Values: docs/design/ui/m1.md, chapter 3. Open with ?s=a .. ?s=i (scenes in scenarios.js). */
+  /* Values: docs/design/ui/m1.md, chapter 3. Open with ?s=a .. ?s=j (scenes in scenarios.js). */
   body { padding: 24px; }
   #win { display: inline-block; border-radius: 8px; overflow: hidden; box-shadow: 0 0 0 1px #3A3F46; }
 
@@ -39,6 +39,7 @@
   .band .others .row { display: grid; grid-template-columns: 14px 1fr; column-gap: 8px; font-size: 14px; line-height: 20px; align-items: start; }
   .band .others .row svg { margin-top: 3px; }
   .band .others .row .t { display: flex; flex-wrap: wrap; column-gap: 12px; }
+  .band .others .row .t.col { flex-direction: column; }
   .band .others .row b { font-weight: 700; }
   .band .line .head { font-weight: 700; }
   .band .line .act { font-size: 16px; line-height: 24px; color: var(--ink); margin-top: 2px; }
@@ -138,6 +139,23 @@
   const avail = ww - 40 - 120 - 25;
   const tw = Math.max(152, Math.min(176, Math.floor((avail - 48) / 5)));
 
+  // Serial number on a tile (3.4): the tail (Bold) is always shown whole.
+  // A: the whole serial on one line. B: "…" and the end of the part before the tail, on one line.
+  // C: the tail alone does not fit on one line: "…" (when there is a part before it) and the tail, cut into lines
+  //    from the end (each line from the end as full as it can be, the rest on the first line), as many as needed.
+  function serialHtml(serial, tail, w) {
+    const R = `400 13px ${fam}`, B = `700 13px ${fam}`, m = window.OpenUTWrap.measure;
+    let pre = serial.slice(0, serial.length - tail.length);
+    const html = (p, t) => `<span class="pre">${esc(p)}</span><span class="tail">${esc(t)}</span>`;
+    if (m(R, pre) + m(B, tail) <= w) return html(pre, tail);
+    if (m(R, "…") + m(B, tail) <= w) {
+      while (pre && m(R, "…" + pre) + m(B, tail) > w) pre = Array.from(pre).slice(1).join("");
+      return html("…" + pre, tail);
+    }
+    const lines = window.OpenUTWrap.wrapFromEnd((serial.length > tail.length ? "…" : "") + tail, B, w);
+    return lines.map((l, i) => (i === 0 && l.startsWith("…") ? html("…", l.slice(1)) : html("", l))).join("<br>");
+  }
+
   function tile(d) {
     const off = d.link === "none";
     const st = d.state;
@@ -154,9 +172,7 @@
     const batRow = off ? "" :
       `<div class="kv">${I.battery(d.battery, d.charging, grey ? "var(--muted)" : "var(--ink)")}` +
       (d.battery == null ? `<span class="unk">${W.unknown}</span>` : `<b>${d.battery}%</b>`) + `</div>`;
-    const ser = d.serial
-      ? `<span class="pre">${d.serial.slice(0, d.serial.length - d.tail.length)}</span><span class="tail">${d.tail}</span>`
-      : `<span class="unk">${W.unknown}</span>`;
+    const ser = d.serial ? serialHtml(d.serial, d.tail, tw - 24) : `<span class="unk">${W.unknown}</span>`;
     return `<div class="tile${off && !st ? " off" : ""}${grey ? " grey" : ""}" style="width:${tw}px">${bar}
       <div class="name">${name}</div>
       <div class="pict">${I.tracker(ring, off ? "outline" : "solid")}</div>
@@ -197,9 +213,18 @@
 
   // Other live notices, inside the band under the line: all of faults except the one shown as the line (3.2).
   const others = sc.faults.filter((f) => !(sc.line && sc.line.fault === f));
+  // A row: the headline and, 12 to its right, the action. When they do not fit on one line, the action goes
+  // under the headline, and each is broken with wrap.js (4.4).
+  const rowW = lineW - 14 - 8;
+  function rowText(f) {
+    const HB = `700 14px ${fam}`, AR = `400 14px ${fam}`, m = window.OpenUTWrap.measure;
+    const one = m(HB, X.plain(f.headline)) + (f.action ? 12 + m(AR, X.plain(f.action)) : 0) <= rowW;
+    if (one) return `<div class="t"><b>${esc(X.plain(f.headline))}</b>${f.action ? `<span>${esc(X.plain(f.action))}</span>` : ""}</div>`;
+    return `<div class="t col"><b>${wrapHtml(f.headline, HB, rowW)}</b>${f.action ? `<span>${wrapHtml(f.action, AR, rowW)}</span>` : ""}</div>`;
+  }
   const othersHtml = others.length
     ? `<div class="others">${others.map((f) => `<div class="row">${I.state(f.resolved ? "ok" : "fault", 14, f.resolved ? "var(--ok)" : "var(--fault)")}` +
-        `<div class="t"><b>${esc(X.plain(f.headline))}</b>${f.action ? `<span>${esc(X.plain(f.action))}</span>` : ""}</div></div>`).join("")}</div>`
+        rowText(f) + `</div>`).join("")}</div>`
     : "";
 
   function stepsHtml(items) {

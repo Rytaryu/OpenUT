@@ -1,4 +1,4 @@
-// Line breaking of docs/design/ui/m1.md (section 4.4), for the mockups and for mock/lines.js.
+// Line breaking of docs/design/ui/m1.md (section 4.4), for the mockups and for mock/fit.js.
 // The text is given as lines separated by "\n" (one line per sentence, after "。"),
 // and each line as phrases (文節) separated by "|". The result is the list of drawn lines.
 // The app does the same in Rust with the advance widths of the loaded font.
@@ -8,7 +8,9 @@
 
   // Characters that must not start a line (rule 3).
   const NO_START = new Set(Array.from("、。，．）」』ーぁぃぅぇぉっゃゅょゎァィゥェォッャュョヮ…"));
-  const ALNUM = /[0-9A-Za-z]/;
+  // Characters of a serial number (design 4.4: ASCII letters, digits and "-"). A run of them is kept on one line
+  // when it fits on one line (rule 3).
+  const RUN = /[0-9A-Za-z-]/;
 
   let ctx = null;
   function measure(font, s) {
@@ -17,18 +19,27 @@
     return ctx.measureText(s).width;
   }
 
-  // Rule 3: a phrase wider than the line is broken by characters.
+  // Rule 3: a phrase wider than the line goes on after the current line, character by character,
+  // and is broken where the line is full.
   function breakPhrase(font, width, phrase, out, cur) {
-    for (const c of Array.from(phrase)) {
+    const chars = Array.from(phrase);
+    for (let i = 0; i < chars.length; i++) {
+      const c = chars[i];
       if (cur === "" || measure(font, cur + c) <= width) { cur += c; continue; }
-      // The next line starts with carry + c. Move characters down while that start is not allowed:
-      // a NO_START character first, or a run of digits and letters cut in two.
       const head = Array.from(cur);
       let carry = "";
-      const first = () => Array.from(carry + c)[0];
-      while (head.length > 1 && (NO_START.has(first()) || (ALNUM.test(head[head.length - 1]) && ALNUM.test(first())))) {
-        carry = head.pop() + carry;
+      // A run of serial characters cut in two moves down whole, if the whole run fits on one line.
+      // A longer run (a tail of up to 32 characters, design 3.2) is cut where the line is full.
+      if (RUN.test(c) && RUN.test(head[head.length - 1])) {
+        let k = head.length;
+        while (k > 0 && RUN.test(head[k - 1])) k--;
+        let j = i;
+        while (j < chars.length && RUN.test(chars[j])) j++;
+        const run = head.slice(k).join("") + chars.slice(i, j).join("");
+        if (k > 0 && measure(font, run) <= width) carry = head.splice(k).join("");
       }
+      // No line starts with a NO_START character: move characters down until it does not.
+      while (head.length > 1 && NO_START.has(Array.from(carry + c)[0])) carry = head.pop() + carry;
       out.push(head.join(""));
       cur = carry + c;
     }
@@ -41,11 +52,30 @@
       let cur = "";
       for (const phrase of line.split("|")) {
         if (measure(font, cur + phrase) <= width) { cur += phrase; continue; }   // rule 1
-        if (cur !== "") { out.push(cur); cur = ""; }                            // rule 2
-        if (measure(font, phrase) <= width) { cur = phrase; continue; }
+        if (measure(font, phrase) <= width) {                                    // rule 2
+          if (cur !== "") out.push(cur);
+          cur = phrase;
+          continue;
+        }
         cur = breakPhrase(font, width, phrase, out, cur);                        // rule 3
       }
       out.push(cur);
+    }
+    return out;
+  }
+
+  // The serial number on a tile when its tail does not fit on one line (m1.md 3.4, case C): lines are cut
+  // from the end, each holding as many characters as fit, and what is left goes on the first line.
+  // The end of the serial stays on one line, and the first line, where two long tails differ, stands apart.
+  function wrapFromEnd(text, font, width) {
+    const chars = Array.from(text);
+    const out = [];
+    let end = chars.length;
+    while (end > 0) {
+      let start = end - 1;
+      while (start > 0 && measure(font, chars.slice(start - 1, end).join("")) <= width) start--;
+      out.unshift(chars.slice(start, end).join(""));
+      end = start;
     }
     return out;
   }
@@ -69,6 +99,6 @@
     });
   }
 
-  window.OpenUTWrap = { wrap, measure, apply };
+  window.OpenUTWrap = { wrap, wrapFromEnd, measure, apply };
   document.addEventListener("DOMContentLoaded", () => document.fonts.ready.then(() => apply()));
 })();

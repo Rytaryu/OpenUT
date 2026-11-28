@@ -116,5 +116,24 @@
     };
   }
 
+  {
+    // Minimum size, the longest tails (design 3.2, 4.4): two made-up serials of 32 characters that share their
+    // last 31, so every tail is 32 characters (a shorter serial shows whole). One is the host with R1,
+    // the other is not connected (no VIVE Hub number) with R4.
+    const R = "7KWM3X9QH2VT8ND4ZR6BY0PC5FJ0001";
+    const a = dev({ serial: "00XX0000A0003", tail: "00XX0000A0003", hub: 2, battery: 71, state: "ok" });
+    const b = dev({ serial: "A" + R, tail: "A" + R, hub: 1, battery: 58, state: "fault", host: true });
+    const c = dev({ serial: "B" + R, tail: "B" + R, link: "none", state: "fault" });
+    const r1 = X.notice("R1", "Raised", "", lab(b));
+    const r4 = X.notice("R4", "Raised", lab(c), "");
+    scenes.j = {
+      title: "最小の大きさ、末尾が 32 文字の 2 台",
+      overall: "fault", line: { fault: r1 }, faults: [r4, r1], guide: steps("G4", [1, 2]), dongle: "on",
+      devices: [a, b, c], size: [1000, 600],
+    };
+  }
+
   window.OpenUTScenes = scenes;
+  // The two made-up serials of scene j, for vr.html and fit.js.
+  window.OpenUTLong32 = ["A7KWM3X9QH2VT8ND4ZR6BY0PC5FJ0001", "B7KWM3X9QH2VT8ND4ZR6BY0PC5FJ0001"];
 })();

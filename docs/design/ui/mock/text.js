@@ -32,6 +32,7 @@
       "R2 Raised": [`${T}の|準備に|時間が|かかっています${more}`, `${H}の|近くに|置いて、|待ってください`],
       "R3 Raised": [`${T}の|追跡が|始まりません${more}`, `手に持ち、|部屋の中を|見回すように|ゆっくり|動かしてください`],
       "R4 Raised": [`${T}の|接続が|切れました${more}`, `電源が|入っているか|確かめてください`],
+      // Only in the list of the main window's status band, for 30 seconds: not pushed (design 7.1, m1.md 3.3).
       "R4 Resolved": [`${T}が|つながりました${more}`, null],
       "R5 Raised": [`${T}の|追跡が|${span(o.wait || 60)}以上|止まっています${more}`, `カメラの前を|あけて、|明るい方へ|向けてください`],
     }[`${rule} ${stage}`];

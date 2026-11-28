@@ -8,6 +8,7 @@
 <script src="wrap.js"></script>
 <script src="icons.js"></script>
 <script src="text.js"></script>
+<script src="scenarios.js"></script>
 <style>
   body { padding: 24px; background: #6F7A86; }
   .cap { font-size: 13px; color: #F2F4F7; margin: 0 0 8px 2px; }
@@ -19,8 +20,8 @@
            box-shadow: inset 0 0 0 3px var(--vr-edge); font-family: var(--font); }
   .panel .h { margin: 0; font-size: 64px; line-height: 80px; font-weight: 700; color: var(--vr-ink); }
   .panel .a { margin: 12px 0 0; font-size: 54px; line-height: 73px; font-weight: 400; color: var(--vr-ink-2); }
-  #vr-panels, #vr-long { display: inline-grid; gap: 20px; padding: 24px; background: #8A949E; align-items: start; }
-  #vr-panels .panel, #vr-long .panel { zoom: 0.5; }
+  #vr-panels, #vr-long, #vr-serial32 { display: inline-grid; gap: 20px; padding: 24px; background: #8A949E; align-items: start; }
+  #vr-panels .panel, #vr-long .panel, #vr-serial32 .panel { zoom: 0.5; }
 
   /* Field of view: 100 degrees across the frame. Panel 24.1 degrees wide, centre 10.6 degrees below. */
   #vr-view { display: inline-grid; grid-template-columns: 800px 800px; gap: 16px; padding: 16px; background: #E3E7EC; }
@@ -39,24 +40,25 @@
            border: 1.5px solid rgba(255,255,255,.7); border-radius: 50%; z-index: 1; }
   .day .cross { border-color: rgba(0,0,0,.45); }
 
-  /* Dashboard board (4.6, provisional): the main window's parts, twice the size, in texture pixels (1600 x 960). */
-  #vr-board-wrap { display: inline-block; padding: 24px; background: #3A4048; }
-  .board { zoom: 0.5; width: 1600px; height: 960px; background: var(--bg); border-radius: 24px; padding: 48px;
+  /* Dashboard board (4.6, provisional): the main window's parts, twice the size, in texture pixels (1600 x 960).
+     The height follows the content: a tail that needs more than one line makes the tiles and the board taller. */
+  #vr-board-wrap, #vr-board-32-wrap { display: inline-block; padding: 24px; background: #3A4048; }
+  .board { zoom: 0.5; width: 1600px; min-height: 960px; background: var(--bg); border-radius: 24px; padding: 48px;
            display: flex; flex-direction: column; gap: 24px; font-family: var(--font); color: var(--ink); }
   .b-band { background: var(--panel); border-radius: 16px; height: 140px; display: grid; grid-template-columns: 340px 1fr; align-items: center; }
   .b-band .ov { display: flex; align-items: center; gap: 20px; padding-left: 36px; height: 100%; border-right: 2px solid var(--line);
                 font-size: 56px; font-weight: 700; }
   .b-band .ln { padding: 0 36px; font-size: 36px; line-height: 52px; }
   .b-dev { display: flex; gap: 16px; }
-  .b-tile { background: var(--panel); border-radius: 16px; width: 248px; height: 330px; position: relative; overflow: hidden;
-            display: flex; flex-direction: column; align-items: center; padding-top: 28px; }
+  .b-tile { background: var(--panel); border-radius: 16px; width: 248px; min-height: 330px; position: relative; overflow: hidden;
+            display: flex; flex-direction: column; align-items: center; padding: 20px 0 14px; }
   .b-tile .sbar { position: absolute; left: 0; right: 0; top: 0; height: 8px; }
   .b-tile .nm { font-size: 32px; font-weight: 700; line-height: 44px; }
-  .b-tile .tl { font-size: 28px; line-height: 38px; color: var(--ink-2); }
+  .b-tile .tl { margin-top: 10px; font-size: 28px; line-height: 38px; color: var(--ink-2); text-align: center; padding: 0 16px; }
   .b-tile .tl b { color: var(--ink); }
   .b-tile .pc { margin-top: 12px; height: 96px; }
   .b-tile .pc svg { width: 120px; height: 96px; }
-  .b-tile .st { margin-top: 12px; display: flex; align-items: center; gap: 12px; font-size: 32px; font-weight: 700; }
+  .b-tile .st { margin-top: 12px; display: flex; align-items: center; gap: 12px; font-size: 32px; font-weight: 700; line-height: 40px; }
   .b-tile .st svg { width: 28px; height: 28px; }
   .b-tile .hostrow { height: 36px; margin-top: 8px; display: flex; align-items: center; }
   .b-tag { font-size: 24px; font-weight: 700; line-height: 32px; padding: 2px 14px; border-radius: 18px; color: var(--accent);
@@ -65,7 +67,7 @@
   .b-dongle .pc svg { width: 100px; height: 80px; }
   .b-sep { width: 2px; background: var(--line); margin: 0 4px; }
   .b-low { display: grid; grid-template-columns: 1fr; gap: 24px; flex: 1; }
-  .b-frame { background: var(--panel); border-radius: 16px; padding: 28px 36px; display: grid; grid-template-columns: 380px 1fr; column-gap: 28px; }
+  .b-frame { background: var(--panel); border-radius: 16px; padding: 24px 36px; display: grid; grid-template-columns: 380px 1fr; column-gap: 28px; }
   .b-frame .hd { display: flex; flex-direction: column; gap: 20px; align-items: flex-start; }
   .b-frame .nm { display: flex; align-items: center; gap: 14px; font-size: 32px; font-weight: 700; }
   .b-frame .nm svg { width: 40px; height: 40px; }
@@ -98,10 +100,14 @@
 <div id="vr-panels"></div>
 <p class="cap" style="margin-top:28px">長い呼び名、まとめた案内、長いしきい値</p>
 <div id="vr-long"></div>
+<p class="cap" style="margin-top:28px">末尾が32文字の呼び名（末尾31文字が重なる2台。番号のない台を含む）</p>
+<div id="vr-serial32"></div>
 <p class="cap" style="margin-top:28px">視野の中（横100°。板は幅24°、中心は10.6°下）</p>
 <div id="vr-view"></div>
 <p class="cap" style="margin-top:28px">ダッシュボードの板（仮。1600×960）</p>
 <div id="vr-board-wrap"><div class="board" id="vr-board"></div></div>
+<p class="cap" style="margin-top:28px">ダッシュボードの板（仮）。末尾が32文字の2台</p>
+<div id="vr-board-32-wrap"><div class="board" id="vr-board-32"></div></div>
 <script>
 (() => {
   const I = window.OpenUTIcons, X = window.OpenUTText, W = X.words;
@@ -129,23 +135,36 @@
     panel(X.notice("R1", "Escalated", "", longT, { more: 99 })) +
     panel(X.notice("R2", "Raised", longT, noHost, { more: 99 })) +
     panel(X.notice("R5", "Raised", longT, "", { wait: 86399, more: 99 })) +
-    panel(X.notice("R4", "Resolved", longT, "", { more: 99 }), true);
+    panel(X.notice("R1", "Resolved", "", "", { more: 99 }), true);
+
+  // The longest tails (design 3.2, 4.4): the two made-up serials of window.html?s=j, 32 characters each,
+  // sharing their last 31. Rule 3 of 4.4 breaks the run of serial characters where the line is full.
+  const [SA, SB] = window.OpenUTLong32;
+  document.getElementById("vr-serial32").innerHTML =
+    panel(X.notice("R1", "Raised", "", L(1, SA), { more: 1 })) +
+    panel(X.notice("R4", "Raised", L(null, SB), "")) +
+    panel(X.notice("R2", "Raised", L(3, SB), L(1, SA), { more: 99 }));
 
   const v = (cls, n) => `<div class="view ${cls}"><span class="cross"></span><div class="anchor">${panel(n)}</div></div>`;
   document.getElementById("vr-view").innerHTML = v("room", X.notice("R1", "Raised", "", H)) + v("day", X.notice("R2", "Raised", T, H));
 
   // Dashboard board (4.6, provisional): status band, devices, the guide frame and the three operations.
-  const devs = [
-    { hub: 3, tail: "0001", st: "ok" }, { hub: 1, tail: "0002", st: "ok", host: true }, { hub: 2, tail: "0003", st: "ok" },
-    { hub: 5, tail: "0004", st: "ok" }, { hub: 4, tail: "0005", st: "ok" },
-  ];
   const col = { ok: "var(--ok)", wait: "var(--wait)", fault: "var(--fault)" };
-  const tiles = devs.map((d) =>
-    `<div class="b-tile"><div class="sbar" style="background:${col[d.st]}"></div>` +
-    `<div class="nm">${W.tracker}${d.hub}</div><div class="tl">…<b>${d.tail}</b></div>` +
-    `<div class="pc">${I.tracker(col[d.st], "solid")}</div>` +
-    `<div class="hostrow">${d.host ? `<span class="b-tag">${W.host}</span>` : ""}</div>` +
-    `<div class="st">${I.state(d.st, 28, col[d.st])}<span style="color:${col[d.st]}">${W.state[d.st]}</span></div></div>`).join("");
+  // "…{tail}" under the name: one line when it fits, else cut into lines from the end like a tile of the main
+  // window (m1.md 3.4, case C). Inner width 216.
+  const tailH = (tail) => window.OpenUTWrap.wrapFromEnd("…" + tail, `700 28px ${fam}`, 216)
+    .map((l, i) => (i === 0 ? `…<b>${esc(l.slice(1))}</b>` : `<b>${esc(l)}</b>`)).join("<br>");
+  const btile = (d) => d.st
+    ? `<div class="b-tile"><div class="sbar" style="background:${col[d.st]}"></div>` +
+      `<div class="nm">${d.hub ? W.tracker + d.hub : W.tracker}</div>` +
+      `<div class="pc">${I.tracker(col[d.st], "solid")}</div>` +
+      `<div class="hostrow">${d.host ? `<span class="b-tag">${W.host}</span>` : ""}</div>` +
+      `<div class="st">${I.state(d.st, 28, col[d.st])}<span style="color:${col[d.st]}">${W.state[d.st]}</span></div>` +
+      `<div class="tl">${tailH(d.tail)}</div></div>`
+    : `<div class="b-tile"><div class="nm" style="color:var(--ink-2)">${W.tracker}</div>` +
+      `<div class="pc">${I.tracker("var(--idle)", "outline")}</div><div class="hostrow"></div>` +
+      `<div class="st" style="color:var(--ink-2)">${I.state("none", 28, "var(--idle)")}<span>${W.state.none}</span></div>` +
+      `<div class="tl">${tailH(d.tail)}</div></div>`;
   const steps = ["トラッカーと|コントローラーを|重ねて持つ", "8の字を描いて|手首を回す", "終わり"];
   const stepsH = steps.map((t, i) => {
     const k = i < 1 ? "done" : i === 1 ? "now" : "todo";
@@ -154,15 +173,24 @@
       `<div class="lab">${wrapH(t, `${k === "now" ? 700 : 400} 28px ${fam}`, 300)}</div>` +
       (k === "now" ? `<div class="pbar"><i style="width:60%"></i></div>` : "") + `</div>`;
   }).join("");
-  document.getElementById("vr-board").innerHTML =
+  const board = (devs) =>
     `<div class="b-band"><div class="ov" style="color:var(--ok)">${I.state("ok", 56, "var(--ok)")}<span>${W.overall.ok}</span></div>` +
       `<div class="ln">${esc(X.plain(X.guide.G5.line))}</div></div>` +
-    `<div class="b-dev"><div class="b-tile b-dongle"><div class="nm">${W.dongleName}</div><div class="tl">&nbsp;</div>` +
-      `<div class="pc">${I.dongle("on")}</div><div class="hostrow"></div><div class="st" style="font-size:28px">${W.dongle.on}</div></div><div class="b-sep"></div>${tiles}</div>` +
+    `<div class="b-dev"><div class="b-tile b-dongle"><div class="nm">${W.dongleName}</div>` +
+      `<div class="pc">${I.dongle("on")}</div><div class="hostrow"></div><div class="st" style="font-size:28px">${W.dongle.on}</div></div><div class="b-sep"></div>${devs.map(btile).join("")}</div>` +
     `<div class="b-low"><div class="b-frame"><div class="hd"><div class="nm">${I.op("cal", "var(--accent)")}<span>${W.ops.cal}</span></div>` +
       `<span class="b-btn" style="height:72px">${W.stop}</span></div><div class="b-steps">${stepsH}</div></div>` +
       `<div class="b-ops"><span class="b-btn off">${I.op("pair")}${W.ops.pair}</span><span class="b-btn off">${I.op("map")}${W.ops.map}</span>` +
       `<span class="b-btn on">${I.op("cal")}${W.ops.cal}</span></div></div>`;
+  document.getElementById("vr-board").innerHTML = board([
+    { hub: 3, tail: "0001", st: "ok" }, { hub: 1, tail: "0002", st: "ok", host: true }, { hub: 2, tail: "0003", st: "ok" },
+    { hub: 5, tail: "0004", st: "ok" }, { hub: 4, tail: "0005", st: "ok" },
+  ]);
+  // The serials of window.html?s=j: every tail is 32 characters (a 13-character serial shows whole).
+  // The tracker that is not connected has no number.
+  document.getElementById("vr-board-32").innerHTML = board([
+    { hub: 2, tail: "00XX0000A0003", st: "ok" }, { hub: 1, tail: SA, st: "ok", host: true }, { tail: SB, st: null },
+  ]);
 })();
 </script>
 </body>
