@@ -1,0 +1,6 @@
+# Log rotate by date at 2026-11-28 00:04:00.000
+[2026-11-28 00:04:00.000 +9 0x1 INFO Tracker::CopyFromDriverThreadProc] [1] (SteamVR: 5)(1)[12]Pose status is changed: Pose data - status: 3, pos: (0.123456, 0.000000, 0.000000), rotation: (0.000000, 0.000000, 0.000000, w 1.000000), vel: (0.000000, 0.000000, 0.000000), angular vel: (0.000000, 0.000000, 0.000000)
+[2026-11-28 00:04:30.000 +9 0x1 INFO Tracker::CopyFromDriverThreadProc] [1] (SteamVR: 5)(1)[12]Pose status is changed: Pose data - status: 2, pos: (0.123456, 0.000000, 0.000000), rotation: (0.000000, 0.000000, 0.000000, w 1.000000), vel: (0.000000, 0.000000, 0.000000), angular vel: (0.000000, 0.000000, 0.000000)
+[2026-11-28 00:12:00.000 +9 0x1 INFO OETServer::CheckHostIsStarted] [1] Host running state:2 to 2
+[2026-11-28 00:21:00.000 +9 0x1 INFO OETServer::CheckHostIsStarted] [1] Host running state:2 to 2
+[2026-11-28 00:30:00.000 +9 0x1 INFO OETServer::CheckHostIsStarted] [1] Host running state:2 to 2

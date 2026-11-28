@@ -6,6 +6,7 @@ use crate::event::{Event, Timed};
 use crate::notice::{Notice, NoticeConfig, NoticeScheduler};
 use crate::rules::{Detection, Rules, RulesConfig};
 use crate::state::{DEFAULT_DUP_MS, Snapshot, State};
+use crate::summary::{Summaries, Summary, SummaryConfig, SummarySource};
 use crate::time::{LogDate, LogTime, UtcOffset};
 
 #[cfg(test)]
@@ -20,6 +21,7 @@ pub struct EngineConfig {
     pub rules: RulesConfig,
     pub state: StateConfig,
     pub notice: NoticeConfig,
+    pub summary: SummaryConfig,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -101,10 +103,11 @@ impl EngineStats {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Output {
     Detection(Detection),
     Notice(Notice),
+    DayClosed(Box<Summary>),
 }
 
 pub struct Engine {
@@ -112,9 +115,12 @@ pub struct Engine {
     state: State,
     rules: Rules,
     now: Option<LogTime>,
+    last_server_row: Option<LogTime>,
     offset: UtcOffset,
     detections: Vec<Detection>,
     notices: NoticeScheduler,
+    summaries: Summaries,
+    closed_days: Vec<Summary>,
     stats: EngineStats,
 }
 
@@ -126,8 +132,11 @@ impl Engine {
             cfg,
             rules: Rules::default(),
             now: None,
+            last_server_row: None,
             offset: UtcOffset(0),
             detections: Vec::new(),
+            summaries: Summaries::default(),
+            closed_days: Vec::new(),
             stats: EngineStats::default(),
         }
     }
@@ -146,9 +155,23 @@ impl Engine {
         let power_offs = self
             .rules
             .advance(at, &self.state, &self.cfg.rules, &mut self.detections);
-        self.stats.power_offs = self.stats.power_offs.saturating_add(power_offs);
-        self.notice_detections(first);
+        self.stats.power_offs = self
+            .stats
+            .power_offs
+            .saturating_add(power_offs.len() as u64);
+        for cut in power_offs {
+            self.summaries.power_off(
+                cut.at,
+                self.offset,
+                cut.tracker,
+                cut.conn,
+                cut.serial.as_ref(),
+            );
+        }
+        self.record_detections(first);
         self.notices.advance_to(at);
+        self.summaries
+            .advance_to(at, self.offset, self.cfg.rules.r5.wait_s);
         self.now = Some(at);
     }
 
@@ -158,12 +181,21 @@ impl Engine {
             let first = self.detections.len();
             self.rules
                 .remember_driver_event(&timed, &self.cfg.rules, &mut self.detections);
-            self.notice_detections(first);
+            self.record_detections(first);
             return;
         }
         self.stats.server.record(None);
-        timed.at = self.server_time(timed.at, timed.offset);
+        let before = self.snapshot();
+        timed.at = self.observe_server_line(timed.at, timed.offset, &before, None);
+        timed.offset = self.offset;
         let update = self.state.apply(&timed);
+        let after = self.snapshot();
+        self.summaries
+            .event(&timed, &before, &after, &update, self.cfg.rules.r5.wait_s);
+        if update.out_of_order {
+            let source = self.summaries.source(None);
+            source.out_of_order = source.out_of_order.saturating_add(1);
+        }
         let first = self.detections.len();
         self.rules.apply(
             &timed,
@@ -172,7 +204,8 @@ impl Engine {
             &self.cfg.rules,
             &mut self.detections,
         );
-        self.notice_detections(first);
+        self.record_detections(first);
+        self.closed_days.extend(self.summaries.close_days());
     }
 
     pub fn note_line(&mut self, file: FileKind, at: Option<LogTime>, quality: LineQuality) {
@@ -187,14 +220,29 @@ impl Engine {
         at: Option<(LogTime, UtcOffset)>,
         quality: LineQuality,
     ) {
+        self.note_line_in_file(file, None, at, quality);
+    }
+
+    /// Uses the file's date for records without a readable header.
+    pub fn note_line_in_file(
+        &mut self,
+        file: FileKind,
+        file_date: Option<LogDate>,
+        at: Option<(LogTime, UtcOffset)>,
+        quality: LineQuality,
+    ) {
         match file {
             FileKind::Server => {
                 self.stats.server.record(Some(quality));
                 if let Some((at, offset)) = at {
-                    self.server_time(at, offset);
+                    let before = self.snapshot();
+                    self.observe_server_line(at, offset, &before, Some(quality));
+                    self.closed_days.extend(self.summaries.close_days());
+                } else if let Some(source) = self.summary_source(file_date) {
+                    count_server_record(source, Some(quality));
                 }
             }
-            FileKind::Driver => self.record_driver_line(at, Some(quality)),
+            FileKind::Driver => self.record_driver_record(at, file_date, Some(quality)),
         }
     }
 
@@ -202,9 +250,11 @@ impl Engine {
     /// time can move beyond it.
     pub fn driver_needed_through(&self) -> Option<LogTime> {
         let now = self.now?;
+        // Wall-time ticks cannot close a day, so use the last actual server row.
+        let basis = self.last_server_row.unwrap_or(now);
         let local_ms =
-            (now.0.rem_euclid(DAY_MS) + i64::from(self.offset.0) * 60_000).rem_euclid(DAY_MS);
-        let day_end = LogTime(now.0.saturating_add(DAY_MS - 1 - local_ms));
+            (basis.0.rem_euclid(DAY_MS) + i64::from(self.offset.0) * 60_000).rem_euclid(DAY_MS);
+        let day_end = LogTime(basis.0.saturating_add(DAY_MS - 1 - local_ms));
         if self.cfg.rules.r4.exclude_power_off
             && let Some(deadline) = self.rules.r4_deadline()
         {
@@ -235,6 +285,9 @@ impl Engine {
         self.state = State::new(self.cfg.state.dup_ms);
         self.rules = Rules::default();
         self.now = None;
+        self.last_server_row = None;
+        self.summaries = Summaries::default();
+        self.closed_days.clear();
         self.offset = UtcOffset(0);
         self.detections.clear();
         self.notices.rebuild();
@@ -248,15 +301,37 @@ impl Engine {
         let notices = self.notices.drain();
         let pushes = notices.iter().filter(|notice| notice.push).count() as u64;
         self.stats.pushes = self.stats.pushes.saturating_add(pushes);
+        let run_pushes = self.stats.pushes;
         self.detections
             .drain(..)
             .map(Output::Detection)
             .chain(notices.into_iter().map(Output::Notice))
+            .chain(self.closed_days.drain(..).map(|mut day| {
+                // The app-run counter reflects deliveries when the summary is emitted.
+                day.pushes = run_pushes;
+                Output::DayClosed(Box::new(day))
+            }))
             .collect()
     }
 
     pub fn live_notices(&self) -> Vec<Notice> {
         self.notices.live()
+    }
+
+    pub fn open_summaries(&self) -> Vec<Summary> {
+        let mut days = self.summaries.open_summaries();
+        for day in &mut days {
+            day.pushes = self.stats.pushes;
+        }
+        days
+    }
+
+    /// Additional parser or reader counters with no effect on observed time.
+    pub fn summary_source(&mut self, date: Option<LogDate>) -> Option<&mut SummarySource> {
+        if date.is_some_and(|date| self.summaries.is_closed(date)) {
+            return None;
+        }
+        Some(self.summaries.source(date))
     }
 
     pub fn snapshot(&self) -> Snapshot {
@@ -265,14 +340,6 @@ impl Engine {
 
     pub fn stats(&self) -> &EngineStats {
         &self.stats
-    }
-
-    fn notice_detections(&mut self, first: usize) {
-        for detection in &self.detections[first..] {
-            self.notices.advance_to(detection.at);
-            let snapshot = self.state.snapshot(detection.at);
-            self.notices.apply(detection, &snapshot);
-        }
     }
 
     fn server_time(&mut self, at: LogTime, offset: UtcOffset) -> LogTime {
@@ -285,19 +352,74 @@ impl Engine {
         at
     }
 
+    fn observe_server_line(
+        &mut self,
+        at: LogTime,
+        offset: UtcOffset,
+        before: &Snapshot,
+        quality: Option<LineQuality>,
+    ) -> LogTime {
+        let effective = self.server_time(at, offset);
+        self.last_server_row = Some(effective);
+        self.summaries
+            .observe(effective, self.offset, before, self.cfg.summary.gap_s);
+        let source = self.summaries.source(None);
+        count_server_record(source, quality);
+        if effective != at {
+            source.time_regressions = source.time_regressions.saturating_add(1);
+        }
+        effective
+    }
+
+    fn record_detections(&mut self, first: usize) {
+        for detection in &self.detections[first..] {
+            self.summaries.detection(detection, self.offset);
+            self.notices.advance_to(detection.at);
+            let snapshot = self.state.snapshot(detection.at);
+            self.notices.apply(detection, &snapshot);
+        }
+    }
+
     fn record_driver_line(
         &mut self,
         at: Option<(LogTime, UtcOffset)>,
         quality: Option<LineQuality>,
     ) {
+        self.record_driver_record(at, None, quality);
+    }
+
+    fn record_driver_record(
+        &mut self,
+        at: Option<(LogTime, UtcOffset)>,
+        file_date: Option<LogDate>,
+        quality: Option<LineQuality>,
+    ) {
         self.stats.driver.record(quality);
-        if let Some((at, offset)) = at {
-            let (day, _) = at.to_local(offset);
+        let day = at.map(|(at, offset)| at.to_local(offset).0);
+        if let Some(day) = day {
             self.stats
                 .driver_days
                 .entry(day)
                 .or_default()
                 .record(quality);
         }
+        if let Some(source) = self.summary_source(day.or(file_date)) {
+            source.driver.found = true;
+            source.driver.lines = source.driver.lines.saturating_add(1);
+            if quality == Some(LineQuality::NoHeader) {
+                source.driver.no_header = source.driver.no_header.saturating_add(1);
+            }
+        }
     }
+}
+
+fn count_server_record(source: &mut SummarySource, quality: Option<LineQuality>) {
+    source.lines = source.lines.saturating_add(1);
+    let count = match quality {
+        Some(LineQuality::Other) => &mut source.other,
+        Some(LineQuality::Unparsed) => &mut source.unparsed,
+        Some(LineQuality::NoHeader) => &mut source.no_header,
+        None => return,
+    };
+    *count = count.saturating_add(1);
 }

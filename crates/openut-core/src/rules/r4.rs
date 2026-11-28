@@ -7,7 +7,7 @@ use crate::state::{ConnectionChange, ConnectionChangeKind, DisconnectReason};
 use crate::time::LogTime;
 use crate::tracker::{Serial, TrackerKey};
 
-use super::{Detection, R4Config, RuleId, Step, Target, after, new_episode};
+use super::{Detection, PowerOffCut, R4Config, RuleId, Step, Target, after, new_episode};
 
 #[derive(Default)]
 pub(super) struct R4 {
@@ -260,7 +260,7 @@ impl R4 {
         cfg: &R4Config,
         output: &mut Vec<Detection>,
         next_episode: &mut u64,
-    ) -> Option<LogTime> {
+    ) -> Option<PowerOffCut> {
         let ((deadline, tracker, _), decide) = self.next_timer()?;
         debug_assert_eq!(at, deadline);
         if !decide {
@@ -275,7 +275,12 @@ impl R4 {
 
         let (_, cut) = self.pending.pop_first()?;
         if cfg.exclude_power_off && self.has_notice(tracker, &cut, cfg) {
-            return Some(cut.cut_at);
+            return Some(PowerOffCut {
+                at: cut.cut_at,
+                tracker,
+                conn: cut.target.conn,
+                serial: cut.target.serial,
+            });
         }
 
         let episode = new_episode(next_episode);
@@ -352,7 +357,7 @@ mod tests {
                     &mut self.output,
                     &mut self.next_episode,
                 ) {
-                    self.power_offs.push(cut);
+                    self.power_offs.push(cut.at);
                 }
             }
         }

@@ -3,13 +3,15 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use openut::replay::{Expectations, ObservedSummaries, RaisedDetection};
-use openut_core::engine::EngineConfig;
+use openut_core::engine::{Engine, EngineConfig, FileKind as Source, LineQuality, Output};
 use openut_core::rules::{RuleId, Step};
-use openut_core::time::UtcOffset;
+use openut_core::time::{LogTime, UtcOffset};
 use openut_core::tracker::TrackerKey;
 use openut_hublog::decode::decode_utf16le_text;
-use openut_hublog::header::{ParsedLine, parse_line};
+use openut_hublog::header::{FileKind, ParsedLine, parse_line};
+use openut_hublog::map::{MapCounts, map_entry};
 use openut_hublog::replay::{ReplayCounts, ReplayFile, ReplayResult, replay, replay_with_flush};
+use openut_hublog::tail::parse_log_name;
 
 struct SavedCase {
     files: Vec<(String, Vec<u8>)>,
@@ -87,11 +89,13 @@ macro_rules! replay_cases {
 }
 
 replay_cases! {
-    synthetic_r1_second_host_command => "synthetic-r1-second-host-command", 132, 14, check_detections;
-    synthetic_normal_start => "synthetic-normal-start", 28, 14, check_detections;
-    synthetic_utf16 => "synthetic-utf16", 28, 14, check_detections;
-    synthetic_r1_gap_then_fault => "synthetic-r1-gap-then-fault", 140, 14, check_detections;
+    synthetic_r1_second_host_command => "synthetic-r1-second-host-command", 132, 14, check_replay;
+    synthetic_normal_start => "synthetic-normal-start", 28, 14, check_replay;
+    synthetic_utf16 => "synthetic-utf16", 28, 14, check_replay;
+    synthetic_r1_gap_then_fault => "synthetic-r1-gap-then-fault", 140, 14, check_replay;
     synthetic_r4_power_off => "synthetic-r4-power-off", 40, 28, check_power_off_detections;
+    synthetic_midnight => "synthetic-midnight", 27, 15, check_midnight;
+    synthetic_midnight_no_prev => "synthetic-midnight-no-prev", 6, 1, check_midnight;
     hub_2026_11_23_28 => "hub-2026-11-23-28", 91_356, 317;
 }
 
@@ -147,7 +151,7 @@ fn utf16_matches_utf8_contents_and_replay_output() {
 }
 
 #[test]
-fn r1_expectation_matches_the_saved_host_and_warning_sequence() {
+fn r1_fixture_has_two_host_commands_and_550_ms_warning_intervals() {
     let case = SavedCase::load("synthetic-r1-second-host-command");
     let [(_, bytes)] = case.files.as_slice() else {
         panic!("expected a single R1 fixture file");
@@ -185,26 +189,14 @@ fn r1_expectation_matches_the_saved_host_and_warning_sequence() {
             .all(|pair| pair[1].at.0 - pair[0].at.0 == 550)
     );
     let first = warnings[0].at;
-    let (index, raised) = warnings
+    let index = warnings
         .iter()
-        .enumerate()
-        .find(|(_, entry)| entry.at.0 - first.0 >= 15_000)
+        .position(|entry| entry.at.0 - first.0 >= 15_000)
         .expect("warning sequence lasts more than 15 seconds");
     assert_eq!(index, 28);
-    case.expectations
-        .compare(
-            &[RaisedDetection {
-                rule: "R1",
-                tracker: hosts.last().copied(),
-                at: raised.at,
-                offset: raised.offset,
-            }],
-            &ObservedSummaries::new(),
-        )
-        .expect("expected R1 host and time match the fixture");
 }
 
-fn check_detections(case: &SavedCase) -> ReplayResult {
+fn check_replay(case: &SavedCase) -> ReplayResult {
     let result = case.run_replay(&case.inputs());
     let raised: Vec<_> = result
         .detections
@@ -218,17 +210,27 @@ fn check_detections(case: &SavedCase) -> ReplayResult {
             offset: UtcOffset(9 * 60),
         })
         .collect();
-    if let Err(report) = case
-        .expectations
-        .compare(&raised, &ObservedSummaries::new())
-    {
+    let summaries: ObservedSummaries = result
+        .summaries
+        .iter()
+        .map(|summary| {
+            let table = toml::Table::try_from(summary).expect("summary serializes as a TOML table");
+            (summary.date.clone(), table)
+        })
+        .collect();
+    assert_eq!(
+        summaries.len(),
+        result.summaries.len(),
+        "duplicate summary dates"
+    );
+    if let Err(report) = case.expectations.compare(&raised, &summaries) {
         panic!("{report}");
     }
     result
 }
 
 fn check_power_off_detections(case: &SavedCase) {
-    let result = check_detections(case);
+    let result = check_replay(case);
     assert_eq!(result.stats.power_offs, 1);
 
     let server_files: Vec<_> = case
@@ -238,6 +240,11 @@ fn check_power_off_detections(case: &SavedCase) {
         .collect();
     let without_driver = case.run_replay(&server_files);
     assert_eq!(without_driver.stats.power_offs, 0);
+    let [summary] = without_driver.summaries.as_slice() else {
+        panic!("expected one day of summary results");
+    };
+    assert!(!summary.source.driver.found);
+    assert_eq!(summary.trackers[0].power_offs, 0);
     let raised: Vec<_> = without_driver
         .detections
         .iter()
@@ -251,4 +258,310 @@ fn check_power_off_detections(case: &SavedCase) {
             (RuleId::R4, Some(TrackerKey(2))),
         ],
     );
+}
+
+fn check_midnight(case: &SavedCase) {
+    let result = check_replay(case);
+    assert_eq!(result.summaries.len(), case.files.len());
+}
+
+fn apply_midnight_file(engine: &mut Engine, input: &ReplayFile<'_>) {
+    let date = parse_log_name(input.name).expect("known log name").date;
+    let log = std::str::from_utf8(input.bytes).expect("midnight fixture is UTF-8");
+    for line in log.lines() {
+        match parse_line(line) {
+            ParsedLine::Meta(_) => {
+                engine
+                    .summary_source(Some(date))
+                    .expect("fixture day is still open")
+                    .meta += 1;
+            }
+            ParsedLine::Entry(entry) => {
+                let mut counts = MapCounts::default();
+                if let Some(event) = map_entry(&entry, FileKind::Server, &mut counts) {
+                    engine.apply(event);
+                } else {
+                    assert_eq!(counts.server.other, 1);
+                    engine.note_line_at(
+                        Source::Server,
+                        Some((entry.at, entry.offset)),
+                        LineQuality::Other,
+                    );
+                }
+            }
+            ParsedLine::NoHeader(_) => panic!("all midnight fixture rows are readable"),
+        }
+    }
+}
+
+#[test]
+fn steady_watch_and_rebuilding_reproduce_both_days_of_the_midnight_replay() {
+    let case = SavedCase::load("synthetic-midnight");
+    let mut inputs = case.inputs();
+    inputs.sort_by_key(|file| file.name);
+    let [previous, next] = inputs.as_slice() else {
+        panic!("midnight fixture covers two days");
+    };
+    let expected = case.run_replay(&inputs);
+    let mut engine = Engine::new(EngineConfig::default());
+    for rebuilt in [false, true] {
+        if rebuilt {
+            engine.rebuild();
+        }
+        apply_midnight_file(&mut engine, previous);
+        if !rebuilt {
+            let now = engine.now().unwrap();
+            engine.advance_to(LogTime(now.0 + 120_000));
+            let days = engine.open_summaries();
+            assert_eq!(days.len(), 1);
+            assert!(!days[0].is_final);
+        }
+        apply_midnight_file(&mut engine, next);
+        let mut summaries: Vec<_> = engine
+            .drain()
+            .into_iter()
+            .filter_map(|output| match output {
+                Output::DayClosed(summary) => Some(*summary),
+                Output::Detection(_) | Output::Notice(_) => None,
+            })
+            .collect();
+        summaries.extend(engine.open_summaries());
+        assert_eq!(summaries, expected.summaries, "rebuilt = {rebuilt}");
+    }
+}
+
+const NEXT_DAY_LOG: &str = "ViveTrackerServer_20261128.txt";
+
+fn edit_next_day(case: &mut SavedCase, edit: impl FnOnce(&str) -> String) {
+    let (_, bytes) = case
+        .files
+        .iter_mut()
+        .find(|(name, _)| name == NEXT_DAY_LOG)
+        .expect("midnight fixture has a next-day server file");
+    *bytes = edit(std::str::from_utf8(bytes).expect("midnight fixture is UTF-8")).into_bytes();
+}
+
+#[test]
+fn long_gap_after_midnight_is_unobserved_with_or_without_a_previous_file() {
+    for (name, connected, in_use, tracked, unobserved, losses) in [
+        ("synthetic-midnight", 270.0, 270.0, 240.0, 1530.0, 1),
+        ("synthetic-midnight-no-prev", 30.0, 0.0, 0.0, 1770.0, 0),
+    ] {
+        let mut case = SavedCase::load(name);
+        let original = case.run_replay(&case.inputs());
+        edit_next_day(&mut case, |source| {
+            source
+                .split_inclusive('\n')
+                .filter(|line| {
+                    !line.starts_with("[2026-11-28 00:12:")
+                        && !line.starts_with("[2026-11-28 00:21:")
+                })
+                .collect()
+        });
+        let replay = case.run_replay(&case.inputs());
+        let (last, prior) = replay
+            .summaries
+            .split_last()
+            .expect("day must be summarized");
+        assert_eq!(prior, &original.summaries[..original.summaries.len() - 1]);
+        assert_eq!(last.date, "2026-11-28");
+        assert_eq!(last.observed_until, "2026-11-28 00:30:00.000");
+        assert_eq!(last.unobserved_s, unobserved, "{name}");
+        let [tracker] = last.trackers.as_slice() else {
+            panic!("{name}: expected one tracker summary");
+        };
+        assert_eq!(tracker.connected_s, connected, "{name}");
+        assert_eq!(tracker.in_use_s, in_use, "{name}");
+        assert_eq!(tracker.tracking_s, tracked, "{name}");
+        assert_eq!(tracker.losses, losses, "{name}");
+    }
+}
+
+#[test]
+fn long_gap_across_midnight_splits_unobserved_time_at_midnight() {
+    let mut case = SavedCase::load("synthetic-midnight");
+    let original = case.run_replay(&case.inputs());
+    edit_next_day(&mut case, |source| {
+        source
+            .replace("00:04:00.000", "00:10:00.000")
+            .replace("00:04:30.000", "00:10:30.000")
+    });
+    let replay = case.run_replay(&case.inputs());
+    let [before, after] = replay.summaries.as_slice() else {
+        panic!("expected both calendar days");
+    };
+    assert_eq!(before.date, "2026-11-27");
+    assert!(before.is_final);
+    assert_eq!(before.observed_until, "2026-11-28 00:00:00.000");
+    assert_eq!(
+        before.unobserved_s,
+        original.summaries[0].unobserved_s + 60.0
+    );
+    assert_eq!(before.trackers[0].tracking_s, 540.0);
+    assert_eq!(after.date, "2026-11-28");
+    assert_eq!(after.unobserved_s, 600.0);
+    assert_eq!(after.trackers[0].connected_s, 1200.0);
+    assert_eq!(after.trackers[0].tracking_s, 1170.0);
+}
+
+fn replay_server(source: &str, flush_s: u64) -> ReplayResult {
+    replay_with_flush(
+        &[ReplayFile {
+            name: NEXT_DAY_LOG,
+            bytes: source.as_bytes(),
+        }],
+        EngineConfig::default(),
+        flush_s,
+    )
+}
+
+#[test]
+fn exactly_600_seconds_are_observed_but_one_more_millisecond_is_not() {
+    for (last_at, tracked, unobserved) in
+        [("00:10:00.000", 600.0, 0.0), ("00:10:00.001", 0.0, 600.001)]
+    {
+        let source = format!(
+            concat!(
+                "[2026-11-28 00:00:00.000 +9 0x1 INFO OETServer::AddTrackerCB] [1] Add new tracker: (1), connection type: 1\n",
+                "[2026-11-28 00:00:00.000 +9 0x1 INFO Tracker::CopyFromDriverThreadProc] [1] (SteamVR: 5)(1)[12]Pose status is changed: Pose data - status: 2, pos: (0.000000, 0.000000, 0.000000)\n",
+                "[2026-11-28 {} +9 0x1 INFO OETServer::CheckHostIsStarted] [1] Host running state:2 to 2\n",
+            ),
+            last_at
+        );
+        let replay = replay_server(&source, 0);
+        let [summary] = replay.summaries.as_slice() else {
+            panic!("expected one day of summary results");
+        };
+        assert_eq!(summary.unobserved_s, unobserved);
+        assert_eq!(summary.trackers[0].tracking_s, tracked);
+    }
+}
+
+#[test]
+fn replay_flush_counts_new_detections_without_adding_observed_time() {
+    let source = concat!(
+        "[2026-11-28 12:00:00.000 +9 0x1 INFO OETServer::AddTrackerCB] [1] Add new tracker: (2), connection type: 1\n",
+        "[2026-11-28 12:00:01.000 +9 0x1 INFO OETServer::ProcessDeviceMsg] [1] Client tracker (index: 2) is connected to host: 1\n",
+    );
+    let raw = replay_server(source, 0);
+    let flushed = replay_server(source, 600);
+    assert!(raw.detections.is_empty());
+    assert_eq!(
+        flushed
+            .detections
+            .iter()
+            .filter(|entry| entry.rule == RuleId::R2 && entry.step == Step::Raised)
+            .count(),
+        1
+    );
+    let [before] = raw.summaries.as_slice() else {
+        panic!("expected one day of raw summary results");
+    };
+    let [after] = flushed.summaries.as_slice() else {
+        panic!("expected one day of flushed summary results");
+    };
+    assert_eq!(before.observed_until, "2026-11-28 12:00:01.000");
+    assert_eq!(before.trackers[0].connected_s, 1.0);
+    assert_eq!(after.observed_until, before.observed_until);
+    assert_eq!(after.unobserved_s, before.unobserved_s);
+    assert_eq!(after.trackers, before.trackers);
+    assert_eq!(before.detections.r2, 0);
+    assert_eq!(after.detections.r2, 1);
+}
+
+#[test]
+fn a_missing_offset_stays_on_its_local_day_until_a_server_record_crosses_midnight() {
+    const OLD_LOG: &str = "ViveTrackerServer_20261127.txt";
+    let old = concat!(
+        "[2026-11-27 23:59:58.000 +9 0x1 INFO OETServer::CheckHostIsStarted] [1] Host running state:2 to 2\n",
+        "[2026-11-27 23:59:59.000 0x1 INFO OETServer::CheckHostIsStarted] [1] Host running state:2 to 2\n",
+    );
+    let only_old = replay_with_flush(
+        &[ReplayFile {
+            name: OLD_LOG,
+            bytes: old.as_bytes(),
+        }],
+        EngineConfig::default(),
+        600,
+    );
+    let [before_rollover] = only_old.summaries.as_slice() else {
+        panic!("no server record has crossed midnight yet");
+    };
+    assert!(!before_rollover.is_final);
+    assert_eq!(before_rollover.observed_until, "2026-11-27 23:59:59.000");
+
+    let crossed = format!(
+        "{old}[2026-11-28 00:00:00.000 +9 0x1 INFO OETServer::CheckHostIsStarted] [1] Host running state:2 to 2\n"
+    );
+    let offset_known = crossed.replace("23:59:59.000 0x1", "23:59:59.000 +9 0x1");
+    let replay = |source: &str| {
+        replay_with_flush(
+            &[ReplayFile {
+                name: OLD_LOG,
+                bytes: source.as_bytes(),
+            }],
+            EngineConfig::default(),
+            0,
+        )
+    };
+    let actual = replay(&crossed);
+    let [before, after] = actual.summaries.as_slice() else {
+        panic!("a record in the old file closed its calendar day");
+    };
+    assert_eq!(actual.bad_offset, 1);
+    assert_eq!(before.date, "2026-11-27");
+    assert!(before.is_final);
+    assert_eq!(before.observed_until, "2026-11-28 00:00:00.000");
+    assert_eq!(before.source.bad_offset, 1);
+    assert_eq!(before.source.lines, 2);
+    assert_eq!(after.date, "2026-11-28");
+    assert_eq!(after.source.bad_offset, 0);
+    assert_eq!(after.source.lines, 1);
+
+    let known = replay(&offset_known);
+    assert_eq!(before.unobserved_s, known.summaries[0].unobserved_s);
+    assert_eq!(after, &known.summaries[1]);
+}
+
+#[test]
+fn driver_records_wait_for_the_server_to_observe_their_date_and_do_not_extend_time() {
+    let first_day = || {
+        ReplayFile {
+        name: "ViveTrackerServer_20261127.txt",
+        bytes: b"[2026-11-27 23:59:59.000 +9 0x1 INFO OETServer::CheckHostIsStarted] [1] Host running state:2 to 2\n",
+    }
+    };
+    let next_day = ReplayFile {
+        name: NEXT_DAY_LOG,
+        bytes: b"[2026-11-28 00:00:00.000 +9 0x1 INFO OETServer::CheckHostIsStarted] [1] Host running state:2 to 2\n",
+    };
+    let driver = || {
+        ReplayFile {
+        name: "ViveTrackerDriver_20261128.txt",
+        bytes: b"[2026-11-28 00:00:01.000 +9 0x1 INFO TrackerDongleHID::DataDispatchThreadProc] [1] Wait for HID data got timeout.\n",
+    }
+    };
+    let driver_only = replay_with_flush(&[first_day(), driver()], EngineConfig::default(), 0);
+    let [before] = driver_only.summaries.as_slice() else {
+        panic!("only the server's date is summarized");
+    };
+    assert!(!before.is_final);
+    assert_eq!(before.source.driver.lines, 0);
+    assert_eq!(before.observed_until, "2026-11-27 23:59:59.000");
+
+    let replay = replay_with_flush(
+        &[first_day(), next_day, driver()],
+        EngineConfig::default(),
+        0,
+    );
+    let [before, after] = replay.summaries.as_slice() else {
+        panic!("the later server file opens its calendar day");
+    };
+    assert!(before.is_final);
+    assert_eq!(before.source.driver.lines, 0);
+    assert_eq!(after.date, "2026-11-28");
+    assert_eq!(after.observed_until, "2026-11-28 00:00:00.000");
+    assert_eq!(after.unobserved_s, 0.0);
+    assert_eq!(after.source.driver.lines, 1);
+    assert!(after.source.driver.found);
 }

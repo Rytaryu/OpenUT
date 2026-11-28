@@ -220,7 +220,7 @@ mod tests {
             .into_iter()
             .filter_map(|output| match output {
                 Output::Detection(detection) => Some(detection),
-                Output::Notice(_) => None,
+                Output::Notice(_) | Output::DayClosed(_) => None,
             })
             .collect()
     }

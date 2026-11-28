@@ -45,9 +45,32 @@ fn detections(engine: &mut Engine) -> Vec<Detection> {
         .into_iter()
         .filter_map(|output| match output {
             Output::Detection(detection) => Some(detection),
-            Output::Notice(_) => None,
+            Output::Notice(_) | Output::DayClosed(_) => None,
         })
         .collect()
+}
+
+#[test]
+fn summaries_count_handed_off_pushes_and_keep_the_run_total_after_rebuild() {
+    let mut config = EngineConfig::default();
+    config.rules.r2.wait_s = 1;
+    let mut engine = Engine::new(config);
+    engine.apply(timed(0, add(1)));
+    engine.apply(timed(1, link(1)));
+    engine.advance_to(LogTime(1_002));
+    assert_eq!(engine.open_summaries()[0].pushes, 0);
+    assert_eq!(detections(&mut engine).len(), 1);
+    assert_eq!(engine.open_summaries()[0].pushes, 1);
+
+    engine.rebuild();
+    engine.set_hub_down(true);
+    engine.apply(timed(0, add(1)));
+    engine.apply(timed(1, link(1)));
+    engine.advance_to(LogTime(1_002));
+    assert_eq!(detections(&mut engine).len(), 1);
+    let summaries = engine.open_summaries();
+    assert_eq!(summaries[0].detections.r2, 1);
+    assert_eq!(summaries[0].pushes, 1);
 }
 
 #[test]
