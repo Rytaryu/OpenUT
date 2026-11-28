@@ -11,6 +11,8 @@ const POSE: Pose = Pose {
     rotation: Quat::IDENTITY,
 };
 
+type PoseScript = dyn Fn(usize) -> Vec<TrackedPose>;
+
 #[derive(Default)]
 struct MockBackend {
     failures: usize,
@@ -19,6 +21,7 @@ struct MockBackend {
     pose_reads: usize,
     pending: VecDeque<SteamVrEvent>,
     poses: Vec<TrackedPose>,
+    scripted_poses: Option<Box<PoseScript>>,
     fingerprint: Option<SpaceFingerprint>,
 }
 
@@ -43,7 +46,9 @@ impl Backend for MockBackend {
 
     fn raw_poses(&mut self) -> Vec<TrackedPose> {
         self.pose_reads += 1;
-        self.poses.clone()
+        self.scripted_poses
+            .as_ref()
+            .map_or_else(|| self.poses.clone(), |script| script(self.pose_reads))
     }
 
     fn fingerprint(&mut self) -> Option<SpaceFingerprint> {
@@ -59,10 +64,23 @@ impl Backend for MockBackend {
     }
 }
 
-fn outbox(capacity: usize) -> (Outbox, Receiver<ClientEvent>, Receiver<SampleBatch>) {
+fn outbox(capacity: usize) -> (Outbox, Receiver<ClientEvent>, Receiver<CalibrationBatch>) {
     let (events, event_rx) = mpsc::sync_channel(capacity);
     let (samples, sample_rx) = mpsc::sync_channel(capacity);
     (Outbox { events, samples }, event_rx, sample_rx)
+}
+
+fn detached_client() -> (Client, Outbox, Receiver<OverlayRequest>) {
+    let (outbox, events, samples) = outbox(EVENT_CAPACITY);
+    let (commands, requests) = mpsc::sync_channel(OVERLAY_CAPACITY);
+    let client = Client {
+        control: Arc::new(Control::default()),
+        commands,
+        events,
+        samples,
+        thread: None,
+    };
+    (client, outbox, requests)
 }
 
 fn poll(worker: &mut Worker<MockBackend>, now: Instant, control: &Control, outbox: &Outbox) {
@@ -91,7 +109,7 @@ fn retries_unavailable_runtime_every_ten_seconds() {
             events.try_recv(),
             Ok(ClientEvent::ConnectionFailed("unavailable".to_owned()))
         );
-        assert_eq!(worker.wait(at, false), RECONNECT_INTERVAL);
+        assert_eq!(worker.wait(at, None), RECONNECT_INTERVAL);
         poll(
             &mut worker,
             at + Duration::from_millis(9_999),
@@ -108,7 +126,7 @@ fn retries_unavailable_runtime_every_ten_seconds() {
         events.try_iter().collect::<Vec<_>>(),
         [ClientEvent::Connected, ClientEvent::Fingerprint(None)]
     );
-    assert_eq!(worker.wait(at, false), EVENT_INTERVAL);
+    assert_eq!(worker.wait(at, None), EVENT_INTERVAL);
     assert_eq!(worker.backend.connects, 3);
     assert_eq!(worker.backend.pose_reads, 0);
 }
@@ -161,7 +179,7 @@ fn calibration_reads_only_valid_running_hmd_and_controllers_at_30_hz() {
 
     poll(&mut worker, now, &control, &outbox);
     assert_eq!(worker.backend.pose_reads, 0);
-    control.calibrating.store(true, Ordering::Release);
+    control.set_calibration(true);
     poll(&mut worker, now, &control, &outbox);
     let at = now.duration_since(origin);
     let sample = ControllerSample {
@@ -169,15 +187,18 @@ fn calibration_reads_only_valid_running_hmd_and_controllers_at_30_hz() {
         sample: TimedSample { at, pose: POSE },
     };
     assert_eq!(
-        samples.try_recv(),
-        Ok(SampleBatch {
+        samples.try_recv().unwrap().batch,
+        SampleBatch {
             connection_epoch: 1,
             hmd: Some(TimedSample { at, pose: hmd }),
             controllers: vec![sample]
-        })
+        }
     );
 
-    assert_eq!(worker.wait(now, true), SAMPLE_INTERVAL);
+    assert_eq!(
+        worker.wait(now, control.calibration_trial()),
+        SAMPLE_INTERVAL
+    );
     poll(
         &mut worker,
         now + SAMPLE_INTERVAL - Duration::from_nanos(1),
@@ -188,10 +209,10 @@ fn calibration_reads_only_valid_running_hmd_and_controllers_at_30_hz() {
     poll(&mut worker, now + SAMPLE_INTERVAL, &control, &outbox);
     assert_eq!(worker.backend.pose_reads, 2);
     assert_eq!(
-        samples.try_recv().unwrap().controllers[0].sample.at,
+        samples.try_recv().unwrap().batch.controllers[0].sample.at,
         at + SAMPLE_INTERVAL
     );
-    control.calibrating.store(false, Ordering::Release);
+    control.set_calibration(false);
     poll(&mut worker, now + EVENT_INTERVAL, &control, &outbox);
     assert_eq!(worker.backend.pose_reads, 2);
     assert!(samples.try_recv().is_err());
@@ -290,15 +311,7 @@ fn retries_missing_fingerprint_without_repeated_notifications() {
 #[test]
 fn reconnect_discards_samples_and_commands_from_previous_connection() {
     let now = Instant::now();
-    let (outbox, events, samples) = outbox(EVENT_CAPACITY);
-    let (commands, requests) = mpsc::sync_channel(OVERLAY_CAPACITY);
-    let client = Client {
-        control: Arc::new(Control::default()),
-        commands,
-        events,
-        samples,
-        thread: None,
-    };
+    let (client, outbox, requests) = detached_client();
     let backend = MockBackend {
         poses: vec![TrackedPose {
             device: 2,
@@ -338,6 +351,100 @@ fn reconnect_discards_samples_and_commands_from_previous_connection() {
         stale_response.try_recv(),
         Ok(Err("SteamVR の接続が変わりました。".to_owned()))
     );
+}
+
+fn controller_at_x(x: f64) -> TrackedPose {
+    TrackedPose {
+        device: 2,
+        class: TrackedDeviceClass::Controller,
+        valid: true,
+        running_ok: true,
+        pose: Pose {
+            position: Vec3::new(x, 0.0, 0.0),
+            ..POSE
+        },
+    }
+}
+
+#[test]
+fn restarting_calibration_drops_an_in_flight_pose_from_the_old_attempt() {
+    let (entered, reads) = mpsc::sync_channel(1);
+    let (release, complete) = mpsc::sync_channel(1);
+    let mut client = Client::start(Instant::now(), move || MockBackend {
+        scripted_poses: Some(Box::new(move |read| {
+            let pose = match read {
+                1 => Some(controller_at_x(1.0)),
+                2 => Some(controller_at_x(2.0)),
+                _ => None,
+            };
+            if read <= 3 {
+                entered.send(read).unwrap();
+            }
+            if pose.is_some() {
+                complete.recv_timeout(TEST_TIMEOUT).unwrap();
+            }
+            pose.into_iter().collect()
+        })),
+        ..Default::default()
+    })
+    .unwrap();
+
+    client.set_calibration(true);
+    assert_eq!(reads.recv_timeout(TEST_TIMEOUT), Ok(1));
+    // The first pose is still in the backend when both switches occur.
+    client.set_calibration(false);
+    client.set_calibration(true);
+    release.send(()).unwrap();
+    assert_eq!(reads.recv_timeout(TEST_TIMEOUT), Ok(2));
+    release.send(()).unwrap();
+    // Entry to the next read proves that both earlier results were processed.
+    assert_eq!(reads.recv_timeout(TEST_TIMEOUT), Ok(3));
+
+    let positions: Vec<_> = client
+        .samples()
+        .flat_map(|batch| batch.controllers)
+        .map(|controller| controller.sample.pose.position.x)
+        .collect();
+    client.shutdown();
+    assert_eq!(positions, [2.0]);
+}
+
+#[test]
+fn restarting_calibration_discards_buffered_samples_and_invalidates_the_old_iterator() {
+    for read_while_disabled in [false, true] {
+        let now = Instant::now();
+        let (client, outbox, _requests) = detached_client();
+        let mut worker = Worker::new(
+            MockBackend {
+                poses: vec![controller_at_x(1.0)],
+                ..Default::default()
+            },
+            now,
+            now,
+        );
+        client.set_calibration(true);
+        poll(&mut worker, now, &client.control, &outbox);
+        let mut old_attempt = client.samples();
+        client.set_calibration(false);
+        if read_while_disabled {
+            assert!(client.samples().next().is_none());
+        }
+        client.set_calibration(true);
+        worker.backend.poses = vec![controller_at_x(2.0)];
+        poll(&mut worker, now + SAMPLE_INTERVAL, &client.control, &outbox);
+
+        assert!(old_attempt.next().is_none());
+        let mut samples = client.samples();
+        assert_eq!(
+            samples.next().unwrap().controllers[0]
+                .sample
+                .pose
+                .position
+                .x,
+            2.0
+        );
+        assert!(samples.next().is_none());
+    }
 }
 
 struct ThreadBackend {

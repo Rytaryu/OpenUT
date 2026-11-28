@@ -136,15 +136,34 @@ pub struct SampleBatch {
 }
 
 #[derive(Default)]
+struct Calibration {
+    enabled: bool,
+    trial: u64,
+}
+
+#[derive(Default)]
 struct Control {
     stopping: AtomicBool,
-    calibrating: AtomicBool,
+    calibration: Mutex<Calibration>,
     state: Mutex<ClientState>,
 }
 
 impl Control {
     fn state(&self) -> ClientState {
         *self.state.lock().expect("SteamVR state lock")
+    }
+
+    fn set_calibration(&self, enabled: bool) {
+        let mut calibration = self.calibration.lock().expect("SteamVR calibration lock");
+        if enabled && !calibration.enabled {
+            calibration.trial = calibration.trial.wrapping_add(1);
+        }
+        calibration.enabled = enabled;
+    }
+
+    fn calibration_trial(&self) -> Option<u64> {
+        let calibration = self.calibration.lock().expect("SteamVR calibration lock");
+        calibration.enabled.then_some(calibration.trial)
     }
 }
 
@@ -154,16 +173,22 @@ struct OverlayRequest {
     reply: SyncSender<OverlayResult>,
 }
 
+#[cfg_attr(test, derive(Debug, PartialEq))]
+struct CalibrationBatch {
+    trial: u64,
+    batch: SampleBatch,
+}
+
 struct Outbox {
     events: SyncSender<ClientEvent>,
-    samples: SyncSender<SampleBatch>,
+    samples: SyncSender<CalibrationBatch>,
 }
 
 pub struct Client {
     control: Arc<Control>,
     commands: SyncSender<OverlayRequest>,
     events: Receiver<ClientEvent>,
-    samples: Receiver<SampleBatch>,
+    samples: Receiver<CalibrationBatch>,
     thread: Option<JoinHandle<()>>,
 }
 
@@ -201,8 +226,8 @@ impl Client {
                     if worker_control.stopping.load(Ordering::Acquire) {
                         break;
                     }
-                    let calibrating = worker_control.calibrating.load(Ordering::Acquire);
-                    thread::park_timeout(worker.wait(Instant::now(), calibrating));
+                    let trial = worker_control.calibration_trial();
+                    thread::park_timeout(worker.wait(Instant::now(), trial));
                 }
                 worker.disconnect(&worker_control);
             })?;
@@ -215,8 +240,12 @@ impl Client {
         })
     }
 
+    /// Enables sampling for a new trial when calibration is currently disabled.
     pub fn set_calibration(&self, enabled: bool) {
-        self.control.calibrating.store(enabled, Ordering::Release);
+        self.control.set_calibration(enabled);
+        if !enabled {
+            self.samples.try_iter().for_each(drop);
+        }
         self.wake();
     }
 
@@ -251,12 +280,23 @@ impl Client {
         self.control.state()
     }
 
-    /// Skips queued samples from earlier connections. Restart calibration
-    /// collection when the connection epoch changes.
+    /// Delivers samples from the current trial and connection. An iterator from
+    /// an earlier trial stops without consuming the new trial's samples.
+    /// Restart calibration collection when the connection epoch changes.
     pub fn samples(&self) -> impl Iterator<Item = SampleBatch> + '_ {
-        self.samples.try_iter().filter(|batch| {
-            let state = self.state();
-            state.connected && batch.connection_epoch == state.connection_epoch
+        let trial = self.control.calibration_trial();
+        std::iter::from_fn(move || {
+            let trial = trial?;
+            if self.control.calibration_trial() != Some(trial) {
+                return None;
+            }
+            self.samples.try_iter().find_map(|sample| {
+                let state = self.state();
+                (sample.trial == trial
+                    && state.connected
+                    && sample.batch.connection_epoch == state.connection_epoch)
+                    .then_some(sample.batch)
+            })
         })
     }
 
@@ -287,7 +327,7 @@ struct Worker<B: Backend> {
     connected: bool,
     next_connect: Instant,
     next_event: Instant,
-    next_sample: Option<Instant>,
+    next_sample: Option<(u64, Instant)>,
 }
 
 impl<B: Backend> Worker<B> {
@@ -377,15 +417,17 @@ impl<B: Backend> Worker<B> {
                 Self::publish_fingerprint(Some(fingerprint), control, outbox);
             }
         }
-        if !control.calibrating.load(Ordering::Acquire) {
+        let now = clock();
+        let Some(trial) = control.calibration_trial() else {
             self.next_sample = None;
             return;
-        }
-        let now = clock();
-        if self.next_sample.is_none_or(|deadline| now >= deadline)
+        };
+        if self
+            .sample_deadline(trial)
+            .is_none_or(|deadline| now >= deadline)
             && !control.stopping.load(Ordering::Acquire)
         {
-            self.next_sample = Some(now + SAMPLE_INTERVAL);
+            self.next_sample = Some((trial, now + SAMPLE_INTERVAL));
             let poses = self.backend.raw_poses();
             let at = clock().saturating_duration_since(self.origin);
             let mut batch = SampleBatch {
@@ -410,19 +452,26 @@ impl<B: Backend> Worker<B> {
                 }
             }
             if (batch.hmd.is_some() || !batch.controllers.is_empty())
-                && control.calibrating.load(Ordering::Acquire)
+                && control.calibration_trial() == Some(trial)
                 && !control.stopping.load(Ordering::Acquire)
             {
-                let _ = outbox.samples.try_send(batch);
+                let _ = outbox.samples.try_send(CalibrationBatch { trial, batch });
             }
         }
     }
 
-    fn wait(&self, now: Instant, calibrating: bool) -> Duration {
-        let deadline = match (self.connected, calibrating) {
+    fn sample_deadline(&self, trial: u64) -> Option<Instant> {
+        self.next_sample
+            .and_then(|(scheduled_trial, deadline)| (scheduled_trial == trial).then_some(deadline))
+    }
+
+    fn wait(&self, now: Instant, trial: Option<u64>) -> Duration {
+        let deadline = match (self.connected, trial) {
             (false, _) => self.next_connect,
-            (true, false) => self.next_event,
-            (true, true) => self.next_event.min(self.next_sample.unwrap_or(now)),
+            (true, None) => self.next_event,
+            (true, Some(trial)) => self
+                .next_event
+                .min(self.sample_deadline(trial).unwrap_or(now)),
         };
         deadline.saturating_duration_since(now)
     }
