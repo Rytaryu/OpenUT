@@ -1,11 +1,12 @@
 # M1 見張り役の設計
 
-VIVE Hub を使ったまま横で動かし、VIVE Hub のトラッカー用サーバーのログを読んで、始まらない・途切れる理由と対処を、その場で知らせる（PRD の 5 章）。最終更新: 2026-11-28（ログの書式のメモに合わせた追補。Issue #18）。
+VIVE Hub を使ったまま横で動かし、VIVE Hub のトラッカー用サーバーのログを読んで、始まらない・途切れる理由と対処を、その場で知らせる（PRD の 5 章）。最終更新: 2026-11-28（ログの書式のメモに合わせた追補。Issue #18。PR #26 のレビューの指摘への対応を含む）。
 
 ## 0. 範囲と前提
 
 - 根拠: `docs/product/PRD.md`（4〜6 章、11 章）、`docs/project/DECISIONS.md`（D-9〜D-33）、`docs/research/findings-2026-11-27.md`、`docs/research/findings-2026-11-28.md`、`docs/research/hub-log-format.md`（書式のメモ。以下「メモ」）、`docs/research/hub-log-samples.md`（見本）、`overview.md`。
 - **メモ（Issue #7）に合わせて直した版**（Issue #18）。直したのは、4.1〜4.8（読み取り、行の種類）、5 章（状態）、6.2 の R1 と R4、8 章（集計）、9 章（設定、フォルダー）、10 章（再生）、14 章。メモは、オーナーの PC 1 台・6 日分・1 つの版のログによる（メモの冒頭）。ほかの版や PC で違っていても止まらないことは、4.7 で守る。
+- PR #26 のレビュー（1 回目）の指摘で直したもの: ずれの読めない行の時刻（4.3 の「ずれの補い」）、ドライバーの記録を待つ決まり（3.7、4.6。R4 の照合の範囲と、追記を待つ時間を分けた）、予告と接続の対応（6.2 の R4）、ホストの根拠を Wi-Fi 情報と別に持つこと（3.5、5.3）、ドングルが抜けたときにドングル経由の台だけを切ること（5.1。接続の経路 `link`）。
 - **ドライバーのファイルも読む**（4.1）。サーバーのファイルにない「電源オフの予告」（メモの 3.5）を、R4 の除外に使うためだけ。PRD の W-1 は、サーバーのファイルを挙げている（読むものを足すだけで、W-7 の「読むだけ」は変わらない。14 章で PM に確かめる）。
 - M1 は実機に命令を送らない（W-7、D-13）。読むのはログのファイルだけ。書くのは、OpenUT 自身の保存場所のファイル、デスクトップの通知、SteamVR の中の表示だけ（11 章）。
 - トラッカー内のログの収集（L-3）は、この文書の範囲に入れない。オーナーの PC のつなぎのスクリプトを確かめてから、別に依頼が出る（STATUS の「次の一手」の 6）。
@@ -41,7 +42,7 @@ VIVE Hub を使ったまま横で動かし、VIVE Hub のトラッカー用サ�
  │        ▼                                                    │
  │  ┌─ openut-hublog（入出力なし）──────────────┐              │
  │  │ 追記の追跡の判断 → 解読（UTF-16）→ 記録   │              │
- │  │ → 先頭の解析 → 行の種類 → 出来事 → 時刻順 │              │
+ │  │ → 先頭の解析 → ずれの補い → 時刻順 → 種類 │              │
  │  └───────────────────────────────────────────┘              │
  │        │ 時刻つきの出来事                                   │
  │        ▼                                                    │
@@ -82,6 +83,7 @@ pub struct LogDate { pub year: i32, pub month: u8, pub day: u8 }
 ```
 
 - ログの行の時刻は、地方時と UTC からのずれ（行の先頭の `+9`。U-3）で書かれている。`LogTime` は、それを UTC に直したもの。日付の計算（暦の日付と通し日数の変換）は自前で書く（短い計算なので、時刻のクレートを足さない）。
+- ずれの読めない行は、行ごとに 0 とせず、同じ列（サーバーかドライバーの、ファイルの記録の並び）の前の行のずれを引き継いで UTC に直す（4.3 の「ずれの補い」）。ずれのある行のあいだに 0 の行が 1 つ混ざると、そこだけ時刻が 9 時間先へ飛び、次の行で戻るため。行の `offset`（`Timed` の `offset`）は、補ったあとの値で、地方の日付（8.1）もこの値で求める。
 - 規則と集計は、**ログの時刻だけ**を使う。壁時計は、見張りのループが「時刻の進め方」（4.6）のために使うだけで、エンジンには `LogTime` として渡す。
 - 時間の長さはミリ秒の `i64` で持つ。
 
@@ -116,13 +118,16 @@ pub enum ParsedLine<'a> {
 pub struct Entry<'a> {
     pub at: LogTime,
     pub offset: UtcOffset,
-    /// false when the offset could not be read and 0 was used instead (4.3).
+    /// false when the offset could not be read. The header parser then uses 0;
+    /// OffsetFill (4.3) replaces at and offset before the entry is used.
     pub offset_known: bool,
     pub level: &'a str,
     pub func: &'a str,
     pub thread: Option<&'a str>,
     pub body: &'a str,
 }
+/// Which file a record came from (4.1). Driver records never move the engine time (3.7).
+pub enum FileKind { Server, Driver }
 /// What a body says (4.4).
 pub enum LineKind { ServerStart, ServerRelease, DongleRemoved, TrackerAdded, TrackerRemoved,
     DeviceInfo, HostMode, HostWifiQuery, HostWifiGot, WifiAssign, WifiNotYet, ClientLink,
@@ -141,7 +146,7 @@ pub struct Timed { pub at: LogTime, pub offset: UtcOffset, pub event: Event }
 pub enum Event {
     ServerStarted,                                            // the PC-side server started
     ServerStopped,                                            // the server began to shut down
-    DongleRemoved,                                            // every tracker on the dongle is gone
+    DongleRemoved,                                            // every tracker connected through the dongle is gone
     TrackerAdded { tracker: TrackerKey, usb: bool },
     TrackerRemoved { tracker: TrackerKey, usb: bool },        // usb: connected by cable, not by the dongle
     SerialKnown { tracker: TrackerKey, serial: Serial },
@@ -151,7 +156,8 @@ pub enum Event {
     WifiRequestUnanswered { tracker: Option<TrackerKey> },    // a client asked, PC had nothing (M1: None)
     WifiAssigned { tracker: TrackerKey },                     // PC gave the info to a client
     ClientLink { tracker: TrackerKey, connected: bool },      // client joined / left the host's Wi-Fi
-    Status { tracker: TrackerKey, connected: bool, host: bool, map_ready: bool },  // a report, not a change
+    Status { tracker: TrackerKey, connected: bool, host: bool, map_ready: bool,
+             usb: Option<bool> },                             // a report, not a change. usb: None if not written
     Pose { tracker: TrackerKey, status: PoseStatus },
     Oet { tracker: TrackerKey, kind: OetKind },
     PowerOffNotice { tracker: TrackerKey },                   // the tracker said it is powering off
@@ -162,7 +168,8 @@ pub enum OetKind { LostTracking, RelocBack, Overspeed }
 ```
 
 - `HostAssigned`、`HostWifiQueried`、`WifiAssigned` は、PC からトラッカーへの命令でもある。R4 の「直前に命令があったか」は、この 3 つと `PcCommand` を見る。`PcCommand` の `tracker: None` は、番号のない命令（`Unpair All` など）で、すべてのトラッカーへの命令として扱う。
-- `Status` は、トラッカーごとの状態の報告（4.4 の `DeviceStatusToVHServer` の行）。変わったときだけでなく、数分おきにも出るので、状態を変える出来事ではなく、いまの様子の報告として扱う（5.1）。
+- `Status` は、トラッカーごとの状態の報告（4.4 の `DeviceStatusToVHServer` の行）。変わったときだけでなく、数分おきにも出るので、状態を変える出来事ではなく、いまの様子の報告として扱う（5.1）。`host` はホストの根拠（5.3）、`usb` は接続の経路（5.1。`TrackerAdded` を見ていない台のため）に使う。
+- `TrackerAdded` と `TrackerRemoved` の `usb` は、`connection type: 2`（USB でつないだ。推定。メモの 3.5）のとき `true`。ドングルを通さない接続なので、`DongleRemoved` では切れない（5.1）。
 - `HostWifiObtained` と `WifiRequestUnanswered` の行には、トラッカーの番号がない（メモの 3.1）。M1 では常に `None` で、5 章の「番号のない出来事」の扱いになる（M3 のランタイムは番号を持てるので、型には残す）。
 - 初版の `Map` の出来事は、`Status` の `map_ready` に置き換えた（地図の状態は単独の行ではなく、状態の行の一部のため。メモの 3.1）。
 
@@ -171,19 +178,29 @@ pub enum OetKind { LostTracking, RelocBack, Overspeed }
 ```rust
 pub enum Phase { Disconnected, Connected, WaitingWifi, MapSyncing, Relocalizing, Tracking }
 pub enum Role { Unknown, Host, Client }
+/// How the tracker is connected to the PC (5.1).
+pub enum Link { Dongle, Usb, Unknown }
 pub struct TrackerView {
     pub key: TrackerKey, pub serial: Option<Serial>, pub role: Role,
     pub phase: Phase, pub since: LogTime,
+    pub link: Link,                    // from TrackerAdded (usb), or from Status (usb) when inferred
     pub tracked_since_connect: bool,   // reached Tracking at least once since TrackerAdded
     pub inferred: bool,                // first seen without TrackerAdded (started mid-way)
 }
+/// What tells which tracker is the host (5.3). Kept apart from HostWifi.
+pub enum HostBy { Command, Report }    // Command: HostAssigned. Report: a status report or a Wi-Fi query
+pub struct HostRef { pub key: TrackerKey, pub by: HostBy, pub since: LogTime }
 pub enum HostWifi {
-    Unknown,                                                    // no evidence yet
-    Missing { host: Option<TrackerKey>, since: LogTime, queried: bool },
-    Held { host: Option<TrackerKey>, since: LogTime },
+    Unknown,                                    // no evidence yet
+    Missing { since: LogTime, queried: bool },
+    Held { since: LogTime },
 }
-pub struct Snapshot { pub trackers: Vec<TrackerView>, pub host_wifi: HostWifi, pub at: LogTime }
+pub struct Snapshot {
+    pub trackers: Vec<TrackerView>, pub host: Option<HostRef>, pub host_wifi: HostWifi, pub at: LogTime,
+}
 ```
+
+- **ホスト**（`host`）と **PC の Wi-Fi 情報**（`host_wifi`）は別に持つ。途中から読み始めると、Wi-Fi 情報は `Unknown` のままでも、状態の行の `is host: 1` でホストは分かるため（5.3）。R1 の案内するトラッカー（6.2）は `host` を使い、番号のない問い合わせの候補（5.1）は、`host` から決まる役割を使う。
 
 画面に出す状態の名前（W-2）: `Disconnected` 未接続、`Connected` 接続、`WaitingWifi` Wi-Fi 待ち、`MapSyncing` 地図同期中、`Relocalizing` 位置取り直し中、`Tracking` 追跡中。PC の Wi-Fi 情報: `Held` 持っている、`Missing` 持っていない、`Unknown` 不明。
 
@@ -215,14 +232,20 @@ pub struct Notice {
 ```rust
 impl Engine {
     pub fn new(cfg: EngineConfig, names: Names) -> Engine;
-    /// The caller promises that every later input has at >= t.
+    /// The caller promises that every later input from the server file has at >= t.
     /// Fire every timer whose deadline is < t (in deadline order), then set now = t.
     /// A timer whose deadline == t stays pending: an input at the deadline is in time (6.1).
     pub fn advance_to(&mut self, t: LogTime);
     /// advance_to(ev.at), then update the state, the rules and the summary.
+    /// Events of the driver file (PowerOffNotice) never move the time: they are kept at ev.at (4.6).
     pub fn apply(&mut self, ev: Timed);
-    /// Other / Unparsed / NoHeader. With Some(at): advance_to(at) and mark the line as seen (8.1).
-    pub fn note_line(&mut self, at: Option<LogTime>, quality: LineQuality);
+    /// Other / Unparsed / NoHeader. With Some(at), for the server file: advance_to(at) and mark
+    /// the line as seen (8.1). Lines of the driver file are only counted (on the day of at).
+    pub fn note_line(&mut self, file: FileKind, at: Option<LogTime>, quality: LineQuality);
+    /// The engine must not be moved past this time (by apply of a server event, note_line of a
+    /// server line, or advance_to) until every driver record with at <= this time has been given.
+    /// The earliest of: the deadline of a pending R4 decision, the last instant of the open day (4.6).
+    pub fn driver_needed_through(&self) -> Option<LogTime>;
     pub fn set_catching_up(&mut self, on: bool);                            // 4.5
     /// Start over from the initial state (4.1, 4.5): drop the state, the rules, the summaries
     /// and now. Keep what the notice rules remember (7.1).
@@ -239,9 +262,11 @@ impl Engine {
   - 同じ時刻の入力は、渡された順（ファイルの行の順）に適用する。
   - 期限の判定は、時刻が期限を**過ぎてから**行う（`advance_to(t)` で、期限 < t のもの）。期限と同じ時刻の入力は、期限の判定より先に適用されるので、期限に間に合ったものとして扱われる（6.1）。判定した `Detection` の `at` は、期限の時刻。
   - 同じ期限のものは、規則の順（R1〜R5）、トラッカーの番号の順、期限を作った順に判定する。
-  - 見張りのループは 500 ms ごとに `advance_to(見張りの時刻)` を挟み（4.6）、再生は入力の時刻だけで進む（10.2）。どちらでも、期限 D の判定は「D より後の時刻に進んだとき」で、D ちょうどの入力が先に入るので、結果は同じになる。違いうるのは、見張りで L より遅れて届いた行（時刻が戻る行。4.6）があったときだけ。
+  - 見張りのループは 500 ms ごとに `advance_to(見張りの時刻)` を挟み（4.6）、再生は入力の時刻だけで進む（10.2）。どちらでも、期限 D の判定は「D より後の時刻に進んだとき」で、D ちょうどの入力が先に入るので、結果は同じになる。見張りは、ドライバーの記録を待つ時刻（`driver_needed_through`）より先には、ドライバーを読み終えるまで進めない（4.6 の「ドライバーを待つ」）。違いうるのは、見張りで L より遅れて届いた行（サーバーの時刻が戻る行と、ドライバーの遅れた記録。4.6）があったときだけ。
   - `next_deadline()` は、まだ判定していない最も早い期限（その時刻を過ぎると判定される）。
-- 時刻が戻る出来事（`ev.at` < いまの時刻）は、いまの時刻に起きたものとして扱い、数える（4.6）。例外は `PowerOffNotice` で、R4 が振り返って探すために、元の時刻のまま覚える（6.2 の R4）。ドライバーのファイルは、サーバーのファイルと別にまとめて書かれるので、少し遅れて届くことがあるため（4.6）。
+- エンジンの時刻を進めるのは、**サーバーのファイルの記録と `advance_to` だけ**。ドライバーのファイルの記録（`PowerOffNotice` と、数えるだけの行）は、時刻を進めず、状態も変えない。`PowerOffNotice` は、R4 が振り返って探すために元の時刻のまま覚え、数えるだけの行は、その行の時刻の日に数える（まだ始まっていない日の分は、その日が始まるまで持っておく）。ドライバーのファイルは、サーバーのファイルと別にまとめて書かれ、遅れても進んでも届きうるので、届いた順で時刻を動かさないため（4.6）。
+- サーバーの記録で、時刻が戻るもの（`ev.at` < いまの時刻）は、いまの時刻に起きたものとして扱い、数える（4.6）。
+- `driver_needed_through()` は、R4 の判定の期限のうちまだ判定していない最も早いもの（条件 5 を確かめるとき。`rules.r4.exclude_power_off = true`）と、いま数えている日の最後の時刻（次の日の 0 時の 1 ms 前。ドライバーの行の数を、日を閉じる前にそろえるため。8.1）の、早いほう。再生は、時刻の順に合わせて流すので、これを見なくても同じ順になる（10.2）。
 - `rebuild` は、起動し直したのと同じ状態に戻す（作り直しと、日が飛んだとき。4.1）。配信の決まりが覚えていること（push 済みで続いているエピソード、同じ案内を繰り返さない決まりの時刻、push の数）だけは残す。
 
 ## 4. ログの読み取り（W-1）
@@ -305,12 +330,23 @@ impl Engine {
 
 1. `#` で始まる行は `Meta`（4.3 の終わり）。
 2. `[` で始まり、日付 `YYYY-MM-DD`、空白、時刻 `hh:mm:ss.mmm`（ミリ秒は 1〜6 桁を受け付け、ミリ秒に丸める）が読めれば `Entry`。読めなければ `NoHeader`。
-3. 時刻のあとの語が `+` か `-` で始まれば、ずれ（時の 1〜2 桁、任意で `:mm`）として読む。読めない形（例: `+5.5`）なら、ずれを 0 として `offset_known = false` にする。`+` でも `-` でも始まらなければ、ずれのない行として、ずれを 0、`offset_known = false` にし、その語から 4 に進む。`offset_known = false` の行は `bad_offset` に数える（4.7）。
+3. 時刻のあとの語が `+` か `-` で始まれば、ずれ（時の 1〜2 桁、任意で `:mm`）として読む。読めない形（例: `+5.5`）なら、ずれを 0 として `offset_known = false` にする。`+` でも `-` でも始まらなければ、ずれのない行として、ずれを 0、`offset_known = false` にし、その語から 4 に進む。`offset_known = false` の行は、このあとの「ずれの補い」で時刻を直し、`bad_offset` に数える（4.7）。
 4. そのあと、最初の `]` までを空白で区切り、1 つ目を識別子（保存しない）、2 つ目を `level`、残り（空白を含んでもよい）を `func` とする。足りなければ空の文字列。
 5. `]` のあとに空白と `[...]` があれば、その中を `thread`。
 6. 残りの先頭の空白を除いたものを `body`（空でもよい）。末尾の空白と、本文の中の LF（4.2）は残す。
 
-- `+9` を UTC からのずれ（時）と読むのは推定のまま（メモの 2.2。11 万件すべてが `+9`）。読み違えていても、ずれが読めなくても、見張りの時刻の進め方（4.6）は壁時計とのずれ d を測って補うので、検出の時刻は狂わない。集計の日付は、行に書かれた地方の日付で決まり（8.1）、ずれには左右されない。30 分単位のずれがどう書かれるかは分からないので、読めないときに止まらず 0 で続ける（W-9）。
+**ずれの補い**（`openut_hublog::header::OffsetFill`。入出力なし）: 3 の「ずれを 0」は、行の先頭の解析の結果で、そのまま時刻にはしない。ずれのある行とない行が混ざっても、時刻が飛ばないようにする。
+
+- 列（サーバーのファイルの記録の並びと、ドライバーのファイルの記録の並び）ごとに 1 つ持ち、`Entry` を、行の種類の判定（4.4）と 2 つの列の合わせ（4.6）より前に通す（合わせるときに時刻を比べるため）。列のずれは、はじめは「未定」。
+- ずれの読めた行（`offset_known = true`）: 列のずれが「未定」か、ずれの値なら、その行のずれにする（夏時間などで変わったら、新しい値に変える。時刻は、その行のずれで直したまま）。列のずれが「ずれなし」に決まっていれば、その行も 0 で直す（下の理由）。
+- ずれの読めない行（`offset_known = false`）: 列のずれが値なら、それを引き継いで、地方時から `at` を直し、`offset` をその値にする。「未定」なら、列のずれを「ずれなし」（0）に決める。
+- **例**（レビューの指摘の 3 行）: 地方時 14:00:00 `+9`、14:00:01（ずれの語なし）、14:00:02 `+9` は、UTC の 05:00:00、05:00:01、05:00:02 になる（時刻が戻らず、期限も日付も飛ばない）。
+- 「ずれなし」に決めたあとに読めたずれを使わないのは、列の途中で時刻が 9 時間の段にならないようにするため（戻る段は、4.6 の「時刻が戻る行」の扱いで、そのあとの何時間分もの行が 1 つの時刻にまとまってしまう）。ずれを書かない版のログ（全部の行が「ずれなし」）は、時刻が地方時のまま一定にずれるだけなので、見張りの時刻の進め方（4.6）の d で補われる。
+- 初期化するのは、読み直しのとき（起動と再構築。4.1、4.5）だけ。0 時の切り替わり、日が飛んだとき、VIVE Hub の起動し直し（`# Log begin at`）では持ち越す（同じ PC のため）。再生（10.2）は、種類ごとに 1 つを最初のファイルから通す。列の記録の並びだけで決まり、読み取りの区切りに左右されないので、見張りと再生で同じになる。
+- 数え方: `offset_known = false` の行（補ったものも含む）と、「ずれなし」に決めた列で読めたずれを捨てた行を、`bad_offset` に数える（4.7）。
+- 確かめていないこと: サーバーとドライバーの列で決め方が分かれた場合（片方の最初の行だけ、ずれが読めない）、2 つの列の時刻がずれの分だけ食い違い、R4 の条件 5（6.2）で予告を見つけられない。6 日分では、ずれの読めない行は 0 件（11 万件すべてが `+9`）で、ふつうは起きない。`bad_offset` が 0 でない日は、集計の `source` で分かる。
+
+- `+9` を UTC からのずれ（時）と読むのは推定のまま（メモの 2.2。11 万件すべてが `+9`）。読み違えていても、列の中で一定なら、見張りの時刻の進め方（4.6）は壁時計とのずれ d を測って補うので、検出の時刻は狂わない。集計の日付は、行の地方の日付で決まる（8.1。補ったずれで、行に書かれた地方の日付に戻る）。30 分単位のずれがどう書かれるかは分からないので、読めないときに止まらず、上の補いで続ける（W-9）。
 - `NoHeader` の行は、規則には渡さず数えるだけにする。CRLF で記録を切る（4.2）ので、実物では出ない見込み（6 日分で、`#` の行のほかに、記録の形をしていない行はなかった。メモの 2.3）。
 
 **`#` で始まる行**（`Meta`。メモの 2.3）: プロセスが起動するたびに `# Log begin at <時刻>` と設定の 13 行（`# WriteTimeInterval=5000` など）が書かれ、日付が変わって作られたファイルは `# Log rotate by date at <時刻>` で始まる。どちらも出来事にはせず、`meta` に数えるだけ（起動は、そのあとの `Tracker Server Starts.` の記録で知る。4.4）。`#` の行の時刻は、ミリ秒の桁をそろえない（`.40` は 40 ミリ秒）ので、読むことがあっても、記録の時刻と同じ読み方をしない。
@@ -335,7 +371,7 @@ impl Engine {
 | WifiAssign | 同上 | `Assign wifi info to client tracker (index: N).` | N | `WifiAssigned` |
 | WifiNotYet | 同上（`WARN`） | `Wifi info is not yet available.`（**番号なし**） | — | `WifiRequestUnanswered { tracker: None }` |
 | ClientLink | 同上 | `Client tracker (index: N) is connected to host: V` | N、V（0 か 1。ほかは読めなかった行） | `ClientLink`（V が 1 なら `connected`） |
-| DeviceStatus | `OETServer::DeviceStatusToVHServer` | `display index: ` で始まり、`key: value` を `, ` で並べたもの（下の注） | `device index`、`connected`、`map status`、`map state`、`is host` | `Status` |
+| DeviceStatus | `OETServer::DeviceStatusToVHServer` | `display index: ` で始まり、`key: value` を `, ` で並べたもの（下の注） | `device index`、`connected`、`map status`、`map state`、`is host`、`bIsConnectedOnUSB`（任意） | `Status` |
 | Pose | `Tracker::CopyFromDriverThreadProc` | `(SteamVR: S)(N)[K]Pose status is changed: Pose data - status: V,` | N、V | `Pose`（2 → `Ok`、3 → `Lost`、4 → `RecentlyLost`、ほか → `Other(V)`） |
 | OetLost | `OETServer::OnTrackerErrorNotification` | `OET LOST TRACKING! index: N` | N | `Oet(LostTracking)` |
 | OetReloc | 同上 | `OET reloc back. index: N` | N | `Oet(RelocBack)` |
@@ -360,6 +396,7 @@ impl Engine {
 - `HostAssigned`（`switch to HOST mode.`）、`HostWifiQueried`、`WifiAssigned` も命令にあたる（3.4）。命令の失敗の行（`power_off`、`stop` の一部）も、PC がそうしようとした印として、命令に数える。
 - **状態の行**（DeviceStatus）: トラッカー 1 台について 1 行（メモの 3.1）。`, ` で区切って `key: value` の組にし、上の 5 つのキーの値を整数で読む（どれかがない・読めなければ、読めなかった行）。ほかのキー（`tracking status`、`percentage` など）は使わない。出来事の値:
   - `connected`: `connected` が 1。`host`: `is host` が 1。
+  - `usb`: `bIsConnectedOnUSB` が 1 なら `Some(true)`、0 なら `Some(false)`、キーがない・読めなければ `None`（このキーだけは、なくても読めなかった行にしない。接続の経路を補うだけのため。5.1）。見本の状態の行は、どれも 0。
   - `map_ready`: `map state` が 2、または `map status` が 6。値の意味は、初版の調べ（解析ライブラリ pyvut の定数の名前 `MAP_REUSE_OK` などと合う、という記述）による。pyvut（<https://github.com/rocketmark/pyvut>）にはライセンスの表示がないので、定数の表は写さず、意味だけを使う。メモでは、意味を確かめ直していない。
   - `tracking status` は使わない。姿勢の行の値（2・3・4）にない 5・6・7 が出るので、同じ番号づけか分からないため（メモの 3.1）。
 - **姿勢の行**（Pose）: 状態が変わったときだけ出る（`Pose status is changed:`。定期的には出ない）。`V` には、接続の直後に意味のなさそうな値（47、58、71 など）や 0 が出る。どれも `Other(V)` にし、止まらない。位置や回転の `-nan` と桁の多い値は読まない（判定に使わない）。
@@ -392,7 +429,7 @@ impl Engine {
 
 VIVE Hub は、まとめてファイルに書く。ヘッダーの `WriteTimeInterval=5000` から、**5,000 ミリ秒ごと**と読める（メモの 2.4。推定で、ファイルが伸びる様子は測っていない。U-8）。3 種類のファイルとも同じ設定で、サーバーとドライバーは同じプロセス（`ViveTrackerServer.exe`。見本で、同じスレッド番号が両方のファイルに出る）が書く。検出は最大でその間隔だけ遅れる。
 
-- エンジンの時刻は、行の時刻で進む（3.7）。規則の「何秒たっても〜しない」は、エンジンが期限を持ち、`advance_to` で期限を過ぎたものから順に判定する（期限ちょうどの入力は間に合ったものとする。3.7、6.1）。
+- エンジンの時刻は、サーバーの行の時刻で進む（3.7）。規則の「何秒たっても〜しない」は、エンジンが期限を持ち、`advance_to` で期限を過ぎたものから順に判定する（期限ちょうどの入力は間に合ったものとする。3.7、6.1）。
 - ログが静かなあいだも期限を判定できるよう、見張りのループは、行がなくても 500 ms ごとに `advance_to(見張りの時刻)` を呼ぶ。見張りの時刻は、「これより前の時刻の行は、もう読み終えた」と見なせる時刻。
 
   見張りの時刻 = max(最後に読んだ行の時刻, 今の壁時計 − d − L)
@@ -401,10 +438,15 @@ VIVE Hub は、まとめてファイルに書く。ヘッダーの `WriteTimeInt
   - L: まとめて書かれる間隔より長い余裕。**仮の値 10 秒のまま**（ヘッダーの 5,000 ミリ秒の 2 倍。読み取りの間隔 500 ms と、書く時刻の揺れを足しても足りる）。短すぎると、まだ書かれていない行が来る前に期限を判定してしまう。長すぎると、期限の検出がその分遅れる。決め方: 見張り（M1-9）が、読んだまとまりごとの「読んだときの壁時計 − そのまとまりの最後の行の時刻」をアプリのログに残す。オーナーの試し（14 章の 1）と、使った日のアプリのログから、その最大値に数秒を足した値にする。
   - d と見張りの時刻は、**サーバーのファイルだけ**で測る（ドライバーのファイルは、トラッカーがつながっていないと何時間も伸びないことがあり、遅れて届いた行で d を測り違えないため）。
   - 読んだ行がまだ 1 行もなければ、時刻を進めない。
-- **2 つのファイルの並べ方**: 見張りのループは、500 ms ごとに、サーバー、ドライバーの順に伸びた分を読み、その回に読んだ 2 つの記録の列を、それぞれの中の順を保ったまま、時刻の順に合わせて（マージ。先頭どうしを比べて早いほうを出し、同じ時刻ならサーバーを先にする）から出来事にする。再生（10.2）は、2 種類のファイルの全部を同じ決まりで合わせる。
-  - 追いつき（4.5）のように、どちらかのファイルに 1 回で読み切れない分（4 MiB を超える分）が残っているあいだは、2 つの列で読んだ最後の記録の時刻のうち早いほうまでを合わせて流し、残りは次の読み取りまで持つ。次は、読んだ最後の時刻が早いほうのファイルから読む。ファイルの終わりに着いた列は待たない（見張りのふだんの回は、どちらも終わりまで読むので、その回の分をすべて流す）。こうすると、追いつきでも再生と同じ順になる。
-  - ドライバーのまとまりがサーバーより遅れて届くと、その記録は「時刻が戻る行」になる。`PowerOffNotice` は元の時刻のまま覚えるので（3.7）、R4 の判定の期限（切断から `r4.notice_wait_s`。6.2）より前に届けば、結果は再生と同じになる。遅れて届いたドライバーの記録は、`driver.time_regressions` に数える（サーバーの `time_regressions` とは別）。
-- 時刻が戻る行（L より遅れて届いた行、PC の時計の変更）は、いまの時刻に起きたものとして扱い、「時刻が戻った行」として数える。6 日分のサーバーの 6 ファイルでは、ファイルの中で時刻が戻ることはなかった（同じミリ秒が続くことは多い。メモの 2.2）。
+- **2 つのファイルの並べ方**: 見張りのループは、500 ms ごとに、サーバー、ドライバーの順に伸びた分を読み、記録の先頭を解析し、列ごとにずれを補ってから（4.3）、2 つの列を合わせて出来事にする。並べ方の決まりは次の 3 つ。再生（10.2）は、2 種類のファイルの全部を、時刻の順に合わせて流す（先頭どうしを比べて早いほうを出し、同じ時刻ならサーバーを先にする）。
+  1. **エンジンの時刻を進めるのは、サーバーの記録だけ**（3.7）。ドライバーの記録は、時刻を進めず、状態も変えない（`PowerOffNotice` は元の時刻で覚え、ほかの行はその行の日に数える）。そのため、ドライバーの記録は、読んだらすぐ渡してよい（サーバーより遅れていても、進んでいても、結果は変わらない）。サーバーの記録は、ファイルの順に渡す。先頭の読めない行と `#` の行は、同じ列の前の記録に続けて渡す（時刻を持たないため）。
+  2. **ドライバーを待つ**: エンジンの `driver_needed_through()` が D を返し、ドライバーの見張りの時刻 W_drv が D 以下のあいだは、サーバーの記録のうち時刻が D より後のものを渡さずに持ち、`advance_to` も D までにする（`advance_to(min(見張りの時刻, D))`。D ちょうどの期限は残る。3.7）。W_drv が D を超えたら、持っていた記録を順に渡す（渡した記録で新しい D ができれば、また同じに待つ）。こうすると、R4 の判定（期限 D）は、D 以下の時刻のドライバーの記録がすべて届き、D より後のサーバーの記録が 1 つも入っていない時点で行われ、再生と同じになる。D が、いま数えている日の最後の時刻のときは、日を閉じる前に、その日のドライバーの行がそろう（8.1）。
+     - W_drv = max(ドライバーの最後に読んだ記録の時刻, 今の壁時計 − d − L)。d と L は、サーバーの見張りの時刻と同じ値（d はサーバーで測る。上）。ドライバーのファイルが静かでも、壁時計で進むので、待ちは D から L ほどで終わる（有限）。d がまだなければ、W_drv はドライバーの最後に読んだ記録の時刻（サーバーの見張りの時刻も同じく進まないので、待ちが増えるわけではない）。
+     - ドライバーのファイルがないとき（4.1）は待たない（W_drv を限りなく先とする）。R4 の条件 5 は確かめられない（6.2）。
+     - 待つのは、切断のあと R4 の判定までと、0 時の前後だけなので、ほかの案内（R1 など）が遅れるのは、その間に重なったときだけ（多くて L）。
+  3. **追いつき**（4.5）のように、ドライバーのファイルに 1 回で読み切れない分（4 MiB を超える分）が残っているあいだは、W_drv を「ドライバーで最後に読んだ記録の時刻」とする（壁時計は使わない）。2 の待ちで止まったら、ドライバーのファイルを先に読み進める。追いつきのあいだに、ドライバーのファイルの終わりに着いたら待たない（W_drv を限りなく先とする。古い行は書き終わっているため）。起動の直前に、ドライバーがサーバーより遅れて書かれていた分だけは、再生と違いうる（下の `driver.late`）。追いつきが終わったら、2 の W_drv に戻す。
+- L より遅れて届いたドライバーの記録（読んだ時点で、時刻がその前の W_drv より前だったもの。W_drv の見込みが外れたもの）は、`driver.late` に数える（4.7）。再生と違いうるのは、それが判定を済ませた R4 の範囲に入る予告だったときと、閉じた日の行だったときだけ（閉じた日の行は、その日には足さず、`driver.late` だけに数える）。
+- サーバーの記録で時刻が戻るもの（L より遅れて届いた行、PC の時計の変更）は、いまの時刻に起きたものとして扱い、「時刻が戻った行」（`time_regressions`）として数える。6 日分のサーバーの 6 ファイルでは、ファイルの中で時刻が戻ることはなかった（同じミリ秒が続くことは多い。メモの 2.2）。ドライバーの記録は時刻を進めないので、時刻が戻る行にはならない（遅れは、上の `driver.late`）。
 - 再生テストでは壁時計を使わない（10.2）。
 
 ### 4.7 想定と違う行
@@ -415,13 +457,14 @@ VIVE Hub は、まとめてファイルに書く。ヘッダーの `WriteTimeInt
 |---|---|---|
 | 行の先頭が読めない | 規則に渡さない | `no_header` |
 | `#` で始まる行（4.3） | 規則に渡さない | `meta` |
-| ずれが読めない（4.3） | ずれを 0 として続ける | `bad_offset` |
+| ずれが読めない（4.3） | 同じ列の前の行のずれを引き継ぐ（列の最初から読めなければ、その列を「ずれなし」にする。4.3 の「ずれの補い」） | `bad_offset` |
 | 種類は分かったが、番号や値が読めない | 規則に渡さない。最初の 20 件まで、アプリのログに本文を残す | `unparsed` |
 | 表にない本文 | 規則に渡さない | `other` |
 | ドライバーのファイルの記録（予告の行を含む全部） | 予告の行だけを出来事にする | `driver.lines`（ほかの数も `driver.` の下に、同じ名前で） |
 | 対にならないサロゲート、壊れた UTF-8 | 置き換え文字にして続ける | `replaced_chars` |
 | 64 KiB を超える行 | 切って続ける | `long_lines` |
-| 時刻が戻る行 | いまの時刻として扱う | `time_regressions` |
+| サーバーの時刻が戻る行 | いまの時刻として扱う | `time_regressions` |
+| ドライバーの記録が L より遅れて届いた（4.6） | ふつうに渡す（判定を済ませた R4 と、閉じた日には効かない） | `driver.late` |
 | 切り替わったあとの古いファイルの書き足し | 読まない（起動し直すと、前の日のファイルとして読まれるので、この数が 0 でない日だけは、起動し直したときと結果が違いうる） | `late_writes` |
 | いまのファイルが作り直された（縮んだ、置き換えられた、消えた） | 再構築する（4.1） | `rebuilds` |
 
@@ -436,7 +479,7 @@ VIVE Hub は、まとめてファイルに書く。ヘッダーの `WriteTimeInt
 | 番号 | 確かめていないこと | 影響する場所 | 確かめ方 |
 |---|---|---|---|
 | U-3 | `+9` が UTC からのずれ（時）か。30 分単位のずれの書き方 | 4.3（読めなければ 0 で続ける）。検出の時刻は 4.6 の d で補う | ほかの時間帯の PC のログ（ログの送信〔L-4〕が入ってから） |
-| U-5 | 状態の行の値の意味（`map state: 2`、`map status: 6` が地図の準備ができた印か。`connected: 0` の状態の行が、つながっている台に出るか）。姿勢の行の値 0 の意味 | 4.4、5.1 | 匿名化した実物のログ（L-2）の再生で、`map_ready` から追跡中までの経過と、5.1 の「順序の合わない出来事」の数を見る（M1-13） |
+| U-5 | 状態の行の値の意味（`map state: 2`、`map status: 6` が地図の準備ができた印か。`connected: 0` の状態の行が、つながっている台に出るか。`bIsConnectedOnUSB` が USB の接続を表すか〔見本ではどれも 0〕）。姿勢の行の値 0 の意味 | 4.4、5.1 | 匿名化した実物のログ（L-2）の再生で、`map_ready` から追跡中までの経過と、5.1 の「順序の合わない出来事」の数を見る（M1-13） |
 | U-8 | まとめて書かれる実際の間隔（ヘッダーの 5,000 ミリ秒は推定） | 4.6 の L | 14 章の 1（オーナーの試し）。M1-9 のアプリのログ |
 | U-9 | 大きさが 15 MB を超えたときの動き | 4.1 | 起きたときのアプリのログ（4.1。`_N` のファイル） |
 | U-11 | 電源オフの予告（ドライバーの行）のあった切断が、利用者の操作（ボタンで電源を切った）によるものか、トラッカーが自分で切ったもの（電池切れ、スリープ）を含むか | 6.2 の R4 の条件 5 | 14 章の 2（オーナーの試し） |
@@ -454,36 +497,39 @@ VIVE Hub は、まとめてファイルに書く。ヘッダーの `WriteTimeInt
 
 | 出来事 | 前の状態 | 次の状態 | ほかに変えること |
 |---|---|---|---|
-| `TrackerAdded(N)` | 未接続 | 接続 | 役割を `Unknown`、`tracked_since_connect = false`、`inferred = false`、シリアル番号をなしに |
+| `TrackerAdded(N)` | 未接続 | 接続 | 役割を `Unknown`、`tracked_since_connect = false`、`inferred = false`、シリアル番号をなしに。接続の経路 `link` を、`usb` なら `Usb`、でなければ `Dongle` |
 | `TrackerAdded(N)` | 未接続以外 | 下の注の「重なり」 | |
-| `TrackerRemoved(N)` | 未接続以外 | 未接続 | 役割を `Unknown`、シリアル番号をなしに（スロットは別のトラッカーに使われるため） |
+| `TrackerRemoved(N)` | 未接続以外 | 未接続 | 役割を `Unknown`、シリアル番号をなしに（スロットは別のトラッカーに使われるため）。`link` を `Unknown` |
 | `TrackerRemoved(N)` | 未接続 | 変えない | 数えない（同じ出来事の 2 つ目の行。メモの 2.2） |
 | `SerialKnown(N, S)` | 未接続以外 | 変えない | N のシリアル番号を S にする。ほかの番号に S が付いていれば、そちらから外す |
-| `HostAssigned(N)` | 接続、Wi-Fi 待ち | 地図同期中 | N の役割を `Host`。ほかに `Host` だったトラッカーがあれば、その役割を `Unknown` にする。ほかの「接続」のトラッカーを Wi-Fi 待ちにする（役割は変えない） |
-| `HostAssigned(N)` | 地図同期中、位置取り直し中、追跡中 | 変えない | 役割の変え方は上の行と同じ。すでに動いているトラッカーへの 2 度目の命令（不具合の始まり）で、状態を巻き戻さないため |
+| `HostAssigned(N)` | 接続、Wi-Fi 待ち | 地図同期中 | ホスト（5.3）を N にする（役割の変え方も 5.3）。ほかの「接続」のトラッカーを Wi-Fi 待ちにする（役割は変えない） |
+| `HostAssigned(N)` | 地図同期中、位置取り直し中、追跡中 | 変えない | ホストの変え方は上の行と同じ。すでに動いているトラッカーへの 2 度目の命令（不具合の始まり）で、状態を巻き戻さないため |
 | `WifiAssigned(N)` | 接続、Wi-Fi 待ち | Wi-Fi 待ち | 役割を `Client` |
 | `WifiRequestUnanswered` | — | 下の注の「番号のない出来事」 | |
 | `ClientLink(N, true)` | 接続、Wi-Fi 待ち | 地図同期中 | 役割を `Client` |
 | `ClientLink(N, false)` | 地図同期中 | Wi-Fi 待ち | |
 | `ClientLink(N, false)` | 位置取り直し中、追跡中 | 変えない | 集計に数える（ホストの Wi-Fi から外れたクライアントが位置を出し続けるかは未確認なので、位置の行で判断する） |
 | `Status(N, connected, map_ready)` | 接続、Wi-Fi 待ち、地図同期中（`connected` かつ `map_ready` のとき） | 位置取り直し中 | 初版の `Map(Synced か ReuseOk)` の行にあたる |
-| `Status(N, ...)` | ほかの組み合わせ | 変えない | 数えない（状態の行は数分おきにも出る報告のため）。ただし、未接続以外の N に `connected: 0` が来たら「順序の合わない出来事」に数える（切断は `TrackerRemoved` と `DongleRemoved` だけで決める。U-5） |
+| `Status(N, ...)` | ほかの組み合わせ | 変えない | 数えない（状態の行は数分おきにも出る報告のため）。ただし、未接続以外の N に `connected: 0` が来たら「順序の合わない出来事」に数える（切断は `TrackerRemoved`、`DongleRemoved`、`ServerStarted`、`ServerStopped` だけで決める。U-5） |
+| `Status(N, connected, usb = Some(v))` | 未接続以外（`link` が `Unknown` のとき） | 変えない | `link` を、v なら `Usb`、でなければ `Dongle`（途中から読み始めて、`TrackerAdded` を見ていない台のため）。`link` が決まっていれば変えない |
+| `Status(N, connected, host = true)` | どれでも | 変えない | ホストの根拠（5.3）。どの状態の行でも、上の行と合わせて当てる |
 | `Pose(N, Ok)`、`Oet(N, RelocBack)` | 未接続以外 | 追跡中 | `tracked_since_connect = true` |
 | `Pose(N, Lost か RecentlyLost)`、`Oet(N, LostTracking)` | 追跡中、地図同期中 | 位置取り直し中 | |
 | `Pose(N, Lost か RecentlyLost か Other)` | 接続、Wi-Fi 待ち | 変えない | 数えない（接続の直後に、意味のなさそうな値や `status: 3` が出るのはふつう。メモの 3.1） |
 | `Pose(N, Other)`、`Oet(N, Overspeed)` | そのほか | 変えない | 集計に数える |
 | `PowerOffNotice(N)` | — | 変えない | R4 が振り返って使う（6.2）。状態は、そのあとの `TrackerRemoved` で変わる |
 | `PcCommand` | — | 変えない | R4 が振り返って使う |
-| `DongleRemoved` | どれでも | 全台を未接続 | 役割とシリアル番号をなしに。ドングルが抜けると、`Remove tracker` が出ないため（メモの 3.5。1 回の観察。U-12） |
-| `ServerStarted` | どれでも | 全台を未接続 | 役割とシリアル番号をなしに。PC の Wi-Fi 情報を `Missing { host: None }`。終了の行がないまま起動し直すこともあるので（メモの 3.5）、ここで必ず捨てる |
-| `ServerStopped` | どれでも | 全台を未接続 | 役割とシリアル番号をなしに。PC の Wi-Fi 情報を `Unknown` |
+| `DongleRemoved` | 未接続以外で、`link` が `Usb` でない台 | 未接続 | 役割とシリアル番号をなしに、`link` を `Unknown`。ドングルが抜けると、ドングル経由の台の `Remove tracker` が出ないため（メモの 3.5。1 回の観察。U-12）。**`link` が `Usb` の台は変えない**（ドングルを通さない接続のため。シリアル番号と、集計の接続の時間も続く）。`link` が `Unknown` の台は、ドングル経由として切る（6 日分の切断の 109 件が、ドングル経由〔`connection type: 1`〕のため） |
+| `ServerStarted` | どれでも | 全台を未接続 | 役割とシリアル番号をなしに、`link` を `Unknown`。PC の Wi-Fi 情報を `Missing`（5.2）、ホストをなしに（5.3）。終了の行がないまま起動し直すこともあるので（メモの 3.5）、ここで必ず捨てる |
+| `ServerStopped` | どれでも | 全台を未接続 | 役割とシリアル番号をなしに、`link` を `Unknown`。PC の Wi-Fi 情報を `Unknown`、ホストをなしに（5.3） |
 
-- 表にない組み合わせ（例: 未接続のトラッカーの `Pose`）は、状態を変えずに「順序の合わない出来事」として数える。ただし、`TrackerAdded` を一度も見ていない番号（途中から読み始めた）は例外で、その出来事から推し量った状態で行を足し、`inferred = true` にする（`Pose(Ok)` と `Oet(RelocBack)` なら追跡中、`Pose(Lost か RecentlyLost)` と `Oet(LostTracking)` なら位置取り直し中、`ClientLink(true)` なら地図同期中、`Status(connected, map_ready)` なら位置取り直し中、`Status(connected)` なら接続、など。推し量れない出来事なら「接続」。`Status` の `connected: 0` と `SerialKnown` では足さない）。推し量って足した行の `tracked_since_connect` は `false` から始める（追跡中で足したなら `true`）。
+- 表にない組み合わせ（例: 未接続のトラッカーの `Pose`）は、状態を変えずに「順序の合わない出来事」として数える。ただし、`TrackerAdded` を一度も見ていない番号（途中から読み始めた）は例外で、その出来事から推し量った状態で行を足し、`inferred = true` にする（`Pose(Ok)` と `Oet(RelocBack)` なら追跡中、`Pose(Lost か RecentlyLost)` と `Oet(LostTracking)` なら位置取り直し中、`ClientLink(true)` なら地図同期中、`Status(connected, map_ready)` なら位置取り直し中、`Status(connected)` なら接続、など。推し量れない出来事なら「接続」。`Status` の `connected: 0` と `SerialKnown` では足さない）。推し量って足した行の `tracked_since_connect` は `false` から始める（追跡中で足したなら `true`）。`link` は、足した出来事が `Status` で `usb` があればその値、なければ `Unknown`（あとの `Status` で決まる）。
+- `Status` の 4 つの行は、1 つの状態の行に、当てはまるものをすべて当てる（状態は上の 2 行のどちらかで決め、`link` とホストは、それぞれの行で決める）。
 - 同じ状態への遷移は、何もしない（`since` を変えない）。`Pose` と `OET` の両方の行が出ても、二重に数えない。
 - **重なり**（同じ出来事の行が 2 回出る。メモの 2.2）: 未接続以外の N に `TrackerAdded(N)` が来たとき、N の前の `TrackerAdded` から 1 秒（`state.dup_ms` = 1000。仮）以内なら、2 つ目の行として何もしない（数えない）。1 秒を超えていたら、`TrackerRemoved` を見落としたつなぎ直しとして、未接続を経ずに接続にし（上の表の 1 行目の「ほかに変えること」も行う）、「順序の合わない出来事」に数える。`TrackerRemoved` の重なりは、上の表の「未接続 → 変えない」で吸収する。どちらも、R4 と集計の `sessions` は、状態が変わった 1 つ目の行だけで数える。`HostAssigned` の重なりは吸収しない（2 度目の命令は不具合の始まりの印で、捨てると R1 を見落とすため。重なっても、`Missing` のあとに `Got host wifi info.` が来れば `Held` に戻るので害はない）。
 - **番号のない出来事**（`HostWifiObtained` と `WifiRequestUnanswered`。行に番号がない。メモの 3.1）:
-  - `HostWifiObtained` は、PC の Wi-Fi 情報（5.2）だけを変える。どのホストの情報かは、最後に `HostAssigned` された番号で決める。
-  - `WifiRequestUnanswered` は、R1（6.2）が番号なしで数える（R1 が案内するのはホストで、尋ねたクライアントではないため）。状態の表では、尋ねたクライアントの候補（接続か Wi-Fi 待ちで、役割が `Host` でないトラッカー）がちょうど 1 台なら、その台を Wi-Fi 待ちにし、役割を `Client` にする（画面に「Wi-Fi 待ち」と出すため。見本の 3 章では、2 度目の命令のあとにつながったトラッカー 0 が、これにあたる）。0 台か 2 台以上なら、状態を変えない（数えない。不具合のときは 1 日に数千回来るため）。
+  - `HostWifiObtained` は、PC の Wi-Fi 情報（5.2）だけを変える。どのホストの情報かは、そのときのホスト（5.3）で読む（Wi-Fi 情報の側には、ホストを持たない）。
+  - `WifiRequestUnanswered` は、R1（6.2）が番号なしで数える（R1 が案内するのはホストで、尋ねたクライアントではないため）。状態の表では、尋ねたクライアントの候補（接続か Wi-Fi 待ちで、役割が `Host` でないトラッカー。ホストの役割は、5.3 で、命令でも報告でも `Host` になる）がちょうど 1 台なら、その台を Wi-Fi 待ちにし、役割を `Client` にする（画面に「Wi-Fi 待ち」と出すため。見本の 3 章では、2 度目の命令のあとにつながったトラッカー 0 が、これにあたる）。0 台か 2 台以上なら、状態を変えない（数えない。不具合のときは 1 日に数千回来るため）。
   - スレッド番号からトラッカーは分からない（同じスレッドが、ほかの台の行も書いている。見本の 3 章）。
 - ホストの地図: ホストの状態の行が `map_ready` になるかは確かめていない（見本では、ホストの接続の直後の状態の行は `map status: -1`、`map state: 0`）。ホストは `HostAssigned` で地図同期中になり、`Status(map_ready)` か `Pose(Ok)` で先へ進む。
 
@@ -494,15 +540,35 @@ VIVE Hub のサーバーが、ホストの Wi-Fi 情報を持っているか。P
 | 出来事 | 次の状態 |
 |---|---|
 | （起動時） | `Unknown` |
-| `ServerStarted` | `Missing { host: None, queried: false }` |
-| `HostAssigned(N)` | `Missing { host: Some(N), since: いま, queried: false }`（前に `Held` でも。2 度目の命令で持たない状態になるのが不具合の始まり。`findings-2026-11-27.md`） |
-| `HostWifiQueried(N)` | `Missing` なら `queried = true`（`host` が `None` なら N にする）。ほかは変えない |
-| `HostWifiObtained` | `Held { host: 最後に HostAssigned した番号, since: いま }`（番号がなければ、下の `Status` で分かったホスト。それもなければ `None`） |
+| `ServerStarted` | `Missing { since: いま, queried: false }` |
+| `HostAssigned(N)` | `Missing { since: いま, queried: false }`（前に `Held` でも。2 度目の命令で持たない状態になるのが不具合の始まり。`findings-2026-11-27.md`） |
+| `HostWifiQueried(N)` | `Missing` なら `queried = true`。ほかは変えない（ホストの根拠としての扱いは 5.3） |
+| `HostWifiObtained` | `Held { since: いま }`（どのホストの情報かは、5.3 のホストで読む） |
 | `WifiAssigned` | `Held` でなければ `Held` にする（渡せたのだから持っている）。「順序の合わない出来事」として数える |
 | `WifiRequestUnanswered` | 変えない（R1 が数える）。`Held` のときに出たら「順序の合わない出来事」として数える |
-| `Status(N, host = true)` | 変えない。ただし、`Missing` か `Held` の `host` が `None` なら、N にする（途中から読み始めて、`HostAssigned` を見ていないとき。R1 の案内するトラッカーに使う） |
 | `TrackerRemoved`（ホストが外れた）、`DongleRemoved` | 変えない（次のホストへの命令で `Missing` になる） |
 | `ServerStopped` | `Unknown` |
+
+- 初版の `Status(N, host = true)` の行（`Missing`・`Held` の `host` を埋める）は、5.3 に移した。Wi-Fi 情報が `Unknown` のとき（途中から読み始めたとき）にも、ホストを覚えるため。
+
+### 5.3 ホストの根拠
+
+どのトラッカーがホストか（`Snapshot::host`。3.5）。PC の Wi-Fi 情報（5.2）とは別に持つ。R1 の案内するトラッカー（6.2）、トラッカーの役割（下の注。番号のない問い合わせの候補を決める。5.1）、`HostWifiObtained` がどのホストの情報か（5.2）に使う。
+
+根拠は 2 つの強さがある。**命令**（`HostBy::Command`）は `HostAssigned`（PC がそのトラッカーをホストにした行）。**報告**（`HostBy::Report`）は、状態の行の `is host: 1` と、`Query wifi from tracker N`（PC がホストに尋ねた行）。命令は報告より強い。
+
+| 出来事 | ホスト |
+|---|---|
+| （起動時。`rebuild` も） | なし |
+| `HostAssigned(N)` | N（命令）。前のホストが何でも変える |
+| `Status(N, connected = true, host = true)` | ホストがないか、報告のホストなら、N（報告）。命令のホストがあれば変えない（状態の行は命令のあとも少しのあいだ古い値を出しうるため。数えない） |
+| `HostWifiQueried(N)` | ホストがないか、報告のホストなら、N（報告）。命令のホストがあれば変えない（命令のホストと違えば「順序の合わない出来事」に数える） |
+| `Status(N, connected = false, ...)` | 変えない（起動の直後に、前に登録したトラッカーの `connected: 0` の行が続く〔メモの 3.5〕。前の回の値を拾わないため） |
+| `TrackerRemoved`、`DongleRemoved` | 変えない（R1 の案内は、最後のホストを指す。5.2 と同じ考え） |
+| `ServerStarted`、`ServerStopped` | なし |
+
+- ホストが N に変わったら、N の役割を `Host` にし、前のホスト（N でなければ）の役割を `Unknown` にする。役割が `Host` のトラッカーは、多くて 1 台（ホストの台が切れると、5.1 で役割が `Unknown` に戻るが、ホストは変えない。同じ番号に別のトラッカーがつながっても、役割は `Unknown` から始まるので、問い合わせの候補から外れない）。
+- **例**（途中から読み始めた。前の日のファイルがなく、PC の Wi-Fi 情報は `Unknown`）: `Status(2, connected, host = true)`、`Status(4, connected, host = false)`、`Status(0, connected, host = false)`（どれも `TrackerAdded` を見ていないので、推し量って足す。5.1）。ホストは 2（報告）で、2 の役割は `Host`。続いて `WifiRequestUnanswered` が来ると、候補は 4 と 0 の 2 台なので、状態は変えない（5.1）。0 が `ClientLink(0, true)` で地図同期中になっていれば、候補は 4 だけで、4 が Wi-Fi 待ちになる。R1 が出れば、案内するのはトラッカー 2。
 
 ## 6. 検出の規則（W-3、W-4）
 
@@ -531,14 +597,14 @@ VIVE Hub のサーバーが、ホストの Wi-Fi 情報を持っているか。P
   - 見本の 3 章（11/27 22:53）: ホスト 2 の `Got host wifi info.` のあと、22:53:32.961 に 2 度目の `Tracker (2) - switch to HOST mode.`、0.3 秒後にトラッカー 0 がつながり、22:53:33.658 から問い合わせが続く。最初の 1 件から 15 秒の前後に、ほかの種類の記録はない。
 - **断られた問い合わせの列**: 続けて来た `WifiRequestUnanswered` のまとまり。R1 は、いまの列の回数と、列の 1 回目の時刻だけを持つ（それより前の問い合わせは覚えない）。
   - 前の `WifiRequestUnanswered` から `r1.gap_s`（仮 10 秒）以内に来たものは、同じ列に足す。`r1.gap_s` を超えて空いたら、その問い合わせから新しい列を始める（回数を 1、1 回目の時刻をその行の時刻にする）。不具合のときは 1 秒に満たない間隔で続く（根拠）ので、列は切れない。ふつうの開始で、間を空けて何回か断られても、1 つの列にはならない。
-  - 次のときは列を捨てる（次の問い合わせから新しい列を始める）: `HostAssigned`、`HostWifiObtained`、`WifiAssigned`、`ServerStarted`、`ServerStopped` が来たとき。未接続以外のトラッカーがなくなったとき（`DongleRemoved` を含む）。R1 のエピソードが終わったとき（`Resolved`、`Ended`）。
+  - 次のときは列を捨てる（次の問い合わせから新しい列を始める）: `HostAssigned`、`HostWifiObtained`、`WifiAssigned`、`ServerStarted`、`ServerStopped`、`DongleRemoved` が来たとき（`DongleRemoved` は、USB の台が残っていても。5.1）。未接続以外のトラッカーがなくなったとき。R1 のエピソードが終わったとき（`Resolved`、`Ended`）。
 - **条件**: PC の Wi-Fi 情報が `Held` でなく、いまの列の回数が `r1.count` 以上で、列の 1 回目から `r1.span_s` 秒以上たった `WifiRequestUnanswered` が来たとき、`Raised`（時刻はその行の時刻）。エピソードのあいだは、列を数えない。
   - 仮の値: `r1.count = 3`、`r1.span_s = 15`、`r1.gap_s = 10`（変えない）。ふつうの開始でも、ホストが Wi-Fi の親機を立てるまでのあいだに、クライアントが尋ねて断られることがありうる（6 日分には出ていないが、ほかの環境では分からない）。`span_s` は、それを不具合と見なさないための余裕。`gap_s` は、断られる間隔（9 割が 0.56 秒以内）より十分長く、離れた問い合わせを 1 つに数えない長さ。決め方は 6.1。`gap_s` は `quiet_s` より短くする（始まりは厳しく、終わりはゆるく）。
   - `Query wifi from tracker N` が出たかどうか（`queried`）は条件に入れない。綴りは分かった（4.4）が、尋ねたのに答えが来ない場合も、利用者がすること（ホストの電源の入れ直し）は同じため。`Detection` の詳細として残す。
-- **案内するトラッカー**: 最後に `HostAssigned` された番号（ホスト）。途中から読み始めて分からなければ、状態の行で `is host: 1` だった番号（5.2）。それも分からなければ「ホストのトラッカー」。名前は、その番号に付いたシリアル番号で引く（3.2）。
+- **案内するトラッカー**: ホスト（5.3）。ふつうは最後に `HostAssigned` された番号。途中から読み始めて `HostAssigned` を見ていなければ、状態の行で `is host: 1` だった番号（PC の Wi-Fi 情報が `Unknown` のままでも分かる）。ホストがなければ「ホストのトラッカー」。名前は、その番号に付いたシリアル番号で引く（3.2）。
 - **長引いたとき**: `Raised` から `r1.escalate_s`（仮 180 秒）たっても続いていたら、`Escalated` を 1 回だけ出す（期限は `Raised` の時刻 + `r1.escalate_s`。ちょうどに直れば出さない）。
 - **直った**: `HostWifiObtained` か `WifiAssigned` が来たら `Resolved`。
-- **終わった**: 未接続以外のトラッカーがなくなったとき、または `WifiRequestUnanswered` が `r1.quiet_s`（仮 60 秒）を超えて来なかったとき（期限は最後の問い合わせの時刻 + `r1.quiet_s`）、`Ended`。
+- **終わった**: 未接続以外のトラッカーがなくなったとき、`DongleRemoved` が来たとき（USB の台が残っていても。ドングル経由の台がなくなれば、トラッカー同士の Wi-Fi の話でなくなるため）、または `WifiRequestUnanswered` が `r1.quiet_s`（仮 60 秒）を超えて来なかったとき（期限は最後の問い合わせの時刻 + `r1.quiet_s`）、`Ended`。
 - エピソードのあいだに次の `HostAssigned` が来ても、エピソードを続ける（ホストの電源を入れ直すと、まず `HostAssigned` が来て、そのあとに `HostWifiObtained` が来ると見込むため。見込みは未確認）。列は捨てるが、エピソードの `Ended` の期限は、最後の問い合わせの時刻のまま数える。
 - **例**（どれも同じホストで、Wi-Fi 情報は `Missing`）:
 
@@ -571,12 +637,20 @@ VIVE Hub のサーバーが、ホストの Wi-Fi 情報を持っているか。P
 - **根拠**: 操作と関係のない切断は 1 日 1〜3 回（`findings-2026-11-27.md`）。SLAM のクラッシュで接続ごと切れた例（11/23 22:38。`findings-2026-11-28.md`）。メモの 3.5: サーバーの `Remove tracker` は 6 日で 128 件（同じ出来事で 2 行ずつ出る）。そのうち 86 件は、ドライバーのファイルの電源オフの予告（`(N) Tracker is going to power-off.`）が先に出ていた（予告は 44 件）。予告のない 42 件のうち 19 件は、USB でつないでいたもの（`connection type: 2`。推定）。
 - **条件**: `TrackerRemoved(N)` が時刻 t に来て、N の状態が未接続に変わったとき（2 つ目の行では見ない。5.1 の重なり）、次のすべてを満たせば `Raised`。幅はどれも両端を含む（6.1）。
   1. 直前 `r4.cmd_window_s`（仮 12 秒。`findings-2026-11-27.md` で喪失と命令の関係を見たときの幅）以内（t − 12 秒〜t。t と同じ時刻で、切断の行より後に書かれたものも含む）に、PC から N への命令（`HostAssigned`、`HostWifiQueried`、`WifiAssigned`、`PcCommand`。`PcCommand` の番号なしは、全台への命令。4.4）がない。
-  2. N が `TrackerAdded` から `r4.min_connected_s`（仮 30 秒）以上つながっていた（開始のときのつなぎ直しを除く）。
+  2. 切れた接続（下の「接続」）が `r4.min_connected_s`（仮 30 秒）以上続いていた（開始のときのつなぎ直しを除く）。
   3. ほかのトラッカーの `TrackerRemoved` が前後 `r4.burst_s`（仮 2 秒）以内（t − 2 秒〜t + 2 秒）にない（全台が同時に外れるのは、ドングルの抜き差しやリセット、サーバーの終了と見なす）。
   4. 前後 `r4.server_s`（仮 5 秒）以内（t − 5 秒〜t + 5 秒）に `ServerStarted`、`ServerStopped`、`DongleRemoved` がない（メモの 3.5。サーバーの終了の行と、ドングルが抜けた行）。
-  5. **電源オフの予告がない**: `rules.r4.exclude_power_off = true`（既定。仮）のとき、`PowerOffNotice(N)` が t − `r4.notice_before_s`（仮 15 秒。メモで予告と切断を突き合わせた幅）〜t + `r4.notice_wait_s`（仮 10 秒）にない。予告のあった切断は、利用者がボタンで電源を切ったものと見込んで除く（下の注）。
+  5. **電源オフの予告がない**: `rules.r4.exclude_power_off = true`（既定。仮）のとき、**切れた接続の予告**（下の「予告と接続の対応」）が、t − `r4.notice_before_s`（仮 15 秒。メモで予告と切断を突き合わせた幅）〜t + `r4.notice_after_s`（仮 1 秒）にない。予告のあった切断は、利用者がボタンで電源を切ったものと見込んで除く（下の注）。
   6. **USB の切断でない**: `TrackerRemoved` の `usb` が `false`（ケーブルを抜いたのは利用者の操作と見なす）。
-- 3〜5 で切断のあとの数秒を見るため、判定の期限を t + max(`r4.burst_s`, `r4.server_s`, `r4.notice_wait_s`)（仮 10 秒）にして、期限を過ぎてから条件を確かめる。期限ちょうどの時刻の `ServerStarted` や切断も、先に適用されるので、条件に入る（3.7）。`Raised` の `at` は期限の時刻。`r4.notice_wait_s` は、ドライバーのファイルがサーバーのファイルと別にまとめて書かれ、遅れて届くことへの余裕（まとめて書く間隔 5 秒の 2 倍。4.6）。
+- **接続**: 1 つの番号 N で、状態が接続に変わってから（`TrackerAdded`。推し量って足したときは、最初に見た時刻）、未接続に変わるまで（`TrackerRemoved`、`DongleRemoved`、`ServerStarted`、`ServerStopped`）。同じ番号でも、次の接続は別の接続（番号はスロットで、つなぎ直すと別のトラッカーが使うため。3.2）。
+- **予告と接続の対応**（ログの時刻で決める。届いた順では決めない。4.6）: 予告 `PowerOffNotice(N)` の時刻を u とする。
+  - u のときに N の接続が続いていれば（始まり ≤ u ≤ 終わり。まだ終わっていなければ、始まり ≤ u）、その接続の予告。
+  - u のときに N の接続がなければ、u の直前に終わった N の接続の予告。ただし、終わりから `r4.notice_after_s` 以内のときだけ（それより後なら、どの接続の予告でもない）。
+  - u が、ある接続の終わりと、次の接続の始まりの両方と同じ時刻なら、終わったほうの予告（予告は、切断より先か同じミリ秒に出るため。メモの 3.5、見本の 5 章）。
+  - このため、同じ番号の次の接続の予告で、前の接続の切断を除かない。前の接続の予告で、次の接続の切断を除くこともない。**例**: A が t に切れ、B が t + 3 秒に同じ番号でつながり、t + 8 秒に B の予告が出る → B の予告は B のもので、A の R4 は出る（`r4.notice_after_s` を 10 秒に広げても同じ）。A の予告（時刻 t）が、B の `TrackerAdded` より後に届いても、時刻 t で対応を決めるので、A の切断は除かれる。
+  - エンジンは、判定を済ませていない切断について、その接続の始まりと終わりと、同じ番号の次の接続の始まり（あれば）を覚えておく（予告が遅れて届いても対応を決められるように）。
+- **後ろの幅を 1 秒にした理由**: 予告は、切断の行より先か、同じミリ秒に出ていた（メモの 3.5 は「予告のあと 15 秒以内に切断」の形で 86 件を数え、予告 44 件のほとんどが対応した。見本の 5 章は同じミリ秒）。後ろの幅は、2 つのファイルの時刻の付け方の揺れの分だけにする。初版の `r4.notice_wait_s`（10 秒）は、ドライバーのファイルが遅れて届くことへの余裕を、ログの時刻の幅で取っていたもので、これをやめた。**届く遅れは、4.6 の「ドライバーを待つ」で別に扱う**（ログの上の照合の範囲と、追記を待つ時間を分けた）。決め方: 匿名化した実物のログ（L-2）で、予告の時刻 − 切断の時刻の分布を数える（M1-13 の PR に書く）。切断より後に出る予告があれば、その最大値に余裕を足す。
+- **判定の期限**: 3〜5 で切断のあとの数秒を見るため、t + max(`r4.burst_s`, `r4.server_s`, `r4.notice_after_s`)（仮 5 秒）にして、期限を過ぎてから条件を確かめる。期限ちょうどの時刻の `ServerStarted` や切断も、先に適用されるので、条件に入る（3.7）。`Raised` の `at` は期限の時刻。条件 5 を確かめる判定は、期限までの時刻のドライバーの記録がすべて届いてから行う（エンジンの `driver_needed_through` が期限を返し、見張りは、ドライバーを期限の先まで読み終えるまで、期限より後のサーバーの記録を渡さない。4.6）。見張りでは、壁時計で期限から多くて L ほど遅れて判定されるが、判定の中身と `at` は再生と同じ。
 - **予告を除く理由と、確かめていないこと**（U-11）: ログで確かめたのは、予告の行と切断の行の時刻が対応することまで（メモの 3.5）。予告のあった切断が、利用者の操作によるものか、トラッカーが自分で切ったもの（電池切れ、スリープ）を含むかは確かめていない。除かないと、使い終わってトラッカーの電源を切るたびに、台ごとに「接続が切れました」が push される（6 日で予告は 44 件）ので、既定では除く。電池切れなどを見落とすことになるが、そのときはトラッカーの光が消え、SteamVR でも切れて見える。オーナーの試し（14 章の 2）で、電源を切った時刻と予告の行が合わなければ、既定を `false` に戻す（設計の追補）。
   - 予告のあった切断は、案内を出さないが、集計の `power_offs`（8 章）に数える。
   - ドライバーのファイルがないとき（4.1）は、条件 5 を確かめられない（予告がないものとして扱い、案内が出うる）。その日の集計の `source.driver.found` が `false` になる。
@@ -729,13 +803,13 @@ VIVE Hub のサーバーが、ホストの Wi-Fi 情報を持っているか。P
 ### 8.1 日の区切りと数え方
 
 - **日の区切り**: 日 D の分は、D の 0:00:00.000 から、次の日の 0:00:00.000 の手前まで。比べるのは行に書かれた地方の日付と時刻（`LogTime` では、その行のずれで D の 0 時を表した時刻）。ファイル名の日付では分けない（前の日のファイルに 0 時より後の時刻の行があれば、その行は D の分）。ファイル名の日付は、どのファイルを読むか（4.1、4.5）にだけ使う。
-- **時間の値**（`connected_s`、`in_use_s`、`tracking_s`、`unobserved_s`）: 先頭が読めた行（種類を問わない。`Other` も含む）と、次の先頭が読めた行のあいだの区間を、前の行を適用したあとの状態で数える。区間が 0 時をまたぐなら、0 時で 2 つの日に分ける。
+- **時間の値**（`connected_s`、`in_use_s`、`tracking_s`、`unobserved_s`）: サーバーのファイルの、先頭が読めた行（種類を問わない。`Other` も含む。ドライバーの行は時刻を進めないので入れない。3.7）と、次の先頭が読めた行のあいだの区間を、前の行を適用したあとの状態で数える。区間が 0 時をまたぐなら、0 時で 2 つの日に分ける。
   - 区間が `summary.gap_s`（仮 600 秒のまま。7.4 の「ログが止まっている」の 10 分と同じ値）より長ければ、その区間は状態に数えず、`unobserved_s` に足す。VIVE Hub が行を書かずに止まったとき（終了の行のない終わり。メモの 3.5）や、PC のスリープ（記録が最長 10.6 時間出なかった）に、止まる前の状態のまま何時間も数えないため。
   - 600 秒の根拠（メモの 3.5）: トラッカーが 1 台以上つながっているあいだのサーバーの記録の間隔は、99% が 8.2 秒以内、99.9% が 270 秒以内。長いほうから 8 つは、8〜10 分が 5 回、20〜36 分が 3 回（後者は、ドングルが抜けたあとなど、つながっていなかった時間を含むかもしれない）。600 秒は、前者を状態に数え、後者を数えない。状態の行は、つながっているトラッカーごとに、変化がなくても数分おきに出る（99% が 687 秒以内）ので、使っているあいだに 10 分を超えて記録が出ないのはまれ。決め直し方: 匿名化した実物のログ（L-2）を `summary.gap_s` を 300・600・1200・1800 秒にして流し、日ごとの `unobserved_s` が、オーナーが使っていなかった時間帯と合う値にする（M1-13 の PR に書く）。
   - 数えるのは**最後に読んだ行の時刻まで**。見張りの時刻（4.6）や再生の `flush_s`（10.2）で時刻を進めても、行のない先の時間は数えない（次の行が来たときに、その区間として数える）。
   - 前の日のファイルがなく、不明な状態から始めたとき（4.5）は、D の 0 時から最初の行までを `unobserved_s` に数える。
 - **回数の値**: 出来事の時刻の日に数える（`sessions` は状態が接続に変わった `TrackerAdded`〔重なりは数えない。5.1〕、`power_offs` は R4 の条件 5 で除いた切断、`losses` は追跡中から位置取り直し中に変わった時刻、`first_pose_s` は最初の追跡中になった時刻、`host_starts` は `HostAssigned`）。検出（`detections`、`faults`）は `Raised` の `at` の日に数える。`flush_s` で進めたあいだに出た検出も数える（再生の結果は、最後の行のあと `flush_s` 以上動き続けた見張りと同じ）。
-- **日を閉じる**: 最後に読んだ行の時刻が次の日の 0 時以上になったとき、D を閉じて（`final: true`）、そのときの状態を次の日に持ち越す。実物では、古い日のファイルの最後の記録が、すでに次の日の時刻になっている（4.1。メモの 2.5）ので、D はその記録を読んだときに閉じる。D の後半に行がなければ、次の日の最初の行を読むまで閉じない（VIVE Hub を夜に止めた日は、翌日に使い始めるまで `final: false` のまま）。行が 1 行もない日の集計は作らない。
+- **日を閉じる**: 最後に読んだサーバーの行の時刻が次の日の 0 時以上になったとき、D を閉じて（`final: true`）、そのときの状態を次の日に持ち越す。ドライバーの行の数（`source.driver`）は、その行の時刻の日に数え、見張りは、D を閉じる前に、ドライバーを D の終わりまで読み終える（4.6 の「ドライバーを待つ」）。実物では、古い日のファイルの最後の記録が、すでに次の日の時刻になっている（4.1。メモの 2.5）ので、D はその記録を読んだときに閉じる。D の後半に行がなければ、次の日の最初の行を読むまで閉じない（VIVE Hub を夜に止めた日は、翌日に使い始めるまで `final: false` のまま）。行が 1 行もない日の集計は作らない。
 - **トラッカーの行**: 集計の `trackers` の行は、**シリアル番号ごと**にする（番号はつなぎ直しで変わるため。3.2）。1 回の接続（状態が接続に変わってから未接続になるまで）の時間と回数を、その接続のあいだに分かったシリアル番号の行に足す（`SerialKnown` は、ふつう接続から 1 秒以内に来る。来る前の分も、その接続の分として同じ行に足す）。接続のあいだにシリアル番号が分からなければ、番号ごとの行（`serial: null`）に足す。どちらの行も、その日に使った番号を `slots` に並べる。
 - **`tracking_ratio` の `null`**: `in_use_s` が 0 のときの `null` の境界は、集計のテスト（JSON の出力）で確かめる。再生テストの `expect.toml` に `null` の表記は足さない（Issue #20 の PM の判断）。
 - **前の日からの持ち越し**: 動き続けているときは、エンジンの状態をそのまま持ち越す。起動し直したとき・再構築したときは、前の日のファイルを先に読んで同じ状態を作る（4.5）。ファイルの日付が飛んだときは、どの場合も不明な状態から始める（4.1）。
@@ -757,7 +831,7 @@ VIVE Hub のサーバーが、ホストの Wi-Fi 情報を持っているか。P
 - **空きが `summary.gap_s` を超える場合**（どの動かし方でも同じ）:
   - 11/28 の 00:12:00 と 00:21:00 の行がなければ、00:04:30〜00:30:00 の 1530 秒は `summary.gap_s` を超える空きなので、どの状態にも数えず `unobserved_s` に入る。前の日のファイルがあるとき（表の上の 3 つの行）の 11/28 は、`tracking_s` 240（0:00〜00:04:00）、`connected_s` 270、`in_use_s` 270（00:04:00〜00:04:30 の 30 を足す）、`unobserved_s` 1530、`losses` 1。前の日のファイルがないとき（表の 4 つ目の行）は、`unobserved_s` 1770（0:00〜00:04:00 の 240 と、1530）、`connected_s` 30、`tracking_s` 0、`in_use_s` 0、`tracking_ratio` `null`、`losses` 0。11/27 の集計は、どちらも表と同じ。
   - 11/28 の最初の行が 00:10:00 なら（あとの行もそれより後）、23:59:00〜00:10:00 の 660 秒は `summary.gap_s` を超える空きなので、どの状態にも数えない（11/27 に 60 秒、11/28 に 600 秒の `unobserved_s`）。
-- **同じにならない場合**（どれも `source` か、ここに書いた値で分かる）: (1) 切り替わったあとの古いファイルの書き足し（`late_writes`）があった日。動き続けたときは読まず、起動し直すと前の日のファイルとして読む（4.7）。(2) 前の日のファイルの中で、一度も行が出なかったトラッカーの状態（前の前の日に左右される）。(3) `pushes`（そのアプリの回が push した数。起動し直すと 0 から数える）。(4) 見張りで、L より遅れて届いた行（`time_regressions`。3.7）。
+- **同じにならない場合**（どれも `source` か、ここに書いた値で分かる）: (1) 切り替わったあとの古いファイルの書き足し（`late_writes`）があった日。動き続けたときは読まず、起動し直すと前の日のファイルとして読む（4.7）。(2) 前の日のファイルの中で、一度も行が出なかったトラッカーの状態（前の前の日に左右される）。(3) `pushes`（そのアプリの回が push した数。起動し直すと 0 から数える）。(4) 見張りで、L より遅れて届いた行（サーバーの `time_regressions` と、ドライバーの `driver.late`。4.6）。
 
 形（JSON。`serde_json` 1.0.154、MIT OR Apache-2.0）:
 
@@ -771,8 +845,8 @@ VIVE Hub のサーバーが、ホストの Wi-Fi 情報を持っているか。P
   "source": { "lines": 0, "meta": 0, "other": 0, "unparsed": 0, "no_header": 0, "bad_offset": 0,
               "replaced_chars": 0, "long_lines": 0, "time_regressions": 0, "late_writes": 0,
               "out_of_order": 0, "rebuilds": 0,
-              "driver": { "found": false, "lines": 0, "no_header": 0, "replaced_chars": 0,
-                          "long_lines": 0, "time_regressions": 0, "late_writes": 0 } },
+              "driver": { "found": false, "lines": 0, "meta": 0, "no_header": 0, "bad_offset": 0,
+                          "replaced_chars": 0, "long_lines": 0, "late": 0, "late_writes": 0 } },
   "trackers": [
     { "serial": null, "slots": [1], "name": null,
       "connected_s": 0.0, "in_use_s": 0.0, "tracking_s": 0.0, "tracking_ratio": null,
@@ -810,7 +884,7 @@ VIVE Hub のサーバーが、ホストの Wi-Fi 情報を持っているか。P
 | `pushes` | push した案内の数（出しすぎていないかを見るため）。そのアプリの回の数で、ファイルからは決まらない（8.1 の終わり） |
 | `source.rebuilds` | 作り直しで再構築した回数（4.1）。アプリの回の数で、ファイルからは決まらない |
 | `source.meta`、`source.bad_offset` | `#` で始まる行の数、ずれが読めなかった行の数（4.3、4.7） |
-| `source.driver` | ドライバーのファイルの数（4.7）。`found` は、その日にドライバーのファイルを読めたか（`false` なら R4 の条件 5 を確かめていない） |
+| `source.driver` | ドライバーのファイルの数（4.7）。`found` は、その日にドライバーのファイルを読めたか（`false` なら R4 の条件 5 を確かめていない）。`late` は L より遅れて届いた記録（4.6。見張りの回の数で、再生では 0） |
 
 - `serial` と `name` は、分かったときだけ。集計にはシリアル番号が入るので、利用者の PC にだけ置く。送る機能（L-4）では、匿名化してから送る。
 - 「位置が出ていた割合」は、`findings-2026-11-28.md` の「位置が出ていたフレームの割合」とは数え方が違う（あちらはトラッカー内の毎フレームの記録、こちらは PC のログの状態の変わり目）。突き合わせはまだしていない。
@@ -903,12 +977,12 @@ tests/replay/<ケースの名前>/
   - `synthetic-r1-gap-then-fault`（M1-6）: ふつうの開始の途中で、断られた問い合わせが 2 回、61 秒空いて 1 回（ここでは出ない）。そのあとクライアントが外れて R1 の条件がなくなり、しばらくして 2 度目の `switch to HOST mode` から `Wifi info is not yet available.` が 0.55 秒おきに 60 秒続く（ここで出る）。R1 がちょうど 1 回（6.2 の R1 の例）。
   - `synthetic-midnight`（M1-8）: 8.1 の例の 2 つのファイル。`expect.toml` の `[summary."2026-11-27"]` と `[summary."2026-11-28"]` に 8.1 の表の値。
   - `synthetic-midnight-no-prev`（M1-8）: 同じ例の 11/28 のファイルだけ。8.1 の表の「前の日のファイルがない」の値。
-  - `synthetic-r4-power-off`（M1-6）: 3 台がつながって 1 分以上たってから、(a) 1 台が、ドライバーのファイルの `(N) Tracker is going to power-off.` と同じ時刻に `Remove tracker (N), ...` を 2 行出して切れる（R4 は出ない。`power_offs` が 1）、(b) 別の 1 台が、予告なしで切れる（R4 が 1 回）、(c) 残りの 1 台が `connection type: 2` で切れる（R4 は出ない）。(a) の予告の行の時刻は、実物と同じく切断の行と同じミリ秒にする。ドライバーのファイルが遅れて届いても（例: サーバーより 3 秒あとに追記される）、`r4.notice_wait_s` 以内なら同じ結果になることは、見張りのループのテスト（M1-9）で、このケースのファイルを時間差で伸ばして確かめる。
+  - `synthetic-r4-power-off`（M1-6）: 3 台がつながって 1 分以上たってから、(a) 1 台が、ドライバーのファイルの `(N) Tracker is going to power-off.` と同じ時刻に `Remove tracker (N), ...` を 2 行出して切れる（R4 は出ない。`power_offs` が 1）、(b) 別の 1 台が、予告なしで切れる（R4 が 1 回）、(c) 残りの 1 台が `connection type: 2` で切れる（R4 は出ない）。(a) の予告の行の時刻は、実物と同じく切断の行と同じミリ秒にする。ドライバーのファイルが遅れて届いても（例: サーバーより 3 秒あとに追記される）、L 以内なら同じ結果になること（4.6 の「ドライバーを待つ」）は、見張りのループのテスト（M1-9）で、このケースのファイルを時間差で伸ばして確かめる。
 - 実物のログを入れるケースの名前は `hub-<最初の日付>-<最後の日>`（例: `hub-2026-11-23-27`）。サーバーとドライバーの両方のファイルを入れる。2026-11-22 のファイルは、VIVE Hub が消したので残っていない（メモの 1 章。過去 5 日分しか残らない）。受け入れの基準（PRD の 5 章の「2026-11-22〜27」）の読み方は PM が決める（14 章）。大きさによっては、レポジトリへの入れ方も PM が決める。
 
 ### 10.2 時刻の進め方
 
-- 入力のファイルを、種類（サーバー、ドライバー）ごとに名前の日付の順につなぎ、2 つの列を、それぞれの中の順を保ったまま時刻の順に合わせて（同じ時刻ならサーバーを先。4.6）流す。壁時計は使わない。
+- 入力のファイルを、種類（サーバー、ドライバー）ごとに名前の日付の順につなぎ、列ごとにずれを補い（4.3）、2 つの列を、それぞれの中の順を保ったまま時刻の順に合わせて（同じ時刻ならサーバーを先。4.6）流す。壁時計は使わない。ドライバーの記録は時刻を進めない（3.7）。時刻の順に流すので、`driver_needed_through` の待ち（4.6）は起きない（期限より後のサーバーの記録の前に、期限までのドライバーの記録がすべて入っている）。
 - 出来事ごとに、エンジンの `apply`（中で、その時刻まで `advance_to`）を呼び、ほかの先頭が読めた行は `note_line` を呼ぶ。最後の行のあと、`advance_to(最後の行の時刻 + flush_s)`（既定 600 秒。`expect.toml` で変えられる）を呼んで、残っている期限を判定する。`flush_s` は期限の判定のためだけに時刻を進め、集計の時間の値には足さない（8.1）。結果は、最後の行のあと `flush_s` 以上動き続けた見張りと同じ。
 - 日の区切りは、行の時刻で、見張りのときと同じに起きる（8.1）。ファイルの日付が飛んでいれば、見張りのときと同じに `Engine::rebuild` で初期の状態に戻す（4.1）。最初のファイルは、前の日のファイルがない起動と同じ（不明な状態から始まる。4.5）。
 - 同じ入力を、見張りのように 500 ms ごとの `advance_to` を挟んで流しても、同じ検出と集計になる（3.7）。M1-6 と M1-9 で、これをテストで確かめる。
@@ -1021,7 +1095,7 @@ docs.rs と Microsoft の文書は、この環境から読めなかった（接�
 - トーストの送り主の ID の登録の方法、トーストを押したことを受け取れるか（7.3）。
 - 日本語以外の Windows にある書体（7.2）。
 - egui の窓を、トレイと同じイベントループで、閉じても終わらずに動かせるか（7.4）。
-- R1 の `span_s` を 15 秒、`gap_s` を 10 秒にしてよいか（6 日分では、ふつうの開始で断られる問い合わせは出ていないが、ほかの環境では分からない）。R2〜R5 のしきい値（6.1 の決め方で決める）。R4 の `notice_before_s`、`notice_wait_s`。重なりの `state.dup_ms`（1 秒。`Remove tracker` の 2 行は 3 ミリ秒おきだったが、`Add new tracker` の重なりは見本にない）。
+- R1 の `span_s` を 15 秒、`gap_s` を 10 秒にしてよいか（6 日分では、ふつうの開始で断られる問い合わせは出ていないが、ほかの環境では分からない）。R2〜R5 のしきい値（6.1 の決め方で決める）。R4 の `notice_before_s`、`notice_after_s`（予告が切断より後に出るか。6.2）。重なりの `state.dup_ms`（1 秒。`Remove tracker` の 2 行は 3 ミリ秒おきだったが、`Add new tracker` の重なりは見本にない）。
 - 集計の `summary.gap_s` を 600 秒にしてよいか（8.1 の決め直し方）。
 - 見張りの余裕 L を 10 秒にしてよいか（4.6。オーナーの試しの 1）。
 - カメラを覆うと、ログに喪失が出るまでの遅れ（7.4 の F3）。
