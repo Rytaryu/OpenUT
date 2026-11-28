@@ -24,6 +24,9 @@ concurrency:
 jobs:
   windows:
     name: build (windows-latest)
+    # Only main is built, also on a manual run: the artifact name is the same
+    # for every run, so a run on another branch must not produce one.
+    if: github.ref == 'refs/heads/main'
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
