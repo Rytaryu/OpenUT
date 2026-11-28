@@ -6,12 +6,14 @@
 <title>OpenUT 状態の窓</title>
 <link rel="stylesheet" href="tokens.css">
 <script src="glyph.js"></script>
+<script src="wrap.js"></script>
 <style>
   body { padding: 24px; display: flex; flex-wrap: wrap; gap: 32px; align-items: flex-start; }
 
   /* Window frame. Only the client area (.body) is drawn by egui; the title bar is Windows'. */
   .win { width: 400px; background: var(--bg); color: var(--ink); border-radius: 8px;
          box-shadow: 0 0 0 1px rgba(0,0,0,.18), 0 8px 28px rgba(0,0,0,.18); overflow: hidden; }
+  .win.min { width: 360px; }
   .titlebar { height: 32px; display: flex; align-items: center; gap: 8px; padding-left: 12px;
               font-size: 12px; color: var(--ink); }
   .titlebar .ctl { margin-left: auto; display: flex; }
@@ -28,39 +30,43 @@
   .watch .more { grid-column: 2; font-size: 14px; color: var(--ink-2); margin-top: 2px; }
   .watch .act { grid-column: 2; margin-top: 10px; }
 
-  /* 2. notices */
+  /* 2. notices (text laid out by wrap.js, section 4.4) */
   .notices { display: grid; gap: 8px; margin-top: 12px; }
   .notice { background: var(--surface); border-radius: 6px; padding: 10px 14px 11px 16px;
             box-shadow: inset 4px 0 0 var(--signal); }
   .notice.ok { box-shadow: inset 4px 0 0 var(--ok); }
-  .notice .h { margin: 0; font-size: 16px; font-weight: 700; line-height: 1.45; }
-  .notice .a { margin: 2px 0 0; font-size: 14px; line-height: 1.55; }
+  .notice .h { margin: 0; font-size: 16px; font-weight: 700; line-height: 23px; }
+  .notice .a { margin: 2px 0 0; font-size: 14px; line-height: 22px; }
 
-  /* 3. trackers, 4. Wi-Fi: one grid so the state column lines up */
-  .grid { display: grid; grid-template-columns: 57px 1fr 104px 64px; column-gap: 12px; align-items: center; }
-  .row { display: contents; }
-  .row > * { height: 40px; display: flex; align-items: center; }
-  .ladder { gap: 3px; }
-  .ladder i { width: 9px; height: 6px; border-radius: 1.5px; background: var(--track); }
-  .s1 i:nth-child(-n+1), .s2 i:nth-child(-n+2), .s3 i:nth-child(-n+3), .s4 i:nth-child(-n+4) { background: var(--stage); }
-  .s5 i { background: var(--ok); }
-  .name { gap: 8px; min-width: 0; }
-  .name button { font: inherit; font-size: 14px; color: var(--ink); background: none; border: 0; padding: 4px 6px;
-                 margin-left: -6px; border-radius: 4px; cursor: text; }
-  .name button.hover { background: var(--hover); }
-  .name input { font: inherit; font-size: 14px; color: var(--ink); width: 120px; padding: 4px 6px; margin-left: -7px;
-                border: 1px solid var(--stage); border-radius: 4px; background: var(--surface); outline: 2px solid color-mix(in srgb, var(--stage) 30%, transparent); }
+  /* 3. trackers: two lines per tracker. Line 1 the name, line 2 the ladder, the state and the time. */
+  .tk { display: grid; grid-template-columns: 57px 1fr; grid-template-rows: 24px 20px; column-gap: 12px; }
+  .tk + .tk { margin-top: 12px; }
+  .nm { grid-column: 2; display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .ladder { grid-column: 1; grid-row: 2; display: flex; gap: 3px; align-items: center; }
+  .ladder i { width: 9px; height: 6px; border-radius: 1.5px; box-shadow: inset 0 0 0 1px var(--track); }
+  .s1 i:nth-child(-n+1), .s2 i:nth-child(-n+2), .s3 i:nth-child(-n+3), .s4 i:nth-child(-n+4) { background: var(--stage); box-shadow: none; }
+  .s5 i { background: var(--ok); box-shadow: none; }
+  .st { grid-column: 2; grid-row: 2; display: flex; align-items: center; font-size: 14px; }
+  .st .since { margin-left: auto; color: var(--ink-2); }
+  .name { font: inherit; font-size: 14px; font-weight: 700; color: var(--ink); background: none; border: 0;
+          padding: 2px 6px; margin-left: -6px; border-radius: 4px; cursor: text; white-space: nowrap; }
+  .name.hover { background: var(--hover); }
+  .field { font: inherit; font-size: 14px; color: var(--ink); width: 136px; height: 24px; padding: 0 6px; margin-left: -7px;
+           border: 1px solid var(--stage); border-radius: 4px; background: var(--surface);
+           outline: 2px solid color-mix(in srgb, var(--stage) 30%, transparent); }
+  .field::selection { background: color-mix(in srgb, var(--stage) 30%, transparent); }
   .tag { font-size: 13px; font-weight: 700; color: var(--stage); border: 1px solid var(--stage); border-radius: 4px;
-         padding: 0 5px; line-height: 20px; height: 22px; }
-  .state { font-size: 14px; }
-  .since { font-size: 14px; color: var(--ink-2); justify-content: flex-end; }
-  .wifi .label { grid-column: 1 / 3; font-size: 14px; color: var(--ink-2); }
-  .wifi .state { grid-column: 3 / 5; }
+         padding: 0 5px; line-height: 20px; height: 22px; white-space: nowrap; }
+
+  /* 4. PC Wi-Fi: one line in the text column */
+  .wifi { display: grid; grid-template-columns: 57px auto 1fr; column-gap: 12px; height: 20px; align-items: center;
+          font-size: 14px; margin-top: 16px; }
+  .wifi .label { grid-column: 2; color: var(--ink-2); }
 
   /* 5. today */
   .h2 { font-size: 14px; font-weight: 700; margin: 0 0 4px; }
   .today { display: grid; grid-template-columns: 1fr 112px 64px; column-gap: 12px; }
-  .today > * { height: 28px; display: flex; align-items: center; font-size: 14px; }
+  .today > * { height: 28px; display: flex; align-items: center; font-size: 14px; white-space: nowrap; }
   .today .num { justify-content: flex-end; }
   .today .th { font-size: 13px; color: var(--ink-2); height: 22px; }
   .faults { display: flex; gap: 24px; font-size: 14px; height: 32px; align-items: center; }
@@ -83,6 +89,7 @@
 <body>
 
 <template id="checkmark"><svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 6.2l2.4 2.4 4.6-5"/></svg></template>
+<template id="ladder"><i></i><i></i><i></i><i></i><i></i></template>
 
 <!-- A: R1 is going on (light) -->
 <figure id="a-light">
@@ -93,14 +100,14 @@
     <div class="sec">
       <div class="watch"><canvas data-glyph="notice" data-size="36" data-dpr="2" data-color="--icon-normal" data-badge="--icon-badge"></canvas><b>見張り中<span class="sub">11/28のログ</span></b></div>
       <div class="notices">
-        <div class="notice"><p class="h">トラッカーが始まりません</p><p class="a">腰の電源だけを入れ直す。<br>ほかのトラッカーとドングルはそのまま</p></div>
+        <div class="notice"><p class="h" data-wrap="トラッカーが|始まりません"></p><p class="a" data-wrap="腰の|電源だけを|入れ直す。\nほかの|トラッカーと|ドングルは|そのまま"></p></div>
       </div>
     </div>
-    <div class="sec grid">
-      <div class="row"><span class="ladder s3"><i></i><i></i><i></i><i></i><i></i></span><span class="name"><button>腰</button><span class="tag">ホスト</span></span><span class="state">地図同期中</span><span class="since">4分</span></div>
-      <div class="row"><span class="ladder s2"><i></i><i></i><i></i><i></i><i></i></span><span class="name"><button>左足</button></span><span class="state">Wi-Fi待ち</span><span class="since">4分</span></div>
-      <div class="row"><span class="ladder s2"><i></i><i></i><i></i><i></i><i></i></span><span class="name"><button>右足</button></span><span class="state">Wi-Fi待ち</span><span class="since">3分</span></div>
-      <div class="row wifi"><span class="label">PCのWi-Fi情報</span><span class="state">なし</span></div>
+    <div class="sec">
+      <div class="tk"><span class="nm"><button class="name">腰</button><span class="tag">ホスト</span></span><span class="ladder s3"></span><span class="st"><span>地図同期中</span><span class="since">4分</span></span></div>
+      <div class="tk"><span class="nm"><button class="name">左足</button></span><span class="ladder s2"></span><span class="st"><span>Wi-Fi待ち</span><span class="since">4分</span></span></div>
+      <div class="tk"><span class="nm"><button class="name">右足</button></span><span class="ladder s2"></span><span class="st"><span>Wi-Fi待ち</span><span class="since">3分</span></span></div>
+      <div class="wifi"><span class="label">PCのWi-Fi情報</span><span>なし</span></div>
     </div>
     <div class="sec">
       <p class="h2">今日</p>
@@ -129,15 +136,15 @@
     <div class="sec">
       <div class="watch"><canvas data-glyph="notice" data-size="36" data-dpr="2" data-color="--icon-normal" data-badge="--icon-badge"></canvas><b>見張り中<span class="sub">11/28のログ</span></b></div>
       <div class="notices">
-        <div class="notice"><p class="h">トラッカーが始まりません</p><p class="a">腰の電源だけを入れ直す。<br>ほかのトラッカーとドングルはそのまま</p></div>
-        <div class="notice"><p class="h">右足が地図を受け取れていません</p><p class="a">腰の近くに置いて待つ</p></div>
+        <div class="notice"><p class="h" data-wrap="トラッカーが|始まりません"></p><p class="a" data-wrap="腰の|電源だけを|入れ直す。\nほかの|トラッカーと|ドングルは|そのまま"></p></div>
+        <div class="notice"><p class="h" data-wrap="右足が|地図を|受け取れていません"></p><p class="a" data-wrap="腰の|近くに|置いて|待つ"></p></div>
       </div>
     </div>
-    <div class="sec grid">
-      <div class="row"><span class="ladder s3"><i></i><i></i><i></i><i></i><i></i></span><span class="name"><button>腰</button><span class="tag">ホスト</span></span><span class="state">地図同期中</span><span class="since">4分</span></div>
-      <div class="row"><span class="ladder s2"><i></i><i></i><i></i><i></i><i></i></span><span class="name"><button>左足</button></span><span class="state">Wi-Fi待ち</span><span class="since">4分</span></div>
-      <div class="row"><span class="ladder s3"><i></i><i></i><i></i><i></i><i></i></span><span class="name"><button>右足</button></span><span class="state">地図同期中</span><span class="since">52秒</span></div>
-      <div class="row wifi"><span class="label">PCのWi-Fi情報</span><span class="state">なし</span></div>
+    <div class="sec">
+      <div class="tk"><span class="nm"><button class="name">腰</button><span class="tag">ホスト</span></span><span class="ladder s3"></span><span class="st"><span>地図同期中</span><span class="since">4分</span></span></div>
+      <div class="tk"><span class="nm"><button class="name">左足</button></span><span class="ladder s2"></span><span class="st"><span>Wi-Fi待ち</span><span class="since">4分</span></span></div>
+      <div class="tk"><span class="nm"><button class="name">右足</button></span><span class="ladder s3"></span><span class="st"><span>地図同期中</span><span class="since">52秒</span></span></div>
+      <div class="wifi"><span class="label">PCのWi-Fi情報</span><span>なし</span></div>
     </div>
     <div class="sec">
       <p class="h2">今日</p>
@@ -166,11 +173,11 @@
     <div class="sec">
       <div class="watch"><canvas data-glyph="normal" data-size="36" data-dpr="2" data-color="--icon-normal"></canvas><b>見張り中<span class="sub">11/28のログ</span></b></div>
     </div>
-    <div class="sec grid">
-      <div class="row"><span class="ladder s5"><i></i><i></i><i></i><i></i><i></i></span><span class="name"><button>腰</button><span class="tag">ホスト</span></span><span class="state">追跡中</span><span class="since">42分</span></div>
-      <div class="row"><span class="ladder s5"><i></i><i></i><i></i><i></i><i></i></span><span class="name"><button>左足</button></span><span class="state">追跡中</span><span class="since">1時間5分</span></div>
-      <div class="row"><span class="ladder s4"><i></i><i></i><i></i><i></i><i></i></span><span class="name"><button>右足</button></span><span class="state">位置取り直し中</span><span class="since">8秒</span></div>
-      <div class="row wifi"><span class="label">PCのWi-Fi情報</span><span class="state">あり</span></div>
+    <div class="sec">
+      <div class="tk"><span class="nm"><button class="name">腰</button><span class="tag">ホスト</span></span><span class="ladder s5"></span><span class="st"><span>追跡中</span><span class="since">42分</span></span></div>
+      <div class="tk"><span class="nm"><button class="name">左足</button></span><span class="ladder s5"></span><span class="st"><span>追跡中</span><span class="since">1時間5分</span></span></div>
+      <div class="tk"><span class="nm"><button class="name">右足</button></span><span class="ladder s4"></span><span class="st"><span>位置取り直し中</span><span class="since">8秒</span></span></div>
+      <div class="wifi"><span class="label">PCのWi-Fi情報</span><span>あり</span></div>
     </div>
     <div class="sec">
       <p class="h2">今日</p>
@@ -218,11 +225,11 @@
       <div class="watch"><canvas data-glyph="blind" data-size="36" data-dpr="2" data-color="--icon-blind"></canvas><b>ログが10分止まっています</b>
         <div class="more">ログの形が想定と違う行が120行</div></div>
     </div>
-    <div class="sec grid">
-      <div class="row"><span class="ladder s5"><i></i><i></i><i></i><i></i><i></i></span><span class="name"><button>腰</button><span class="tag">ホスト</span></span><span class="state">追跡中</span><span class="since">54分</span></div>
-      <div class="row"><span class="ladder s0"><i></i><i></i><i></i><i></i><i></i></span><span class="name"><button>左足</button></span><span class="state">未接続</span><span class="since">12分</span></div>
-      <div class="row"><span class="ladder s1"><i></i><i></i><i></i><i></i><i></i></span><span class="name"><button>トラッカー3</button></span><span class="state">接続</span><span class="since">11分</span></div>
-      <div class="row wifi"><span class="label">PCのWi-Fi情報</span><span class="state">不明</span></div>
+    <div class="sec">
+      <div class="tk"><span class="nm"><button class="name">腰</button><span class="tag">ホスト</span></span><span class="ladder s5"></span><span class="st"><span>追跡中</span><span class="since">54分</span></span></div>
+      <div class="tk"><span class="nm"><button class="name">左足</button></span><span class="ladder s0"></span><span class="st"><span>未接続</span><span class="since">12分</span></span></div>
+      <div class="tk"><span class="nm"><button class="name">トラッカー3</button></span><span class="ladder s1"></span><span class="st"><span>接続</span><span class="since">11分</span></span></div>
+      <div class="wifi"><span class="label">PCのWi-Fi情報</span><span>不明</span></div>
     </div>
     <div class="sec settings">
       <p class="h2">通知</p>
@@ -232,24 +239,66 @@
 </section>
 </figure>
 
-<!-- E: renaming a tracker (F3) -->
+<!-- E: renaming the host at the minimum width (F3) -->
 <figure id="e-light">
-<figcaption>E 名前を付ける（F3）</figcaption>
-<section class="win">
+<figcaption>E 名前を付ける（F3）、最小幅 360</figcaption>
+<section class="win min">
   <main class="body" style="padding-top:12px">
-    <div class="sec grid">
-      <div class="row"><span class="ladder s5"><i></i><i></i><i></i><i></i><i></i></span><span class="name"><button>腰</button><span class="tag">ホスト</span></span><span class="state">追跡中</span><span class="since">42分</span></div>
-      <div class="row"><span class="ladder s4"><i></i><i></i><i></i><i></i><i></i></span><span class="name"><input value="左足" aria-label="名前"></span><span class="state">位置取り直し中</span><span class="since">3秒</span></div>
-      <div class="row"><span class="ladder s5"><i></i><i></i><i></i><i></i><i></i></span><span class="name"><button class="hover">トラッカー3</button></span><span class="state">追跡中</span><span class="since">40分</span></div>
+    <div class="sec">
+      <div class="tk"><span class="nm"><input class="field" value="腰のトラッカー" aria-label="名前"><span class="tag">ホスト</span></span><span class="ladder s5"></span><span class="st"><span>追跡中</span><span class="since">42分</span></span></div>
+      <div class="tk"><span class="nm"><button class="name hover">左足のトラッカー</button></span><span class="ladder s4"></span><span class="st"><span>位置取り直し中</span><span class="since">3秒</span></span></div>
+      <div class="tk"><span class="nm"><button class="name">トラッカー3</button></span><span class="ladder s5"></span><span class="st"><span>追跡中</span><span class="since">40分</span></span></div>
+    </div>
+  </main>
+</section>
+</figure>
+
+<!-- F: the minimum width with the longest names, state and time -->
+<figure id="f-light">
+<figcaption>F 最小幅 360、長い名前</figcaption>
+<section class="win min">
+  <header class="titlebar"><canvas data-glyph="normal" data-size="32" data-dpr="2" data-color="--icon-normal"></canvas>OpenUT<span class="ctl"><i>─</i><i>☐</i><i>✕</i></span></header>
+  <main class="body">
+    <div class="sec">
+      <div class="watch"><canvas data-glyph="notice" data-size="36" data-dpr="2" data-color="--icon-normal" data-badge="--icon-badge"></canvas><b>見張り中<span class="sub">11/28のログ</span></b></div>
+      <div class="notices">
+        <div class="notice"><p class="h" data-wrap="左足のトラッカーが|地図を|受け取れていません"></p><p class="a" data-wrap="腰のトラッカー…の|近くに|置いて|待つ"></p></div>
+      </div>
+    </div>
+    <div class="sec">
+      <div class="tk"><span class="nm"><button class="name">腰のトラッカー…</button><span class="tag">ホスト</span></span><span class="ladder s5"></span><span class="st"><span>追跡中</span><span class="since">12時間59分</span></span></div>
+      <div class="tk"><span class="nm"><button class="name">左足のトラッカー</button></span><span class="ladder s3"></span><span class="st"><span>地図同期中</span><span class="since">6分</span></span></div>
+      <div class="tk"><span class="nm"><button class="name">右足のトラッカー</button></span><span class="ladder s4"></span><span class="st"><span>位置取り直し中</span><span class="since">8秒</span></span></div>
+      <div class="tk"><span class="nm"><button class="name">トラッカー4</button></span><span class="ladder s0"></span><span class="st"><span>未接続</span><span class="since">3分</span></span></div>
+      <div class="wifi"><span class="label">PCのWi-Fi情報</span><span>あり</span></div>
+    </div>
+    <div class="sec">
+      <p class="h2">今日</p>
+      <div class="today">
+        <span class="th"></span><span class="th num">位置が出ていた</span><span class="th num">喪失</span>
+        <span>腰のトラッカー…</span><span class="num">99%</span><span class="num">12回</span>
+        <span>左足のトラッカー</span><span class="num">97%</span><span class="num">3回</span>
+        <span>右足のトラッカー</span><span class="num">100%</span><span class="num">0回</span>
+        <span>トラッカー4</span><span class="num">—</span><span class="num">0回</span>
+      </div>
+      <div class="faults"><span>始まらない 0回</span><span>予期しない切断 2回</span></div>
+    </div>
+    <div class="sec settings">
+      <p class="h2">通知</p>
+      <div class="checks"><span class="check"><span class="box on"></span>VRの中</span><span class="check"><span class="box on"></span>デスクトップ</span></div>
     </div>
   </main>
 </section>
 </figure>
 
 <script>
-  // Fill the checkboxes that are on with the check mark.
+  // Fill the ladders and the checkboxes that are on.
+  const cells = document.getElementById("ladder").content;
+  document.querySelectorAll(".ladder").forEach((l) => l.appendChild(cells.cloneNode(true)));
   const tick = document.getElementById("checkmark").content;
   document.querySelectorAll(".box.on").forEach((b) => { b.style.color = "var(--on-stage)"; b.appendChild(tick.cloneNode(true)); });
+  // The name being typed is shown selected, as when the field opens (3.5).
+  document.querySelectorAll(".field").forEach((f) => { f.focus(); f.select(); });
 </script>
 </body>
 </html>
