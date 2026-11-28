@@ -270,8 +270,7 @@ fn hex(bytes: &[u8]) -> Vec<u8> {
 
 #[derive(Default)]
 struct Replacements {
-    preferred: BTreeMap<(Kind, String), String>,
-    assigned: BTreeMap<(Option<Kind>, String), String>,
+    assigned: BTreeMap<(Option<Kind>, String), Option<String>>,
     used: BTreeSet<String>,
     next: BTreeMap<usize, u64>,
     failed: bool,
@@ -287,6 +286,7 @@ impl Replacements {
         if lines.next() != Some("kind\toriginal\treplacement") {
             return Err(ExportError::InvalidMapping);
         }
+        let mut preferred = BTreeMap::new();
         for line in lines {
             let mut columns = line.split('\t');
             let (Some(kind), Some(original), Some(replacement), None) = (
@@ -306,13 +306,20 @@ impl Replacements {
             // Non-ASCII values cannot occur in a reconstructable packet.
             if let Some(original) = unescape_printable(original) {
                 let key = (kind, replacement_key(Some(kind), &original));
-                if result
-                    .preferred
+                if preferred
                     .insert(key, replacement.to_owned())
                     .is_some_and(|old| old != replacement)
                 {
                     return Err(ExportError::InvalidMapping);
                 }
+            }
+        }
+
+        // Resolve width collisions against the whole table in a fixed order
+        // before any record-specific values can claim an alias.
+        for ((kind, original), replacement) in preferred {
+            if !original.is_empty() {
+                result.assign((Some(kind), original), Some(&replacement));
             }
         }
         Ok(result)
@@ -323,19 +330,28 @@ impl Replacements {
             return String::new();
         }
         let key = (kind, replacement_key(kind, original));
-        if let Some(replacement) = self.assigned.get(&key) {
-            return replacement.clone();
-        }
-        let preferred = kind
-            .and_then(|kind| self.preferred.get(&(kind, key.1.clone())))
-            .and_then(|replacement| fit_replacement(replacement, original.len()))
-            .filter(|candidate| self.available(candidate, &key.1));
-        let replacement = preferred.or_else(|| self.generate(original.len(), &key.1));
-        let Some(replacement) = replacement else {
-            self.failed = true;
-            return "X".repeat(original.len());
+        let replacement = match self.assigned.get(&key) {
+            Some(replacement) => replacement.clone(),
+            None => self.assign(key, None),
         };
-        self.used.insert(replacement.clone());
+        if let Some(replacement) = replacement {
+            replacement
+        } else {
+            self.failed = true;
+            "X".repeat(original.len())
+        }
+    }
+
+    fn assign(&mut self, key: (Option<Kind>, String), preferred: Option<&str>) -> Option<String> {
+        let original = &key.1;
+        let len = original.len();
+        let replacement = preferred
+            .and_then(|replacement| fit_replacement(replacement, len))
+            .filter(|candidate| self.available(candidate, original))
+            .or_else(|| self.generate(len, original));
+        if let Some(replacement) = &replacement {
+            self.used.insert(replacement.clone());
+        }
         self.assigned.insert(key, replacement.clone());
         replacement
     }
@@ -488,5 +504,34 @@ mod tests {
         let first = replacements.replace(None, "KEEP");
         assert_eq!(replacements.replace(None, "KEEP"), first);
         assert_ne!(replacements.replace(None, "DROP"), first);
+    }
+
+    #[test]
+    fn fixes_width_collisions_before_reading_any_record() {
+        let tsv = concat!(
+            "kind\toriginal\treplacement\n",
+            "WIFI\tu\tWIFI-A\n",
+            "WIFI-SECRET\tv\tWIFI-SECRET-A\n",
+            "WIFI\tw\tID-A\n",
+        );
+        let keys = [
+            (Kind::WifiName, "u"),
+            (Kind::WifiPassword, "v"),
+            (Kind::WifiName, "w"),
+        ];
+        let mut first = Replacements::from_tsv(Some(tsv)).expect("private mapping");
+        let expected = keys.map(|(kind, value)| first.replace(Some(kind), value));
+        let distinct: BTreeSet<_> = expected.iter().collect();
+        assert_eq!(distinct.len(), keys.len());
+        assert!(expected.iter().all(|alias| alias.len() == 1));
+
+        let mut reversed = Replacements::from_tsv(Some(tsv)).expect("private mapping");
+        let _ = reversed.replace(None, "x");
+        for ((kind, value), alias) in keys.into_iter().zip(&expected).rev() {
+            assert_eq!(reversed.replace(Some(kind), value), *alias);
+        }
+
+        let mut single = Replacements::from_tsv(Some(tsv)).expect("private mapping");
+        assert_eq!(single.replace(Some(Kind::WifiPassword), "v"), expected[1]);
     }
 }

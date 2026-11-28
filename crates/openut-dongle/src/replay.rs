@@ -13,6 +13,8 @@ pub struct ReplayStep {
     pub wall_ms: Option<i64>,
     pub event: Option<DongleEvent>,
     pub omitted_tracker: Option<TrackerLabel>,
+    /// Tracker identified by the header of a malformed incoming report.
+    pub malformed_tracker: Option<TrackerLabel>,
     pub transitions: Vec<Transition>,
 }
 
@@ -73,23 +75,24 @@ impl<R: BufRead> Replay<R> {
             return Ok(None);
         };
         let mono_us = record.mono_us();
+        let mut malformed_tracker = None;
         let (wall_ms, event, omitted_tracker, transitions) = match record {
             Record::Input(report) => {
                 let event = self.decoder.decode(&report.bytes);
                 self.stats.reports += 1;
                 match event {
-                    DongleEvent::Malformed { .. } => self.stats.malformed_reports += 1,
+                    DongleEvent::Malformed { .. } => {
+                        self.stats.malformed_reports += 1;
+                        malformed_tracker = self.decoder.tracker_data_label(&report.bytes);
+                    }
                     DongleEvent::Unknown { .. } | DongleEvent::OtherTrackerData { .. } => {
                         self.stats.unknown_reports += 1;
                     }
                     _ => {}
                 }
-                let transitions = if matches!(event, DongleEvent::Malformed { .. })
-                    && let Some(label) = self.decoder.tracker_data_label(&report.bytes)
-                {
-                    self.table.receive_omitted(mono_us, label)
-                } else {
-                    self.table.apply(mono_us, &event)
+                let transitions = match malformed_tracker {
+                    Some(label) => self.table.receive_omitted(mono_us, label),
+                    None => self.table.apply(mono_us, &event),
                 };
                 (Some(report.wall_ms), Some(event), None, transitions)
             }
@@ -123,6 +126,7 @@ impl<R: BufRead> Replay<R> {
             wall_ms,
             event,
             omitted_tracker,
+            malformed_tracker,
             transitions,
         }))
     }
