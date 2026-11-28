@@ -1,6 +1,6 @@
-use openut_core::event::{Event, OetKind, PoseStatus};
+use openut_core::event::{Battery, Event, OetKind, PoseStatus};
 use openut_core::time::UtcOffset;
-use openut_core::tracker::{Serial, TrackerKey};
+use openut_core::tracker::{HubNumber, Serial, TrackerKey};
 use openut_hublog::decode::Decoder;
 use openut_hublog::header::{Entry, FileKind, OffsetFill, ParsedLine, parse_line};
 use openut_hublog::map::{MapCounts, map_entry};
@@ -23,6 +23,13 @@ fn server_line(function: &str, level: &str, body: &str) -> String {
 fn server_sample_shapes_classify_and_map_to_events() {
     let tracker = TrackerKey(2);
     let cases = [
+        (
+            "OETServer::OnDongleAddedCB",
+            "INFO",
+            "Dongle is added. version: (0909.0000.0000.0917)",
+            Record::DongleAdded,
+            Event::DongleAdded,
+        ),
         (
             "main",
             "INFO",
@@ -87,10 +94,14 @@ fn server_sample_shapes_classify_and_map_to_events() {
             Record::DeviceInfo {
                 tracker: 2,
                 serial: "00XX000000001",
+                hub_number: Some(1),
+                firmware: Some("1.0.999.178"),
             },
             Event::SerialKnown {
                 tracker,
                 serial: Serial("00XX000000001".into()),
+                hub_number: Some(HubNumber(1)),
+                firmware: Some("1.0.999.178".into()),
             },
         ),
         (
@@ -302,6 +313,7 @@ fn translates_status_and_pose_values_into_domain_events() {
                 host: true,
                 map_ready,
                 usb,
+                battery: None,
             }),
         );
     }
@@ -322,6 +334,160 @@ fn translates_status_and_pose_values_into_domain_events() {
         );
     }
     assert_eq!(counts.server.unparsed + counts.server.other, 0);
+}
+
+#[test]
+fn optional_tracker_details_do_not_make_a_serial_report_unreadable() {
+    const RESPONSE: &str = "Response - cmd type: 214, device index: 2, result: 0";
+    let mut counts = MapCounts::default();
+    for (model, firmware, number, version) in [
+        ("", "", None, None),
+        (
+            ", model name: (VIVE Ultimate Tracker)",
+            ", fw version: ()",
+            None,
+            None,
+        ),
+        (
+            ", model name: (Other Device 1)",
+            ", fw version: (1 two)",
+            None,
+            None,
+        ),
+        (
+            ", model name: (VIVE Ultimate Tracker 0)",
+            ", fw version: (111111111111111111111111111111111)",
+            None,
+            None,
+        ),
+        (", model name: (VIVE Ultimate Tracker 100)", "", None, None),
+        (
+            ", model name: (VIVE Ultimate Tracker 99)",
+            ", fw version: (v1.2-rc_1)",
+            Some(HubNumber(99)),
+            Some("v1.2-rc_1"),
+        ),
+    ] {
+        let body = format!("{RESPONSE}, sn: (TRACKER-A){model}{firmware}");
+        let line = server_line("OETServer::GetDeviceInfoAndResponse", "INFO", &body);
+        assert_eq!(
+            map_entry(&read_entry(&line), FileKind::Server, &mut counts).map(|row| row.event),
+            Some(Event::SerialKnown {
+                tracker: TrackerKey(2),
+                serial: Serial("TRACKER-A".into()),
+                hub_number: number,
+                firmware: version.map(str::to_owned),
+            })
+        );
+    }
+    assert_eq!(counts.server.unparsed, 0);
+
+    for serial in [
+        "",
+        "FAKE 0001",
+        "FAKE\u{001f}0001",
+        "ＦＡＫＥ",
+        "012345678901234567890123456789012",
+    ] {
+        let body = format!("{RESPONSE}, sn: ({serial})");
+        let line = server_line("OETServer::GetDeviceInfoAndResponse", "INFO", &body);
+        assert!(map_entry(&read_entry(&line), FileKind::Server, &mut counts).is_none());
+    }
+    assert_eq!(counts.server.unparsed, 5);
+    assert_eq!(counts.server.other, 0);
+}
+
+#[test]
+fn battery_requires_connection_and_a_valid_percentage() {
+    let mut counts = MapCounts::default();
+    for (connected, values, battery) in [
+        (0, ", charging: 0, percentage: 0", None),
+        (0, ", charging: 1, percentage: 98", None),
+        (1, ", percentage: 0", None),
+        (1, ", percentage: 101", None),
+        (1, ", percentage: -1", None),
+        (1, ", percentage: x", None),
+        (1, "", None),
+        (
+            1,
+            ", percentage: 1, charging: 2",
+            Some(Battery {
+                percent: 1,
+                charging: None,
+            }),
+        ),
+        (
+            1,
+            ", percentage: 100",
+            Some(Battery {
+                percent: 100,
+                charging: None,
+            }),
+        ),
+        (
+            1,
+            ", charging: 0, percentage: 98",
+            Some(Battery {
+                percent: 98,
+                charging: Some(false),
+            }),
+        ),
+        (
+            1,
+            ", charging: 1, percentage: 43",
+            Some(Battery {
+                percent: 43,
+                charging: Some(true),
+            }),
+        ),
+    ] {
+        let body = format!(
+            "display index: 0, device index: 2, connected: {connected}, map status: 6, map state: 0, is host: 1{values}"
+        );
+        let line = server_line("OETServer::DeviceStatusToVHServer", "INFO", &body);
+        assert_eq!(
+            map_entry(&read_entry(&line), FileKind::Server, &mut counts).map(|row| row.event),
+            Some(Event::Status {
+                tracker: TrackerKey(2),
+                connected: connected == 1,
+                host: true,
+                map_ready: true,
+                usb: None,
+                battery,
+            })
+        );
+    }
+    assert_eq!(counts.server.unparsed + counts.server.other, 0);
+}
+
+#[test]
+fn maps_dongle_status_and_ignores_battery_reports_without_a_tracker() {
+    let mut counts = MapCounts::default();
+    for (body, event) in [
+        (
+            "[ServiceStatusToVHServer] dongle connected: 1, tracker connection type: 2",
+            Some(Event::DongleReport { connected: true }),
+        ),
+        (
+            "[ServiceStatusToVHServer] tracker connection type: 2, dongle connected: 0",
+            Some(Event::DongleReport { connected: false }),
+        ),
+        ("[ServiceStatusToVHServer] dongle connected: 2", None),
+        ("[ServiceStatusToVHServer] tracker connection type: 2", None),
+        ("dongle count: 0, tracker count: 0", None),
+        (
+            "Peripheral data changed - is charging: 0, battery percent: 74, type: 0",
+            None,
+        ),
+    ] {
+        let line = server_line("Synthetic", "INFO", body);
+        assert_eq!(
+            map_entry(&read_entry(&line), FileKind::Server, &mut counts).map(|row| row.event),
+            event
+        );
+    }
+    assert_eq!(counts.server.unparsed, 2);
+    assert_eq!(counts.server.other, 2);
 }
 
 #[test]

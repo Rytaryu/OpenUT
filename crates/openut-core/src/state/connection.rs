@@ -1,6 +1,6 @@
 use super::{
     ConnId, ConnectionChange, ConnectionChangeKind, DisconnectReason, Link, Phase, Role, State,
-    StateUpdate, Tracker, TrackerView,
+    StateUpdate, Tracker, TrackerStart, TrackerView,
 };
 use crate::time::LogTime;
 use crate::tracker::TrackerKey;
@@ -31,16 +31,24 @@ impl State {
         }
 
         let link = if usb { Link::Usb } else { Link::Dongle };
-        self.start_tracker(key, Phase::Connected, link, false, at, update);
+        self.start_tracker(
+            key,
+            TrackerStart {
+                phase: Phase::Connected,
+                link,
+                inferred: false,
+                battery: None,
+            },
+            at,
+            update,
+        );
         reconnect
     }
 
     pub(super) fn start_tracker(
         &mut self,
         key: TrackerKey,
-        phase: Phase,
-        link: Link,
-        inferred: bool,
+        start: TrackerStart,
         at: LogTime,
         update: &mut StateUpdate,
     ) {
@@ -48,12 +56,14 @@ impl State {
             key,
             serial: None,
             role: Role::Unknown,
-            phase,
+            phase: start.phase,
             since: at,
             conn: ConnId(self.next_conn),
-            link,
-            tracked_since_connect: phase == Phase::Tracking,
-            inferred,
+            link: start.link,
+            tracked_since_connect: start.phase == Phase::Tracking,
+            inferred: start.inferred,
+            battery: start.battery,
+            hub_number: None,
         };
         self.next_conn = self.next_conn.saturating_add(1);
         update.connections.push(ConnectionChange {
@@ -65,7 +75,7 @@ impl State {
             key,
             Tracker {
                 view,
-                last_added: (!inferred).then_some(at),
+                last_added: (!start.inferred).then_some(at),
             },
         );
     }
@@ -117,6 +127,8 @@ fn end_connection(
     view.role = Role::Unknown;
     view.serial = None;
     view.link = Link::Unknown;
+    view.battery = None;
+    view.hub_number = None;
 }
 
 #[cfg(test)]
@@ -162,6 +174,8 @@ mod tests {
             Event::SerialKnown {
                 tracker: key,
                 serial: serial.clone(),
+                hub_number: None,
+                firmware: None,
             },
         );
         let removed = apply(
@@ -305,6 +319,8 @@ mod tests {
             Event::SerialKnown {
                 tracker: usb,
                 serial: Serial("TRACKER-USB".to_owned()),
+                hub_number: None,
+                firmware: None,
             },
         );
         let before = state.snapshot(LogTime(9));
