@@ -1,0 +1,140 @@
+# Log begin at 2026-11-28 11:59:59.900
+# WriteTimeInterval=5000
+# OpenType=1
+# FileType=0
+# EncodeType=0
+# Truncate=0
+# MaxFileSize=15728640
+# MaxRollingCount=5
+# WriteThrough=1
+# HardFlush=0
+# FilenameWithProcessID=0
+# InitialLogLevel=2
+# ThreadPriority=0
+# AllPackagesAccess=0
+[2026-11-28 11:59:59.900 +9 0x1 INFO ] [1] ==================== Log Start ====================
+[2026-11-28 11:59:59.900 +9 0x1 INFO main] [1] Tracker Server Starts.
+[2026-11-28 12:00:00.000 +9 0x1 INFO OETServer::AddTrackerCB] [1] Add new tracker: (1), connection type: 1
+[2026-11-28 12:00:01.000 +9 0x1 INFO Tracker::UpdateSwitchingMode] [1] Tracker (1) - switch to HOST mode.
+[2026-11-28 12:00:02.000 +9 0x1 INFO OETServer::TrackerSwitchAndResponse] [1] Query wifi from tracker 1
+[2026-11-28 12:00:03.000 +9 0x1 INFO OETServer::AddTrackerCB] [1] Add new tracker: (2), connection type: 1
+[2026-11-28 12:00:04.000 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:00:04.500 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:00:06.000 +9 0x1 INFO OETServer::DeviceStatusToVHServer] [1] display index: 0, device index: 1, connected: 1, tracking status: 3, charging: 0, percentage: 80, map ID: 0, map status: 6, has map: 1, map state: 2, is host: 1, bIsConnectedOnUSB: 0, has new fw: 0, is unpaired: 0, last update time: 0, error code: -1, indicator event: 0, indicator value: 0
+[2026-11-28 12:00:07.000 +9 0x1 INFO Tracker::CopyFromDriverThreadProc] [1] (SteamVR: 5)(1)[12]Pose status is changed: Pose data - status: 2, pos: (0.123456, 0.000000, 0.000000), rotation: (0.000000, 0.000000, 0.000000, w 1.000000), vel: (0.000000, 0.000000, 0.000000), angular vel: (0.000000, 0.000000, 0.000000)
+[2026-11-28 12:01:05.500 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:01:05.700 +9 0x1 INFO Tracker::UpdateSwitchingMode] [1] Tracker (2) - switch to CLIENT mode.
+[2026-11-28 12:01:06.000 +9 0x1 INFO OETServer::RemoveTrackerCB] [1] Remove tracker (2), connection type: 1, power state:11
+[2026-11-28 12:01:06.100 +9 0x1 INFO OETServer::ProcessDeviceMsg] [1] Got host wifi info.
+[2026-11-28 12:01:20.000 +9 0x1 INFO Tracker::UpdateSwitchingMode] [1] Tracker (1) - switch to HOST mode.
+[2026-11-28 12:01:20.100 +9 0x1 INFO OETServer::AddTrackerCB] [1] Add new tracker: (2), connection type: 1
+[2026-11-28 12:01:20.200 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:01:20.750 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:01:21.300 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:01:21.850 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:01:22.400 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:01:22.950 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:01:23.500 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:01:24.050 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:01:24.600 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:01:25.150 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:01:25.700 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:01:26.250 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:01:26.800 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:01:27.350 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:01:27.900 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:01:28.450 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:01:29.000 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:01:29.550 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:01:30.100 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:01:30.650 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:01:31.200 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:01:31.750 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:01:32.300 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:01:32.850 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:01:33.400 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:01:33.950 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:01:34.500 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:01:35.050 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:01:35.600 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:01:36.150 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:01:36.700 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:01:37.250 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:01:37.800 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:01:38.350 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:01:38.900 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:01:39.450 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:01:40.000 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:01:40.550 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:01:41.100 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:01:41.650 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:01:42.200 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:01:42.750 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:01:43.300 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:01:43.850 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:01:44.400 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:01:44.950 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:01:45.500 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:01:46.050 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:01:46.600 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:01:47.150 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:01:47.700 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:01:48.250 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:01:48.800 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:01:49.350 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:01:49.900 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:01:50.450 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:01:51.000 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:01:51.550 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:01:52.100 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:01:52.650 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:01:53.200 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:01:53.750 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:01:54.300 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:01:54.850 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:01:55.400 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:01:55.950 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:01:56.500 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:01:57.050 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:01:57.600 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:01:58.150 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:01:58.700 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:01:59.250 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:01:59.800 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:02:00.350 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:02:00.900 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:02:01.450 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:02:02.000 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:02:02.550 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:02:03.100 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:02:03.650 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:02:04.200 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:02:04.750 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:02:05.300 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:02:05.850 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:02:06.400 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:02:06.950 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:02:07.500 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:02:08.050 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:02:08.600 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:02:09.150 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:02:09.700 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:02:10.250 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:02:10.800 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:02:11.350 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:02:11.900 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:02:12.450 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:02:13.000 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:02:13.550 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:02:14.100 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:02:14.650 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:02:15.200 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:02:15.750 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:02:16.300 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:02:16.850 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:02:17.400 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:02:17.950 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:02:18.500 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:02:19.050 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:02:19.600 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
+[2026-11-28 12:02:20.150 +9 0x1 WARN OETServer::ProcessDeviceMsg] [1] Wifi info is not yet available.
