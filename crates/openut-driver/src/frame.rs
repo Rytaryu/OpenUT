@@ -17,6 +17,7 @@ use crate::slots::Slots;
 use crate::table::{Action, Callback, Table};
 
 const GATE_WARN: Duration = Duration::from_secs(1);
+const RECEIVER_REPORT_INTERVAL: Duration = Duration::from_secs(1);
 
 pub(crate) trait HostApi: Send + Sync {
     fn add_tracker(&self, open: &FrameOpen, name: &CStr, device: &Device) -> bool;
@@ -62,6 +63,13 @@ struct Callbacks {
     rx: Receiver<Callback>,
 }
 
+#[derive(Clone, Copy)]
+struct ReceiverReport {
+    at: Instant,
+    dropped_packets: u64,
+    dropped_logs: u64,
+}
+
 pub(crate) struct Frame {
     pub(crate) gate: FrameGate,
     host: Mutex<Option<Arc<dyn HostApi>>>,
@@ -75,6 +83,7 @@ pub(crate) struct Frame {
     frame_active: AtomicBool,
     preserve_allocations: AtomicBool,
     dropped_actions: AtomicU64,
+    last_receiver_report: Mutex<Option<ReceiverReport>>,
 }
 
 impl Frame {
@@ -93,6 +102,7 @@ impl Frame {
             frame_active: AtomicBool::new(false),
             preserve_allocations: AtomicBool::new(false),
             dropped_actions: AtomicU64::new(0),
+            last_receiver_report: Mutex::new(None),
         }
     }
 
@@ -196,11 +206,39 @@ impl Frame {
                 Action::Log { message } => logs.push_back(message),
             }
         }
+        if let Some(line) = self.receiver_queue_report(&inbox, now) {
+            logs.push_back(line);
+        }
         for line in logs {
             if frame.if_open(|open| host.log(open, &line)).is_none() {
                 self.drop_action();
             }
         }
+    }
+
+    fn receiver_queue_report(&self, inbox: &Inbox, now: Instant) -> Option<String> {
+        let stats = inbox.stats();
+        let mut previous = lock(&self.last_receiver_report);
+        if previous.is_some_and(|report| {
+            let unchanged = (report.dropped_packets, report.dropped_logs)
+                == (stats.dropped_packets, stats.dropped_logs);
+            // A first nonzero total is noteworthy even just after the baseline.
+            let first_drop = report.dropped_packets == 0 && report.dropped_logs == 0;
+            unchanged
+                || (!first_drop
+                    && now.saturating_duration_since(report.at) < RECEIVER_REPORT_INTERVAL)
+        }) {
+            return None;
+        }
+        *previous = Some(ReceiverReport {
+            at: now,
+            dropped_packets: stats.dropped_packets,
+            dropped_logs: stats.dropped_logs,
+        });
+        Some(format!(
+            "openut: receiver queue dropped_packets={} dropped_logs={}",
+            stats.dropped_packets, stats.dropped_logs
+        ))
     }
 
     #[expect(
@@ -413,6 +451,9 @@ fn cleanup_record(
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|error| error.into_inner())
 }
+
+#[cfg(test)]
+mod receiver_diagnostics_tests;
 
 #[cfg(test)]
 mod tests;

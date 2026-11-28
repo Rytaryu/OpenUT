@@ -61,17 +61,16 @@ impl Inbox {
     }
 
     pub fn push_packet(&self, packet: ReceivedPacket) {
-        if push_bounded(&self.packets, packet, PACKET_CAPACITY) {
-            self.counters
-                .dropped_packets
-                .fetch_add(1, Ordering::Relaxed);
-        }
+        push_bounded(
+            &self.packets,
+            packet,
+            PACKET_CAPACITY,
+            &self.counters.dropped_packets,
+        );
     }
 
     pub fn push_log(&self, line: String) {
-        if push_bounded(&self.logs, line, LOG_CAPACITY) {
-            self.counters.dropped_logs.fetch_add(1, Ordering::Relaxed);
-        }
+        push_bounded(&self.logs, line, LOG_CAPACITY, &self.counters.dropped_logs);
     }
 
     pub fn stats(&self) -> ReceiverStats {
@@ -111,14 +110,14 @@ fn take<T>(queue: &Mutex<VecDeque<T>>) -> VecDeque<T> {
     std::mem::take(&mut *queue.lock().unwrap_or_else(PoisonError::into_inner))
 }
 
-fn push_bounded<T>(queue: &Mutex<VecDeque<T>>, item: T, limit: usize) -> bool {
+fn push_bounded<T>(queue: &Mutex<VecDeque<T>>, item: T, limit: usize, dropped: &AtomicU64) {
     let mut queue = queue.lock().unwrap_or_else(PoisonError::into_inner);
-    let overflow = queue.len() == limit;
-    if overflow {
+    if queue.len() == limit {
         queue.pop_front();
+        // The frame that drains this queue must be able to observe the drop.
+        dropped.fetch_add(1, Ordering::Relaxed);
     }
     queue.push_back(item);
-    overflow
 }
 
 pub struct Worker {

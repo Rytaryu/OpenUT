@@ -16,6 +16,16 @@ enum Call {
     Log(String),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CleanupSite {
+    FramePose,
+    FrameAdd,
+    FrameLog,
+    ActivateContainer,
+    ActivateProperties,
+    DeactivateLog,
+}
+
 type Hook = Arc<dyn Fn(&Call) + Send + Sync>;
 
 struct Host {
@@ -173,18 +183,45 @@ impl Fixture {
         self.host.take();
     }
 
-    fn reentrant_cleanup(
-        &self,
-        kind: CallbackKind,
-        trigger: impl Fn(&Call) -> bool + Send + Sync + 'static,
-    ) {
+    fn reentrant_cleanup(&self, site: CleanupSite) {
         let weak = Arc::downgrade(&self.frame);
         self.host.hook(move |call| {
-            if trigger(call) {
-                let frame = weak.upgrade().expect("frame live");
-                frame.cleanup(Some(kind), None);
-                assert!(matches!(*lock(&frame.worker), WorkerSlot::Joined));
-            }
+            let kind = match (site, call) {
+                (CleanupSite::FramePose, Call::Pose(_, _))
+                | (CleanupSite::FrameAdd, Call::Add(_)) => CallbackKind::RunFrame,
+                (CleanupSite::FrameLog, Call::Log(line)) if line == "first" => {
+                    CallbackKind::RunFrame
+                }
+                (CleanupSite::ActivateContainer, Call::Container(_))
+                | (CleanupSite::ActivateProperties, Call::Properties(_)) => CallbackKind::Activate,
+                (CleanupSite::DeactivateLog, Call::Log(line))
+                    if line.starts_with("openut: Deactivate") =>
+                {
+                    CallbackKind::Deactivate
+                }
+                (CleanupSite::DeactivateLog, Call::Pose(FIRST_INDEX, _)) => {
+                    // Reenter Deactivate during a frame so another prepared pose
+                    // remains to be discarded after Cleanup returns from the log call.
+                    let frame = weak.upgrade().expect("frame live");
+                    let device = lock(&frame.slots).get(0).expect("device active");
+                    frame.deactivate(&device);
+                    return;
+                }
+                _ => return,
+            };
+
+            let frame = weak.upgrade().expect("frame live");
+            let inbox = lock(&frame.inbox).clone().expect("inbox live");
+            let owners = Arc::strong_count(&inbox);
+            assert!(matches!(*lock(&frame.worker), WorkerSlot::Running(_)));
+            frame.cleanup(Some(kind), None);
+            assert!(
+                matches!(*lock(&frame.worker), WorkerSlot::Joined),
+                "{site:?}"
+            );
+            // The receiver owns an Inbox clone for the entire worker task.
+            // Reentrant Cleanup must release it before returning to this hook.
+            assert_eq!(Arc::strong_count(&inbox) + 1, owners, "{site:?}");
         });
     }
 }
@@ -345,60 +382,95 @@ fn cross_thread_cleanup_waits_then_drops_two_registrations_and_three_logs() {
 }
 
 #[test]
-fn cleanup_can_reenter_all_five_host_call_sites_and_still_joins_the_worker() {
-    for site in 0..5 {
-        let fixture = Fixture::new(site != 3);
-        let kind = match site {
-            3 => CallbackKind::Activate,
-            4 => CallbackKind::Deactivate,
-            _ => CallbackKind::RunFrame,
-        };
-
-        if site != 1 {
-            fixture.activate_one();
-        }
-        fixture.reentrant_cleanup(kind, move |call| match site {
-            0 => matches!(call, Call::Pose(_, _)),
-            1 => matches!(call, Call::Add(_)),
-            2 => matches!(call, Call::Log(_)),
-            3 => matches!(call, Call::Container(_)),
-            4 => matches!(call, Call::Log(line) if line.starts_with("openut: Deactivate")),
-            _ => false,
+fn reentrant_cleanup_joins_the_receiver_and_discards_remaining_calls() {
+    for site in [
+        CleanupSite::FramePose,
+        CleanupSite::FrameAdd,
+        CleanupSite::FrameLog,
+        CleanupSite::ActivateContainer,
+        CleanupSite::ActivateProperties,
+        CleanupSite::DeactivateLog,
+    ] {
+        let (finished, completion) = mpsc::channel();
+        let runner = thread::spawn(move || {
+            check_reentrant_cleanup(site);
+            finished.send(()).unwrap();
         });
-
-        match site {
-            0 => {
-                fixture.pose(2, 0, 1.0);
-                fixture.pose(3, 0, 2.0);
-                fixture.run(2);
+        match completion.recv_timeout(TIMEOUT) {
+            Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => runner.join().unwrap(),
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                panic!("Cleanup did not finish within {TIMEOUT:?} during {site:?}");
             }
-            1 => {
-                fixture.list(1, &["OpenUT-TestA", "OpenUT-TestB"]);
-                fixture.run(2);
-            }
-            2 => {
-                fixture.inbox().push_log("first".to_owned());
-                fixture.inbox().push_log("second".to_owned());
-                fixture.run(2);
-            }
-            3 => {
-                assert!(!fixture.frame.activate(&fixture.tracker(0), FIRST_INDEX));
-            }
-            4 => {
-                fixture.frame.deactivate(&fixture.tracker(0));
-            }
-            _ => unreachable!(),
         }
-
-        assert_eq!(fixture.host.take().len(), 1);
-        assert!(matches!(*lock(&fixture.frame.worker), WorkerSlot::Joined));
-        assert!(lock(&fixture.frame.slots).get(0).is_some());
-        assert!(lock(&fixture.frame.inbox).is_some());
-        fixture.frame.cleanup(None, None);
-        assert!(lock(&fixture.frame.slots).get(0).is_some());
-        assert!(!fixture.frame.activate(&fixture.tracker(0), FIRST_INDEX));
-        assert!(fixture.host.take().is_empty());
     }
+}
+
+fn check_reentrant_cleanup(site: CleanupSite) {
+    let fixture = Fixture::new(matches!(
+        site,
+        CleanupSite::FramePose | CleanupSite::FrameLog | CleanupSite::DeactivateLog
+    ));
+    if site == CleanupSite::FrameAdd {
+        fixture.run(0);
+        fixture.host.take();
+    } else {
+        fixture.activate_one();
+    }
+    let before = fixture.frame.dropped_actions.load(Ordering::Relaxed);
+    fixture.reentrant_cleanup(site);
+
+    match site {
+        CleanupSite::FramePose | CleanupSite::DeactivateLog => {
+            fixture.pose(2, 0, 1.0);
+            fixture.pose(3, 0, 2.0);
+            fixture.run(2);
+        }
+        CleanupSite::FrameAdd => {
+            fixture.list(1, &["OpenUT-TestA", "OpenUT-TestB"]);
+            fixture.run(2);
+        }
+        CleanupSite::FrameLog => {
+            fixture.inbox().push_log("first".to_owned());
+            fixture.inbox().push_log("second".to_owned());
+            fixture.run(2);
+        }
+        CleanupSite::ActivateContainer | CleanupSite::ActivateProperties => {
+            assert!(!fixture.frame.activate(&fixture.tracker(0), FIRST_INDEX));
+        }
+    }
+
+    let calls = fixture.host.take();
+    let expected_drops = match (site, calls.as_slice()) {
+        (CleanupSite::FramePose, [Call::Pose(FIRST_INDEX, _)]) => 1,
+        (CleanupSite::FrameAdd, [Call::Add(0)]) => 1,
+        (CleanupSite::FrameLog, [Call::Log(line)]) if line == "first" => 1,
+        (CleanupSite::ActivateContainer, [Call::Container(FIRST_INDEX)]) => 2,
+        (
+            CleanupSite::ActivateProperties,
+            [Call::Container(FIRST_INDEX), Call::Properties(container)],
+        ) if *container == u64::from(FIRST_INDEX) + 1 => 1,
+        (CleanupSite::DeactivateLog, [Call::Pose(FIRST_INDEX, _), Call::Log(line)])
+            if line.starts_with("openut: Deactivate") =>
+        {
+            1
+        }
+        _ => panic!("unexpected SteamVR calls during {site:?}: {calls:?}"),
+    };
+    assert_eq!(
+        fixture.frame.dropped_actions.load(Ordering::Relaxed),
+        before + expected_drops,
+        "{site:?}",
+    );
+    assert!(matches!(*lock(&fixture.frame.worker), WorkerSlot::Joined));
+    assert!(lock(&fixture.frame.slots).get(0).is_some());
+    assert!(lock(&fixture.frame.inbox).is_some());
+    assert!(lock(&fixture.frame.callbacks).is_some());
+    fixture.frame.cleanup(None, None);
+    assert!(lock(&fixture.frame.slots).get(0).is_some());
+    fixture.run(3);
+    assert!(!fixture.frame.activate(&fixture.tracker(0), FIRST_INDEX));
+    assert!(!fixture.frame.init(fixture.host.clone()));
+    assert!(fixture.host.take().is_empty(), "{site:?}");
 }
 
 #[test]
