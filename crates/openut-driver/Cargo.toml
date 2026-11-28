@@ -1,0 +1,22 @@
+[package]
+name = "openut-driver"
+description = "SteamVR server driver for local OpenUT pose data"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lib]
+name = "driver_openut"
+crate-type = ["cdylib", "rlib"]
+
+[lints]
+workspace = true
+
+[dependencies]
+openut-bridge = { path = "../openut-bridge" }
+
+[dev-dependencies]
+serde_json = "1.0.154"
