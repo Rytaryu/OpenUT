@@ -11,7 +11,7 @@
 - 設計の節の番号（`m1-watcher.md` の「4.2」など）は、PR の説明とコードのコメントで参照してよい。設計と違う実装にしたら、PR の「未解決・判断を仰ぎたい点」に書く。
 - 実機に命令を送るコードは、M1 には入れない（`m1-watcher.md` の 11 章）。
 - ログの書式のメモ（`docs/research/hub-log-format.md`。以下「メモ」）と見本（`docs/research/hub-log-samples.md`）に合わせた追補（Issue #18）で、`m1-watcher.md` の 4〜10 章を直した。すでに main に入った M1-1・M1-2 を直す項目は、3 章の F-1〜F-3。M1-3 より先の項目は、この版の設計で作る。
-- 画面と通知で見せるものの追補（Issue #27。PRD の W-10〜W-12）で、`m1-watcher.md` の 3.2〜3.7（呼び名、出来事、状態の写し、`Detection` の `serial`）、4.4（読む行）、5.1、5.4〜5.6（台帳、ドングル、VIVE Hub のサーバー。足した）、6.2 の R1、7 章（文言、表示の写し、手引き、仕組みの側の不具合）、8 章（`hub_number`）、9.1（ニックネームをやめた）を直した。M1-3 より先の項目は、まだ main に入っていないので、この版の設計で作る（各項目に書き足した）。main に入った部分の直しは、3 章の F-4。
+- 画面と通知で見せるものの追補（Issue #27。PRD の W-10〜W-12）で、`m1-watcher.md` の 3.2〜3.7（呼び名、出来事、状態の写し、`Detection` の `serial`）、4.4（読む行）、5.1、5.4〜5.6（台帳、ドングル、VIVE Hub のサーバー。足した）、6.2 の R1、7 章（文言、表示の写し、手引き、仕組みの側の不具合）、8 章（`hub_number`）、9.1（ニックネームをやめた）を直した。M1-3 より先の項目は、まだ main に入っていないので、この版の設計で作る（各項目に書き足した）。main に入った部分の直しは、3 章の F-4。PR #37 のレビュー（1 回目）の指摘で、全体の見え方を 3 つにし（灰色）、VIVE Hub が止まったときの見せ方、`pick_folder`、`Detection`・`Notice` の `conn`、`NoticeText` を足し、VIVE Hub の番号をいまの接続の値に、並べ方をシリアル番号の順にした（M1-5〜M1-7、M1-11 に書き足した）。
 - テストの入力には、見本の行（個人の情報は置き換え済み）をそのまま使ってよい。実物のログの断片は入れない（匿名化の道具〔L-1〕を通したものだけ。PRD の L-2）。
 
 ## 1. クレートとワークスペースの構成
@@ -159,7 +159,7 @@ openut-hublog = { path = "crates/openut-hublog" }
 ### M1-5 状態（トラッカーと PC の Wi-Fi 情報）
 
 - **範囲**: `crates/openut-core/src/state.rs`。
-- **中身**: `m1-watcher.md` の 3.5 の型（`Link`、`ConnId`、`HostRef`〔`conn` と `serial` を持つ〕、`Identity`、`DongleState`、`HubState`、`Connection`、`DeviceView` を含む）と、5 章の遷移（5.1 のトラッカーと接続と電池、5.2 の PC の Wi-Fi 情報、5.3 のホストの根拠、5.4 の台帳と画面に並べる台〔`Snapshot::devices` の組み立て〕、5.5 のドングル、5.6 の VIVE Hub のサーバー）。接続の始まりと終わり（つなぎ直しを含む）を、R4（M1-6）と集計（M1-8）が使える形で出す（例: 状態の更新の結果として「N の接続 c が時刻 a で終わった・始まった」を返す）。
+- **中身**: `m1-watcher.md` の 3.5 の型（`Link`、`ConnId`、`HostRef`〔`conn` と `serial` を持つ〕、`Identity`、`DongleState`、`HubState`、`Connection`、`DeviceView`〔`conn` と `hub_number` を持つ〕、`TrackerView::hub_number` を含む）と、5 章の遷移（5.1 のトラッカーと接続と電池と VIVE Hub の番号、5.2 の PC の Wi-Fi 情報、5.3 のホストの根拠、5.4 の台帳と画面に並べる台〔`Snapshot::devices` の組み立て〕、5.5 のドングル、5.6 の VIVE Hub のサーバー）。接続の始まりと終わり（つなぎ直しを含む）を、R4（M1-6）と集計（M1-8）が使える形で出す（例: 状態の更新の結果として「N の接続 c が時刻 a で終わった・始まった」を返す）。
 - **受け入れ条件とテスト**:
   1. 5.1 の表の行ごとに 1 つ以上のテスト（前の状態 → 出来事 → 次の状態とほかに変えること）。
   2. 5.2 の表の行ごとに 1 つ以上のテスト。2 度目の `HostAssigned` で `Held` から `Missing` になる。5.3 の表の行ごとに 1 つ以上のテスト。
@@ -176,8 +176,9 @@ openut-hublog = { path = "crates/openut-hublog" }
   10. `ServerStarted`、`ServerStopped` で全台が未接続になる。`ServerStopped` で PC の Wi-Fi 情報が `Unknown`。接続の直後の `Pose(Lost)` と `Pose(Other)` は、状態を変えず、順序の合わない出来事にも数えない。
   11. **接続の経路と `DongleRemoved`**（レビューの指摘）: `TrackerAdded(1, usb = true)`（追跡中、シリアル番号つき）と、`TrackerAdded(2, usb = false)`、`TrackerAdded(3, usb = false)` のあとの `DongleRemoved` で、2 と 3 だけが未接続になり、1 は状態・役割・シリアル番号・`since` がそのまま。推し量って足した台（`link` が `Unknown`）は `DongleRemoved` で切れる。その台に `Status(…, usb = Some(true))` が来ていれば `Usb` になり、切れない。`link` が決まった台の `Status` の `usb` では変わらない。
   12. **電池**（5.1。#27）: `Status(N, connected, battery = Some(b))` で N の `battery` が b になり、`battery = None` の行では前の値が残る。`TrackerRemoved`、`DongleRemoved`（ドングル経由の台だけ。USB の台は残る）、`ServerStarted`、`ServerStopped`、つなぎ直し、`TrackerAdded` で、なしになる。推し量って足した行は、足した `Status` の `battery` を持つ。
-  13. **台帳**（5.4。#27）: `SerialKnown(2, S, Some(1), Some("v1"))` で S の行ができる。そのあとの `SerialKnown(4, S, None, None)` で、行は 1 つのまま、番号 1 と版 v1 が残る。`SerialKnown(4, S, Some(2), Some("v2"))` で 2 と v2 に変わる。`TrackerRemoved`、`ServerStarted`、`ServerStopped` で行が残る。`rebuild` で空になる。16 台が入っているときに 17 台目を足すと、つながっていない台のうち `last_seen` の最も古いものが消え、つながっている台は消えない（つながっていない台がなければ、`last_seen` の最も古い台を消す。スロットは 5 つなので、ふつうは起きない）。
-  14. **画面に並べる台**（5.4。#27）: (a) 3 台と 5 台のそれぞれで、台帳の台が 1 台ずつ並び、`key`、`connection`、`battery`、`phase`、`host` が、シリアル番号の付いたスロットの行の値になる。(b) **ホストの交代**: `HostAssigned(2)` のあと `HostAssigned(4)` で、`host` が 2 の台から 4 の台に移り、ほかの値は変わらない。(c) **スロットの使い回し**: シリアル番号 S1 の台が番号 2 で切れ、S2 の台が番号 2 でつながる → S1 は `Disconnected`（`key` なし、`battery` なし、`host = false`）、S2 は `key = 2`。(d) **仮の台**: `TrackerAdded(3)` のあと、`SerialKnown(3, …)` の前は、`serial` のない台が 1 つ並ぶ。`SerialKnown(3, S3, …)` のあとは、仮の台が消え、S3 の台が 1 つだけ並ぶ。(e) `link` が `Unknown` の台は `connection = Dongle`、`Usb` は `Usb`。(f) `DeviceView` に、スロットの番号以外で、内部の状態の名前の文字列を持たない（`phase` は型のまま）。
+  12a. **VIVE Hub の番号**（5.1。PR #37 のレビューのあとで足した。U-18）: `SerialKnown(2, S, Some(1), …)` で番号 2 の行の `hub_number` が 1。同じ接続の `SerialKnown(2, S, None, …)` では 1 のまま、`SerialKnown(2, S, Some(3), …)` で 3。`TrackerRemoved`、`DongleRemoved`（ドングル経由の台だけ）、`ServerStarted`、`ServerStopped`、つなぎ直し、`TrackerAdded` で、なしになる。S が別の番号 4 に来たら（`SerialKnown(4, S, Some(2), …)`）、番号 2 の行の `hub_number` もなしになり、4 の行が 2 になる。
+  13. **台帳**（5.4。#27）: `SerialKnown(2, S, Some(1), Some("v1"))` で S の行ができる。そのあとの `SerialKnown(4, S, None, None)` で、行は 1 つのまま、版 v1 が残る。`SerialKnown(4, S, Some(2), Some("v2"))` で v2 に変わる。台帳の行に VIVE Hub の番号を持たない（12a のスロットの行で持つ）。`TrackerRemoved`、`ServerStarted`、`ServerStopped` で行が残る。`rebuild` で空になる。16 台が入っているときに 17 台目を足すと、つながっていない台のうち `last_seen` の最も古いものが消え、つながっている台は消えない（つながっていない台がなければ、`last_seen` の最も古い台を消す。スロットは 5 つなので、ふつうは起きない）。
+  14. **画面に並べる台**（5.4。#27）: (a) 3 台と 5 台のそれぞれで、台帳の台が 1 台ずつ並び、`key`、`conn`、`hub_number`、`connection`、`battery`、`phase`、`host` が、シリアル番号の付いたスロットの行の値になる。(b) **ホストの交代**: `HostAssigned(2)` のあと `HostAssigned(4)` で、`host` が 2 の台から 4 の台に移り、ほかの値は変わらない。(c) **スロットの使い回し**: シリアル番号 S1 の台が番号 2 で切れ、S2 の台が番号 2 でつながる → S1 は `Disconnected`（`key` なし、`conn` なし、`hub_number` なし、`battery` なし、`host = false`）、S2 は `key = 2` で、`conn` が S2 の接続。(d) **仮の台**: `TrackerAdded(3)` のあと、`SerialKnown(3, …)` の前は、`serial` のない台が 1 つ並ぶ（`key = 3`、`conn` がその接続）。`SerialKnown(3, S3, …)` のあとは、仮の台が消え、S3 の台が 1 つだけ並び、その `conn` は仮の台の `conn` と同じ。(e) `link` が `Unknown` の台は `connection = Dongle`、`Usb` は `Usb`。(f) `DeviceView` に、スロットの番号以外で、内部の状態の名前の文字列を持たない（`phase` は型のまま）。
   15. **ドングル**（5.5。#27）: 5.5 の表の行ごと。`ServerStarted` で `Unknown`、続く `DongleAdded` で `Connected`。`DongleReport(false)` で `Disconnected` になり、トラッカーの状態は変わらない。`Unknown` と `Disconnected` のどちらでも、`TrackerAdded(N, usb = false)` が来ると `Connected`。`usb = true` では変わらない。
   16. **VIVE Hub のサーバー**（5.6。#27）: `Unknown` → `ServerStarted` で `Running` → `ServerStopped` で `Stopped`。`Stopped` のあとのほかの出来事（`TrackerAdded`、`Status` など）では変わらない。`rebuild` で `Unknown`。
 - **順序**: M1-3 のあと。
@@ -185,7 +186,7 @@ openut-hublog = { path = "crates/openut-hublog" }
 ### M1-6 検出の規則とエンジン
 
 - **範囲**: `crates/openut-core/src/{rules.rs（または rules/ の下）,engine.rs}`、`crates/openut-hublog/src/replay.rs`（エンジンをつなぐ。ドライバーのファイルを受け、時刻の順に合わせる）、`tests/replay.rs`（合成のケースの `#[ignore]` を外し、足したケースの関数を足す。ケースのディレクトリから `ViveTrackerDriver_*.txt` も読む）、`tests/replay/*/expect.toml`、`tests/replay/synthetic-r1-gap-then-fault/`、`tests/replay/synthetic-r4-power-off/`。
-- **中身**: R1〜R5（6.2）、エピソード、`Detection`（3.6）、`EngineConfig`（6 章のしきい値の既定値と上書き。`rules.r1.gap_s`、`rules.r3.clients`、`rules.r4.server_s`、`rules.r4.exclude_power_off`、`rules.r4.notice_before_s`、`rules.r4.notice_after_s`、`state.dup_ms` を含む。初版の `rules.r4.notice_wait_s` はやめた）、`Engine`（3.7。同じ時刻の入力と期限の順、`rebuild`。ドライバーの記録は時刻を進めず、`PowerOffNotice` は元の時刻のまま覚える。`driver_needed_through`。R4 の予告と接続の対応〔6.2〕。接続は M1-5 の `conn` で、つなぎ直しで区切る。R1 の案内する台は、ホストの接続で決める〔6.2〕。`Engine::new(cfg)` は名前の表を受けない〔#27〕）。`Detection` の `serial`（3.6。#27）。`openut_hublog::replay` は、2 つの列で 1 つのずれの補い（F-2 の `OffsetFill`。サーバーの列の最初の記録で基準を決める）を通してから、2 つの列を合わせる。この項目では `Notice` を作らない（M1-7）。合成のケース `synthetic-r1-gap-then-fault` と `synthetic-r4-power-off`（`m1-watcher.md` の 10.1）を、見本の形の行で足す。
+- **中身**: R1〜R5（6.2）、エピソード、`Detection`（3.6）、`EngineConfig`（6 章のしきい値の既定値と上書き。`rules.r1.gap_s`、`rules.r3.clients`、`rules.r4.server_s`、`rules.r4.exclude_power_off`、`rules.r4.notice_before_s`、`rules.r4.notice_after_s`、`state.dup_ms` を含む。初版の `rules.r4.notice_wait_s` はやめた）、`Engine`（3.7。同じ時刻の入力と期限の順、`rebuild`。ドライバーの記録は時刻を進めず、`PowerOffNotice` は元の時刻のまま覚える。`driver_needed_through`。R4 の予告と接続の対応〔6.2〕。接続は M1-5 の `conn` で、つなぎ直しで区切る。R1 の案内する台は、ホストの接続で決める〔6.2〕。`Engine::new(cfg)` は名前の表を受けない〔#27〕）。`Detection` の `serial`（3.6。#27）と `conn`（3.6。PR #37 のレビューの指摘。R1 は `Escalated` でも決め直す）。`openut_hublog::replay` は、2 つの列で 1 つのずれの補い（F-2 の `OffsetFill`。サーバーの列の最初の記録で基準を決める）を通してから、2 つの列を合わせる。この項目では `Notice` を作らない（M1-7）。合成のケース `synthetic-r1-gap-then-fault` と `synthetic-r4-power-off`（`m1-watcher.md` の 10.1）を、見本の形の行で足す。
   - **既定は PM の判断の前の形**: `rules.r3.clients = false`（R3 はホストだけ）、`rules.r5.enabled = false`（R5 は切る）、`rules.r4.exclude_power_off = true`（予告のあった切断を除く。オーナーの確かめの前の仮）。判断のあとは既定の値を変えるだけで済むようにする（3 章）。
 - **受け入れ条件とテスト**:
   1. 規則ごとに: `Raised` の `at` が、条件を満たした時刻（期限の規則〔R2〜R5、R1 の `Escalated` と `Ended`〕では期限の時刻）になる。回数の規則は、回数が 1 少ない、時間が 1 ms 足りないと出ない。`Escalated`（R1）、`Resolved`、`Ended` が 6.2 の条件で出る。
@@ -205,12 +206,13 @@ openut-hublog = { path = "crates/openut-hublog" }
   10. 再生テスト: `synthetic-r1-second-host-command` で R1 がちょうど 1 回、`synthetic-normal-start` で検出なし、`synthetic-utf16` で元のケースと同じ結果、`synthetic-r1-gap-then-fault` で R1 がちょうど 1 回（不具合のあとの時刻）、`synthetic-r4-power-off` で R4 がちょうど 1 回（予告のない台）。
   11. 再生で、サーバーとドライバーのファイルが時刻の順に合わせて流れる（ドライバーのファイルを外すと、`synthetic-r4-power-off` の R4 が 2 回になる）。
   12. **`Detection` の `serial`**（3.6。#27）: R2・R3・R5（`rules.r5.enabled = true`）の `Raised` で、その番号の行のシリアル番号。R4 の `Raised` で、切れた接続のシリアル番号（切れたあと、スロットの行から外れていても）。シリアル番号が来る前の台では `None`。`Escalated`・`Resolved`・`Ended` は、`Raised` の値を引き継ぐ（あとで分かっても変えない）。R1 は 3 の番号の使い回しのとおり。
+  12a. **`Detection` の `conn`**（3.6。PR #37 のレビューの指摘）: R2・R3・R5 の `Raised` で、その番号のいまの接続（`ConnId`）。R4 で、切れた接続。R1 は、案内する台が 6.2 の 1 ならホストの接続、2 でつながっていればその番号のいまの接続、ほかは `None`。`Resolved`・`Ended` は、そのエピソードの最後の値を引き継ぐ。**R1 の `Escalated` で決め直す**: 番号 2 の、シリアル番号の分からないホストで `Raised`（`serial` なし、`conn` = c）のあと、同じ接続で `SerialKnown(2, S)`、そのあと `TrackerRemoved(2)` と別の台の `TrackerAdded(2)`（接続 d）が来て、R1 が続いたまま `Escalated` になる → `Escalated` の `serial` が S、`conn` が `None`、`tracker` が `None`（S はつながっていない）。S が番号 4 でつなぎ直していれば、`tracker` が 4、`conn` が 4 のいまの接続。`expect.toml` の比較には `conn` を使わない。
 - **順序**: M1-2 と M1-5 のあと。3 章の F-3 のあと（合成のケースが見本の形になっていること）。
 
 ### M1-7 案内の配信の決まりと文言
 
 - **範囲**: `crates/openut-core/src/{notice.rs,text.rs,display.rs}`、`crates/openut-core/src/engine.rs`（`Notice` を出力に足す。続いている案内〔欄〕を返す）。
-- **中身**: 7.1 の配信の決まり（push の表、同じ案内を繰り返さない決まり〔同じ台は `serial` で。#27〕、間隔とまとめ、追いつき、出す前に終わったものを捨てる）と、7.1 の文言の表（#27 で直した意味。使わない言葉）。トラッカーの呼び名（3.2。台帳から作る。末尾の長さ、読めないときの形。名前の表は受けない）。**表示の写し**（`openut_core::display`。7.4。#27）: `WatchHealth`、`Overall`、`UserState`、手引きの段、`Line`、`DisplayModel`、`DeviceRow` と、`view` の関数（利用者に見せる状態、全体、手引き、トラッカーの項目と並べ方、仕組みの側の不具合の 1 行）。`Line` から文言を作る関数（`text`）。
+- **中身**: 7.1 の配信の決まり（push の表、同じ案内を繰り返さない決まり〔同じ台は、2 つのエピソードの `serial` がどちらも分かれば `serial`、でなければ番号 N。#27〕、間隔とまとめ、追いつき、出す前に終わったものを捨てる）と、7.1 の文言の表（#27 で直した意味。使わない言葉）。`Notice` の `conn`、`text`（`NoticeText`。呼び名の穴を残した文言）、`target`（出したときの呼び名）と、穴に呼び名を入れて文字列にする関数（3.6。PR #37 のレビューのあとで足した）。トラッカーの呼び名（3.2。末尾は台帳から、VIVE Hub の番号はいまの接続の値から作る。末尾の長さ、読めないときの形。名前の表は受けない）。**表示の写し**（`openut_core::display`。7.4。#27）: `WatchHealth`、`Overall`（正常・待機中・異常の 3 つ）、`UserState`、手引きの段、`Line`、`DisplayModel`（`greyed`、`pick_folder` を含む）、`DeviceRow` と、`view` の関数（利用者に見せる状態と案内の当て方〔`serial`、なければ `conn`〕、全体の 8 つの順、止まったときの見せ方、手引き、トラッカーの項目と並べ方〔シリアル番号の順〕、欄の文言をこの写しの呼び名で作ること、仕組みの側の不具合の 1 行）。`Line` から文言を作る関数（`text`）。
 - **受け入れ条件とテスト**:
   1. 7.1 の push の表の、規則と段階の組ごとに、`push` の値が表のとおり。
   2. R2 の `Ended` から 5 分以内の同じトラッカーの `Raised` は push しない。5 分ちょうどのあとは push する。R4 は push から 5 分以内の 2 回目を push せず、欄の案内に回数が付く。R1 は 3 分おきの 3 つのエピソードを 3 回とも push する。
@@ -219,10 +221,22 @@ openut-hublog = { path = "crates/openut-hublog" }
   5. 出す前に `Resolved` になった push は出ない。
   5a. **再構築のあと**（7.1）: push 済みで続いていた R1 のエピソードが、`rebuild` と追いつきのあとも続いていれば、push し直さない（`Escalated` を push 済みなら、それも出さない）。続いていなければ欄から消し、「直った」を出さない。規則かトラッカーが違うエピソードは、ふつうに push される。
   5b. **同じ台**（7.1。#27）: R4 で、シリアル番号 S の台が番号 2 で切れて push され、3 分後に番号 4 でつなぎ直してまた切れる → 2 回目は push しない（同じ台）。シリアル番号の分からない台は、番号で数える（今までどおり）。
-  6. 文言が 7.1 の表のとおり（呼び名: 番号と末尾〔`トラッカー 1（…0001）`〕、末尾だけ、どちらもない〔「トラッカー」「ホストのトラッカー」〕。`r5.wait_s` を変えたときの「1 分」の部分）。R1 の番号の使い回し（M1-6 の 3）で、`{H}` が「ホストのトラッカー」になり、B の呼び名にならない。A のシリアル番号が台帳にあれば、`{H}` が A の呼び名になる。
+  6. 文言が 7.1 の表のとおり（呼び名: 番号と末尾〔`トラッカー 1（…0001）`〕、末尾だけ、どちらもない〔「トラッカー」「ホストのトラッカー」〕。`r5.wait_s` を変えたときの「1 分」の部分）。R1 の番号の使い回し（M1-6 の 3）で、`{H}` が「ホストのトラッカー」になり、B の呼び名にならない。A のシリアル番号が台帳にあれば、`{H}` が A の呼び名になる。 push の文言（`target` で穴を埋めたもの）は、あとで台帳や VIVE Hub の番号が変わっても変わらない。
   6a. **使わない言葉**（7.1。W-10）: 文言の関数が返すすべての文字列（7.1 の表の全部の組、手引きの G1〜G5、7.4 の仕組みの側の不具合の 1 行、トレイの 1 行）に、7.1 の「使わない言葉」が 1 つも入っていない（テストの中に言葉の一覧を持って、全部の文字列を調べる）。部位の言葉（腰、足、胸、手首など）も入っていない（W-12）。
-  7. **呼び名**（3.2。W-12）: 末尾が 4 文字。2 台の末尾 4 文字が同じなら、全台が 5 文字（重ならないまで延ばす）。4 文字より短いシリアル番号は全体。同じ台を番号 2 でつないだときと番号 4 でつないだときで、呼び名が同じ。ホストになっても、ホストでなくなっても、呼び名が同じ（どちらもないときの「ホストのトラッカー」を除く）。3 台と 5 台の台帳で、呼び名が台数で変わらない（末尾が重ならないかぎり）。
-  8. **表示の写し**（7.4。W-10〜W-12）: (a) 利用者に見せる状態の表の行ごと: R4 の案内が続いている未接続の台が異常（シリアル番号で）。R1 の案内する台が異常で、Wi-Fi 情報を待つクライアントは待機中。R1 で案内する台が決まらないとき、どの台も異常でなく、全体が異常。案内のない位置取り直し中・地図同期中・接続・Wi-Fi 待ちの台は待機中。追跡中は正常。未接続は `None`。R4 の `Resolved` の 30 秒のあいだは異常にしない。(b) 全体の表の行ごと（上から順に当てはまること）: 追いつきのあいだ → 確かめられない（`line` なし、`greyed`）。`Stalled` と R1 が同時 → 確かめられない。`NotFound` → 待機中で `line` が G1。`hub_process = Some(false)` → 待機中で G1（ログが `Running` でも）。`hub_process = Some(true)` で `HubState = Stopped` → 止まっていない。`None` で `Stopped` → G1。異常の `line` が、優先度の最も高い案内（R1 と R4 が同時なら R1）。全台が正常 → 正常で `line` が G5。台が 0 台 → 待機中で G3。(c) 手引き: G1〜G4 の済んだ条件。ドングルが `Unknown` で G2 が済み、`Disconnected` で済んでいない。いまの段より後の段は `done = false`（VIVE Hub が止まっているとき、G2〜G4 が済んでいない）。G4 の `progress` が（正常の台数、未接続でない台数）。(d) トラッカーの項目の、読めないときの値: 未接続の台の電池は `None`。仮の台は呼び名がなく、シリアル番号が `None`。版がなければ `None`。ホストの接続が終わった台に `host = false`。(e) **並べ方**: 番号の順。同じ番号の 2 台は、つながっている台が先。番号のない台は、そのあとにシリアル番号の順。仮の台は最後。ホストを替えても、つなぎ直して番号（スロット）が変わっても、並びと呼び名が同じ。3 台と 5 台。(f) 仕組みの側の不具合の 1 行が、具合ごとに 7.4 の表のとおり（`Unreadable` → OpenUT を起動し直す、`Stalled` → VIVE Hub を起動し直す、`FormatMismatch` → OpenUT を新しい版にする）。(g) `DisplayModel` と `DeviceRow` に、内部の状態（`Phase`）、PC の Wi-Fi 情報、スロットの番号（`TrackerKey`）、経過時間、集計の値の欄がない（レビューで見る）。
+  7. **呼び名**（3.2。W-12）: 末尾が 4 文字。2 台の末尾 4 文字が同じなら、全台が 5 文字（重ならないまで延ばす）。4 文字より短いシリアル番号は全体。同じ台をスロットの番号 2 でつないだときと 4 でつないだときで、VIVE Hub の番号が同じなら呼び名が同じ。**つながっていない台には VIVE Hub の番号が付かず、末尾だけ**（U-18。PR #37 のあとで直した）。つなぎ直して VIVE Hub の番号が 1 から 3 に変わると、番号の部分だけが変わる。ホストになっても、ホストでなくなっても、呼び名が同じ（どちらもないときの「ホストのトラッカー」を除く）。3 台と 5 台の台帳で、呼び名の末尾が台数で変わらない（末尾が重ならないかぎり）。
+  8. **表示の写し**（7.4。W-10〜W-12。PR #37 のレビュー〔1 回目〕の指摘で直した）:
+     - (a) **利用者に見せる状態**の表の行ごと: R4 の案内が続いている未接続の台が異常（シリアル番号で）。R1 の案内する台が異常で、Wi-Fi 情報を待つクライアントは待機中。R1 で案内する台が決まらないとき、どの台も異常でなく、全体が異常。案内のない位置取り直し中・地図同期中・接続・Wi-Fi 待ちの台は待機中。追跡中は正常。未接続は `None`。R4 の `Resolved` の 30 秒のあいだは異常にしない。
+     - (a2) **案内の当て方**（7.4。レビューの指摘の 4）: 途中から読み始め、番号 2 の仮の台（接続 c）がホスト（報告）で R1 が出る（`serial` なし、`conn` = c）→ 仮の台が異常。同じ接続で `SerialKnown(2, S)` → 仮の台が消え、S の枠が異常のまま。そのあと S が番号 2 で切れ、別の台 B が番号 2 でつながる（接続 d）→ R1 が続いていても B の枠は異常でなく、全体は異常。シリアル番号の分からない台の R4 は、どの枠も異常にしない。
+     - (b) **全体**の表の行ごと（上から順に当てはまること。`overall` に、正常・待機中・異常のほかの値がない）: 追いつきのあいだ → 待機中、`line` なし、`greyed`。`Stalled` と R1 が同時（`hub_process` が `Some(true)` か `None`）→ 待機中、`line` が `Health(Stalled)`、`greyed`（R1 の台の枠と欄は、値として残る）。`NotFound` → 待機中、G1、`pick_folder = true`。`hub_process = Some(true)` で `HubState = Stopped` → 止まっていない（台の値をそのまま見せる）。`None` で `Stopped` → G1 と、止まったときの見せ方。異常の `line` が、優先度の最も高い案内（R1 と R4 が同時なら R1）。全台が正常 → 正常で `line` が G5。台が 0 台 → 待機中で G3。
+     - (b2) **VIVE Hub が止まった直後**（レビューの指摘の 2）: ログは `Running` のままで、3 台がつながり（1 台がホスト、電池あり）、R1 と R4 の案内が続いていて、具合は `Ok`。ここで `hub_process = Some(false)` → 待機中、`line` が G1、`greyed = false`、`pick_folder = false`、止まったときの見せ方（(h)）。**`Stalled` が重なる**: 同じ状態で具合を `Stalled` にしても、結果が同じ（`Health` にならない）。追いつきのあいだの `Some(false)` でも G1。`Some(false)` と `NotFound` が重なると、G1 で `pick_folder = true`。
+     - (c) 手引き: G1〜G4 の済んだ条件。ドングルが `Unknown` で G2 が済み、`Disconnected` で済んでいない。いまの段より後の段は `done = false`（VIVE Hub が止まっているとき、G2〜G4 が済んでいない）。G4 の `progress` が（正常の台数、未接続でない台数）。
+     - (d) トラッカーの項目の、読めないときの値: 未接続の台の電池は `None`、呼び名に VIVE Hub の番号がない。仮の台は呼び名の末尾がなく、シリアル番号が `None`。版がなければ `None`。ホストの接続が終わった台に `host = false`。
+     - (e) **並べ方**: シリアル番号の順。仮の台は最後。7.4 の「並べ方」の例の表の 5 行を、それぞれ並びと呼び名のテストにする（切れた台の番号がなくなる、VIVE Hub の番号を振り直しても並びが同じ、ホストを替えても同じ、末尾の重なる台が加わると全台が 5 文字になり、加わった台がシリアル番号の位置に入る）。3 台と 5 台。
+     - (f) 仕組みの側の不具合の 1 行が、具合ごとに 7.4 の表のとおり（`Unreadable` → OpenUT を起動し直す、`Stalled` → VIVE Hub を起動し直す、`FormatMismatch` → OpenUT を新しい版にする）。
+     - (g) `DisplayModel` と `DeviceRow` に、内部の状態（`Phase`）、PC の Wi-Fi 情報、スロットの番号（`TrackerKey`）、接続の番号（`ConnId`）、経過時間、集計の値の欄がない（レビューで見る）。
+     - (h) **止まったときの見せ方**（7.4）: 台帳の台がすべて `connection = Disconnected`、電池なし、`state = None`、`host = false`、呼び名が末尾だけ。仮の台は並ばない。`faults` が空で、どの台も異常でない。ドングルが `Unknown`。手引きのいまの段が G1 で、G2〜G5 が `done = false`。
+     - (i) **`pick_folder`**（レビューの指摘の 3）: 具合が `NotFound` のときだけ `true`。具合が `Ok` で、`HubState = Stopped`（`hub_process = None`）のときと、`hub_process = Some(false)` のときは、どちらも G1 で `false`。
+     - (j) **欄の文言**（7.4。レビューの推奨）: (a2) の R1 で、`SerialKnown` の前の欄の行が「ホストのトラッカー」の文言、あとの行が S の枠と同じ呼び名の文言。S の台が枠に並んでいる状態で、末尾の重なる台が台帳に入ると、同じ写しで枠と欄の呼び名がどちらも 5 文字になる。当たる台がない案内（シリアル番号の分からない R4）の行は、`target` の呼び名。
 - **順序**: M1-6 のあと。
 
 ### M1-8 日ごとの集計
@@ -293,13 +307,13 @@ openut-hublog = { path = "crates/openut-hublog" }
 ### M1-11 トレイと状態の窓
 
 - **範囲**: `src/ui/`、`src/main.rs`（引数なしの常駐）、`Cargo.toml`（`tray-icon`、`eframe`、`rfd` を Windows だけの依存に）。
-- **中身**: 7.4 の、トレイ（4 つの見え方、指を置いたときの 1 行、メニュー）、状態の窓（1〜6。横長。D-34）、操作の流れ F1、F2、F4、F5（F3 はやめた。#27）。見た目は、UI/UX デザイン担当の M1 のデザイン（`docs/design/ui/`）が main にあれば従う。なければ、最小の見た目で作り、デザインが入ったら直す（後続の修正の一覧に PM が足す）。
+- **中身**: 7.4 の、トレイ（3 つの見え方〔灰色のときも待機中〕、指を置いたときの 1 行、メニュー）、状態の窓（1〜6。横長。D-34）、操作の流れ F1、F2、F4、F5（F3 はやめた。#27）。見た目は、UI/UX デザイン担当の M1 のデザイン（`docs/design/ui/`）が main にあれば従う。なければ、最小の見た目で作り、デザインが入ったら直す（後続の修正の一覧に PM が足す）。
   - 最初に試作で確かめる: `tray-icon` と `eframe` を同じイベントループで動かせるか、窓を閉じたときに隠すだけにできるか、日本語の書体を Windows の書体から読み込めるか。確かめられなければ、PR を出す前に `role:pm` で報告する（設計の見直しが要る）。
   - 画面に出す中身は、M1-7 の表示の写し（`openut_core::display::view` の `DisplayModel`）だけを使う。`Snapshot` の内部の値（`Phase`、PC の Wi-Fi 情報、スロットの番号）と集計を、画面のコードから直接読まない（W-10。#27）。写しから、トレイの見え方と 1 行を選ぶ部分は、入出力のない関数にする。
 - **受け入れ条件とテスト**:
   1. Windows の CI でビルドとテストが通る。
-  2. 写しからトレイを選ぶ部分の単体テスト: 全体の 4 つ（正常、待機中、異常、確かめられない）ごとの見え方と 1 行（「正常 3/3」の台数、異常のときの見出し、確かめられないときの 1 行）。
-  3. 「フォルダーを選ぶ」で選んだフォルダーが設定に保存され、見張り役の具合が `NotFound` から `Ok` になる（M1-9 の設定の関数を通すテスト）。
+  2. 写しからトレイを選ぶ部分の単体テスト: 全体の 3 つ（正常、待機中、異常）ごとの見え方と 1 行（「正常 3/3」の台数、異常のときの見出し）。灰色（`greyed`）のときも待機中の見え方で、1 行が `Health` の文言（台数なし）。VIVE Hub が止まっているとき（`Guide(G1)`）も台数なし。
+  3. 「フォルダーを選ぶ」のボタンは、写しの `pick_folder` が `true` のときだけ出る（VIVE Hub が止まっているだけのときは出ない。写しからボタンを決める部分の単体テスト）。選んだフォルダーが設定に保存され、見張り役の具合が `NotFound` から `Ok` になる（M1-9 の設定の関数を通すテスト）。
   4. 実機の確認の手順を PR の「次の担当へ」に書く。
 - **順序**: M1-9 のあと（M1-10 と並べてよい）。
 
@@ -318,7 +332,7 @@ openut-hublog = { path = "crates/openut-hublog" }
 ### M1-13 受け入れの基準のテスト（実物のログ）
 
 - **範囲**: `tests/replay/hub-<日付の範囲>/expect.toml`（名前は `m1-watcher.md` の 10.1）、`tests/replay.rs`（テスト関数を足す）。ログそのもの（サーバーとドライバーのファイル）は PM が入れる（L-2）。
-- **中身**: 10.4。しきい値を 6.1 の決め方で決め、R1 がちょうど 4 回、受け入れの基準の時刻に出ることを確かめる。決めた値と、ほかの規則の検出の数、`summary.gap_s` を変えたときの `unobserved_s`（8.1）、`power_offs` と R4 の数、予告の時刻 − 切断の時刻の分布（`r4.notice_after_s` を決めるため。6.2）、5.1 の「順序の合わない出来事」の数（U-5 の確かめ）、画面に見せる項目の確かめ（#27。U-18: シリアル番号ごとの `model name` の N が変わった回数と、`display index` + 1 と同じだった割合。U-19: `connected: 1` の状態の行で `percentage: 0` だった数と、接続からの時間。U-20: `Dongle is removed.` の前後の `dongle connected` の値）を PR の説明に書く（設計の表を直すかは PM が決める。数だけを書き、シリアル番号は書かない）。
+- **中身**: 10.4。しきい値を 6.1 の決め方で決め、R1 がちょうど 4 回、受け入れの基準の時刻に出ることを確かめる。決めた値と、ほかの規則の検出の数、`summary.gap_s` を変えたときの `unobserved_s`（8.1）、`power_offs` と R4 の数、予告の時刻 − 切断の時刻の分布（`r4.notice_after_s` を決めるため。6.2）、5.1 の「順序の合わない出来事」の数（U-5 の確かめ）、画面に見せる項目の確かめ（#27。U-18: `model name` の N が 1 つの接続のあいだに変わった数と、`display index` + 1 と同じだった割合〔台ごとに固定でないことは、PM が数えた。`m1-watcher.md` の 4.8〕。U-19: `connected: 1` の状態の行で `percentage: 0` だった数と、接続からの時間。U-20: `Dongle is removed.` の前後の `dongle connected` の値）を PR の説明に書く（設計の表を直すかは PM が決める。数だけを書き、シリアル番号は書かない）。
 - **受け入れ条件とテスト**: 再生テストで R1 がちょうど 4 回（2026-11-26 01:43、2026-11-27 22:53・22:56・22:59）。
 - **順序**: M1-6 のあと、かつ PM が匿名化した実物のログを `tests/replay/hub-<日付の範囲>/`（`m1-watcher.md` の 10.1 の名前。例: `hub-2026-11-23-27`）に入れたあと（PM が依頼を出す）。
 
