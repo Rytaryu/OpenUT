@@ -512,13 +512,14 @@ export async function run({
       log(`#${n}: released -> ${spec.role}${how}`);
     };
     // An earlier sweep already gave the role its label (since the Issue last
-    // went to the backlog) and was cut short. Only what is left is done: the
+    // went to the backlog: by the order of the events, as two of them can
+    // carry the same second) and was cut short. Only what is left is done: the
     // label is not given again, because a role that starts on its label may
     // have opened a PR and taken the label off by now. The wake is sent again
     // only while the role still holds the Issue.
     const events = await gh.list(`/issues/${n}/events`);
-    const queuedAt = events.filter((e) => e.event === 'labeled' && e.label?.name === 'backlog').at(-1)?.created_at;
-    if (givenByHandoff(events, spec.role, queuedAt)) {
+    const queued = events.findLastIndex((e) => e.event === 'labeled' && e.label?.name === 'backlog');
+    if (givenByHandoff(events.slice(queued + 1), spec.role)) {
       if (labels.includes(spec.role)) await wake(spec.role, n);
       await finish(' (taken up again)');
       continue;
