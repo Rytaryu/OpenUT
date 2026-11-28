@@ -1,6 +1,7 @@
-use std::ffi::OsStr;
-use std::fs::File;
+use std::ffi::{OsStr, OsString};
+use std::fs::{File, OpenOptions};
 use std::io::{self, BufReader, BufWriter, Write};
+use std::path::Path;
 use std::process::ExitCode;
 
 use openut_core::time::UtcOffset;
@@ -11,7 +12,13 @@ mod cli_windows;
 
 mod export_cli;
 
-const USAGE: &str = "使い方\n  openut-dongle decode RECORD\n  openut-dongle summary RECORD [--utc-offset +9]\n  openut-dongle export --anonymize RECORD OUT [--map TSV]";
+const USAGE: &str = concat!(
+    "使い方\n",
+    "  openut-dongle decode RECORD\n",
+    "  openut-dongle summary RECORD [--utc-offset +9] [--out FILE]\n",
+    "    ファイルに保存するときは --out FILE を使います（UTF-8、BOM なし、上書きなし）。\n",
+    "  openut-dongle export --anonymize RECORD OUT [--map TSV]",
+);
 
 fn main() -> ExitCode {
     let mut args = std::env::args_os().skip(1);
@@ -49,23 +56,32 @@ fn run() -> Result<u8, String> {
     let (command, path) = match (command.as_deref().and_then(OsStr::to_str), args.next()) {
         (Some("decode"), Some(path)) if args.next().is_none() => (Command::Decode, path),
         (Some("summary"), Some(path)) => {
-            let offset = match args.next().as_deref() {
-                None => None,
-                Some(option) if option == OsStr::new("--utc-offset") => {
-                    let offset = args
-                        .next()
-                        .as_deref()
-                        .and_then(OsStr::to_str)
-                        .and_then(summary::parse_utc_offset)
-                        .ok_or("時差には +9 や -05:30 のような値を指定してください")?;
-                    if args.next().is_some() {
-                        return Err(USAGE.into());
+            let mut offset = None;
+            let mut out = None;
+            while let Some(option) = args.next() {
+                match option.to_str() {
+                    Some("--utc-offset") if offset.is_none() => {
+                        offset = Some(
+                            args.next()
+                                .as_deref()
+                                .and_then(OsStr::to_str)
+                                .and_then(summary::parse_utc_offset)
+                                .ok_or("時差には +9 や -05:30 のような値を指定してください")?,
+                        );
                     }
-                    Some(offset)
+                    Some("--out") if out.is_none() => {
+                        out = Some(
+                            args.next()
+                                .filter(|path| {
+                                    !path.is_empty() && !path.as_encoded_bytes().starts_with(b"--")
+                                })
+                                .ok_or(USAGE)?,
+                        );
+                    }
+                    _ => return Err(USAGE.into()),
                 }
-                Some(_) => return Err(USAGE.into()),
-            };
-            (Command::Summary(offset), path)
+            }
+            (Command::Summary { offset, out }, path)
         }
         _ => return Err(USAGE.into()),
     };
@@ -73,6 +89,20 @@ fn run() -> Result<u8, String> {
     let file =
         File::open(path).map_err(|error| format!("記録を開けません（{:?}）", error.kind()))?;
     let input = BufReader::new(file);
+    if let Command::Summary {
+        offset,
+        out: Some(path),
+    } = command
+    {
+        // Validate and render the recording before creating the output file.
+        let mut report = Vec::new();
+        summary::write_summary(input, &mut report, offset).map_err(|error| error.to_string())?;
+        if let Err(error) = write_new_file(path, &report) {
+            eprintln!("{}", output_error(error));
+            return Ok(4);
+        }
+        return Ok(0);
+    }
     let mut output = BufWriter::new(io::stdout().lock());
     match command {
         Command::Decode => {
@@ -87,7 +117,7 @@ fn run() -> Result<u8, String> {
                 }
             }
         }
-        Command::Summary(offset) => {
+        Command::Summary { offset, .. } => {
             summary::write_summary(input, &mut output, offset)
                 .map_err(|error| error.to_string())?;
         }
@@ -98,7 +128,16 @@ fn run() -> Result<u8, String> {
 
 enum Command {
     Decode,
-    Summary(Option<UtcOffset>),
+    Summary {
+        offset: Option<UtcOffset>,
+        out: Option<OsString>,
+    },
+}
+
+fn write_new_file(path: impl AsRef<Path>, bytes: &[u8]) -> io::Result<()> {
+    let mut file = OpenOptions::new().write(true).create_new(true).open(path)?;
+    file.write_all(bytes)?;
+    file.flush()
 }
 
 fn output_error(error: io::Error) -> String {
