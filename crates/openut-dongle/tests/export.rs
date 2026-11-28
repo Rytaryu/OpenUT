@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use openut_dongle::anonymize::anonymize_recording;
 use openut_dongle::replay::Replay;
-use openut_dongle::tracker::Transition;
+use openut_dongle::{summary, tracker::Transition};
 use serde_json::{Value, json};
 
 const RECORD: &str = include_str!("../../../tests/fixtures/dongle/m2-3-cli.jsonl");
@@ -60,6 +60,81 @@ fn reconstructs_the_record_and_preserves_activity_across_omissions() {
         transitions(source.as_bytes()),
         transitions(export.as_bytes())
     );
+}
+
+#[test]
+fn fixed_width_aliases_follow_the_same_mapping_across_recordings() {
+    let mapping = concat!(
+        "kind\toriginal\treplacement\n",
+        "WIFI\tq\tWIFI-A\n",
+        "WIFI-SECRET\tl\tWIFI-SECRET-A\n",
+        "WIFI\tl\tWIFI-27\n",
+        "WIFI-SECRET\tq\tWIFI-SECRET-27\n",
+        "WIFI\tr\tWIFI-37\n",
+        "WIFI-SECRET\tz\tWIFI-SECRET-Z\n",
+    );
+    let notices = [
+        ("01", "5748712c6c2c35"),
+        ("02", "57486c2c712c35"),
+        ("03", "5748722c7a2c35"),
+    ];
+    let by_sequence = |order: &[usize]| {
+        let mut input = rows(RECORD);
+        input.truncate(1);
+        for &i in order {
+            let (sequence, payload) = notices[i];
+            input.push(json!({
+                "type":"in",
+                "mono_us": input.len(),
+                "wall_ms": 1764288010000_i64,
+                "hex": format!("28{sequence}00031486cafe21010107{payload}"),
+            }));
+        }
+        let export = anonymize_recording(Cursor::new(jsonl(&input)), Some(mapping))
+            .expect("verified export of a synthetic recording");
+        let shared = std::str::from_utf8(export.as_bytes()).expect("UTF-8 export");
+        let mut result = [String::new(), String::new(), String::new()];
+        for (row, &i) in rows(shared).into_iter().skip(1).zip(order) {
+            let raw = row["hex"].as_str().expect("retained text report");
+            assert_eq!(raw.len(), 38);
+            result[i] = raw[24..].to_owned();
+        }
+        result
+    };
+    let original_order = by_sequence(&[0, 1, 2]);
+    assert_eq!(original_order, by_sequence(&[2, 1, 0]));
+    assert_eq!(original_order[2], by_sequence(&[2])[2]);
+    assert_ne!(original_order[1][4..6], original_order[2][4..6]);
+}
+
+#[test]
+fn summary_uses_a_known_trackers_malformed_receipt_before_and_after_export() {
+    let mut input = rows(RECORD);
+    input.truncate(1);
+    input.extend([
+        json!({"type":"in","mono_us":100_000,"wall_ms":1764288000100_i64,
+               "hex":"180c00000000031486cafe21"}),
+        json!({"type":"in","mono_us":1_900_000,"wall_ms":1764288001900_i64,
+               "hex":"282200031486cafe210101024e00"}),
+        json!({"type":"tick","mono_us":4_100_000,"wall_ms":1764288004100_i64}),
+    ]);
+    let source = jsonl(&input);
+    let export = anonymize_recording(Cursor::new(&source), None).expect("verified export");
+    let summarize = |bytes: &[u8]| {
+        let mut output = Vec::new();
+        summary::write_summary(Cursor::new(bytes), &mut output, None)
+            .expect("summarize a synthetic recording");
+        String::from_utf8(output).expect("UTF-8 summary")
+    };
+    let raw = summarize(source.as_bytes());
+    let shared = summarize(export.as_bytes());
+    assert!(raw.contains("受信報告: 2 件、不明 0 件、不正 1 件、省略 0 件"));
+    assert!(shared.contains("受信報告: 1 件、不明 0 件、不正 0 件、省略 1 件"));
+    for output in [raw, shared] {
+        assert!(output.contains("ペアリングの知らせだけに現れた名前: 0"));
+        assert!(output.contains("見えた時間: 0.100 秒 (2025-11-28 00:00:00.100 UTC) 〜 1.900 秒"));
+        assert!(output.contains("受信中: 0.100 秒 (2025-11-28 00:00:00.100 UTC) 〜 3.900 秒"));
+    }
 }
 
 #[test]
