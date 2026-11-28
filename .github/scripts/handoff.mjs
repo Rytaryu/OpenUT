@@ -7,7 +7,10 @@
 //   2. Close the Issues that the merged PRs complete ("Closes #N").
 //   3. Release backlog Issues whose start conditions are now met.
 //
-// Each run is a full, idempotent sweep. Env: GITHUB_TOKEN, REPO (owner/name),
+// Each run is a full, idempotent sweep. A hand-off that was cut short (a label
+// was changed but the wake comment could not be posted) is taken up again by
+// the next sweep: the comment or label that marks a hand-off as done is always
+// written last. Env: GITHUB_TOKEN, REPO (owner/name),
 // WAKE_PR (the number of the wake PR), WAKE_TOKEN (optional; a token of the
 // owner, so that wake comments start the ChatGPT tasks), CI_WORKFLOW (default
 // ci.yml), DRY_RUN=true (print the writes instead of making them).
@@ -79,20 +82,59 @@ export const touchedPaths = (files) => files.flatMap((f) => [f.filename, f.previ
 /** PRs that count toward the cap on open implementation PRs. */
 export const isImplementationPr = (paths) => authorRole(paths) === 'role:impl';
 
+const HOLD = /^\s*マージの条件[:：](.*)$/m;
+const CLEAR = /^\s*マージの条件を確認[:：]\s*OK/m;
+const escapeRe = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/** Ids of the comments of this repository that a text links to. */
+export function linkedCommentIds(text, repo) {
+  const link = new RegExp(`github\\.com/${escapeRe(repo)}/(?:issues|pull)/\\d+#issuecomment-(\\d+)`, 'gi');
+  return [...(text ?? '').matchAll(link)].map((m) => Number(m[1]));
+}
+
 /**
- * A line starting with "マージの条件:" (PR body or any comment) holds the merge
- * until a later comment has a line starting with "マージの条件を確認: OK".
+ * A line starting with "マージの条件:" holds the merge until a later comment has
+ * a line starting with "マージの条件を確認: OK".
+ *
+ * This repository is public, so the text alone decides nothing:
+ *  - Only the PR body and comments written on the owner's account can set or
+ *    lift a hold. Anyone else's comment changes nothing.
+ *  - A hold whose line names the owner ("マージの条件: オーナーの了承") is lifted
+ *    only by the owner's own word: a confirmation the owner wrote without an
+ *    app, or a confirmation by a role that links to a comment the owner wrote
+ *    without an app after the hold was set. `ownerWords` maps the ids of such
+ *    comments (verified by the caller) to their creation time. Every role and
+ *    this hand-off write through an app, so they cannot stand in for the owner.
  */
-export function isHeld(prBody, comments) {
-  const hold = /^\s*マージの条件[:：]/m;
-  const clear = /^\s*マージの条件を確認[:：]\s*OK/m;
-  let held = hold.test(prBody ?? '');
+export function isHeld(pr, comments, { owner, repo, ownerWords = new Map() }) {
+  const holdOf = (text, at) => {
+    const m = (text ?? '').replace(/\r/g, '').match(HOLD);
+    return m ? { needsOwner: /オーナー/.test(m[1]), at } : null;
+  };
+  let hold = holdOf(pr.body, pr.created_at);
   for (const c of comments) {
+    if (c.user?.login !== owner) continue;
     const body = (c.body ?? '').replace(/\r/g, '');
-    if (clear.test(body)) held = false;
-    if (hold.test(body)) held = true;
+    if (hold && CLEAR.test(body)) {
+      const after = (at) => Date.parse(at) >= Date.parse(hold.at);
+      const byOwner =
+        appOf(c) === null || linkedCommentIds(body, repo).some((id) => ownerWords.has(id) && after(ownerWords.get(id)));
+      if (!hold.needsOwner || byOwner) hold = null;
+    }
+    hold = holdOf(body, c.created_at) ?? hold;
   }
-  return held;
+  return hold !== null;
+}
+
+/** Ids of the comments that the confirmations on a PR point to (to be verified as the owner's own). */
+export function confirmationLinks(comments, { owner, repo }) {
+  return [
+    ...new Set(
+      comments
+        .filter((c) => c.user?.login === owner && CLEAR.test((c.body ?? '').replace(/\r/g, '')))
+        .flatMap((c) => linkedCommentIds(c.body, repo)),
+    ),
+  ];
 }
 
 /**
@@ -218,26 +260,56 @@ export async function run({
     if (role !== 'role:pm') await gh.wake(wakePr, `WAKE ${role} #${n}`);
   };
 
-  // Do not pile merges on a red main. One Issue per failed run, whatever happens to its labels.
+  // Written by this hand-off (the job's token) or on the owner's account.
+  const trusted = (user) => user?.login === owner || user?.login === 'github-actions[bot]';
+
+  // Do not pile merges on a red main. One Issue per failed run, whatever happens
+  // to its labels; it is closed here once CI on main passes again.
   const lastMainRun = (
     await gh.must('GET', `/actions/workflows/${ciWorkflow}/runs?branch=${main}&status=completed&per_page=20`)
   ).workflow_runs.find((r) => r.event !== 'pull_request' && r.conclusion !== 'cancelled' && r.conclusion !== 'skipped');
   const mainRed = ['failure', 'timed_out', 'startup_failure'].includes(lastMainRun?.conclusion);
+  const redMainIssues = (await gh.must('GET', '/issues?state=all&sort=created&direction=desc&per_page=100')).filter(
+    (i) => !i.pull_request && trusted(i.user) && (i.body ?? '').includes('<!-- handoff:red-main '),
+  );
+  const openRedMain = redMainIssues.filter((i) => i.state === 'open');
   if (mainRed) {
     log(`main CI is failing (${lastMainRun.html_url}): no merges in this run`);
-    const recent = await gh.must('GET', '/issues?state=all&sort=created&direction=desc&per_page=100');
-    const known = recent.some(
-      (i) =>
-        !i.pull_request &&
-        ((i.state === 'open' && i.title.startsWith(RED_MAIN_TITLE)) || (i.body ?? '').includes(marker('red-main', lastMainRun.id))),
-    );
-    if (!known) {
-      const issue = await gh.must('POST', '/issues', {
+    // An open Issue covers every failed run until main is green again. An Issue
+    // for this very run that someone closed is not raised a second time.
+    let raised = openRedMain[0] ?? null;
+    let fresh = false;
+    if (!raised && !redMainIssues.some((i) => i.body.includes(marker('red-main', lastMainRun.id)))) {
+      raised = await gh.must('POST', '/issues', {
         title: `${RED_MAIN_TITLE}（マージを止めています）`,
         labels: ['role:impl'],
-        body: `${main} の CI が失敗しています: ${lastMainRun.html_url}\n\n直るまで、仕組みは PR をマージしません。実装担当は、原因を調べて直す PR を出してください（その PR は、レビューの承認のあと、PM が手でマージします）。${main} の CI が通ったら、この Issue を閉じます。\n\n${SIGN}\n${marker('red-main', lastMainRun.id)}`,
+        body: `${main} の CI が失敗しています: ${lastMainRun.html_url}\n\n直るまで、仕組みは PR をマージしません。実装担当は、原因を調べて直す PR を出してください（その PR は、レビューの承認のあと、PM が手でマージします）。${main} の CI が通ったら、仕組みがこの Issue を閉じます。\n\n${SIGN}\n${marker('red-main', lastMainRun.id)}`,
       });
-      await wake('role:impl', issue.number);
+      fresh = true;
+    }
+    // The wake is sent until the comment that records it exists, so a post
+    // that failed is made good by the next sweep.
+    if (raised) {
+      const woken =
+        !fresh &&
+        (await gh.list(`/issues/${raised.number}/comments`)).some(
+          (c) => trusted(c.user) && (c.body ?? '').includes(marker('woke', raised.number)),
+        );
+      if (!woken) {
+        await wake('role:impl', raised.number);
+        await gh.must('POST', `/issues/${raised.number}/comments`, {
+          body: `実装担当に、起動の合図を送りました。\n\n${SIGN}\n${marker('woke', raised.number)}`,
+        });
+      }
+    }
+  } else if (lastMainRun?.conclusion === 'success') {
+    for (const i of openRedMain) {
+      await gh.must('POST', `/issues/${i.number}/comments`, {
+        body: `${main} の CI が通ったので、閉じました: ${lastMainRun.html_url}\n\n仕組みは、PR のマージを再開します。\n\n${SIGN}`,
+      });
+      await setRole(gh, i.number, i.labels.map((l) => l.name), null);
+      await gh.must('PATCH', `/issues/${i.number}`, { state: 'closed', state_reason: 'completed' });
+      log(`#${i.number}: closed (CI on ${main} passes again)`);
     }
   }
 
@@ -286,40 +358,51 @@ export async function run({
       const sha = pr.head.sha;
       const labels = pr.labels.map((l) => l.name);
       const comments = await gh.list(`/issues/${n}/comments`);
-      const noted = (kind) => comments.some((c) => (c.body ?? '').includes(marker(kind, sha)));
+      // Markers count only in comments of this hand-off (or the owner's account): the repository is public.
+      const noted = (kind) => comments.some((c) => trusted(c.user) && (c.body ?? '').includes(marker(kind, sha)));
 
       // This repository is public. A PR from another repository is never merged here.
       if (pr.head.repo?.full_name !== repo) { log(`#${n}: from another repository: left for the owner`); continue; }
       if (!isApprovalOf(latestReview(comments, owner), sha)) { log(`#${n}: no approval of ${sha.slice(0, 7)}`); continue; }
-      if (isHeld(pr.body, comments)) { log(`#${n}: held by マージの条件`); continue; }
+      // A confirmation of a hold may point to the owner's own word (a comment
+      // written without an app), on this PR or on the needs-human Issue.
+      const ownerWords = new Map();
+      for (const id of confirmationLinks(comments, { owner, repo })) {
+        const c = comments.find((x) => x.id === id) ?? (await gh.get(`/issues/comments/${id}`)).data;
+        if (c && c.user?.login === owner && appOf(c) === null) ownerWords.set(id, c.created_at);
+      }
+      if (isHeld(pr, comments, { owner, repo, ownerWords })) { log(`#${n}: held by マージの条件`); continue; }
       if (pr.base.ref !== main) { log(`#${n}: base is ${pr.base.ref} (stacked): wait`); continue; }
-      if (noted('merge-failed')) { log(`#${n}: merge already failed for this commit`); continue; }
-      if (noted('ci-failed')) { log(`#${n}: CI already failed for this commit`); continue; }
       if (pr.mergeable === null) { log(`#${n}: mergeability unknown: next run`); continue; }
       if (pr.mergeable === false) {
         if (noted('conflict')) continue;
+        // Label, wake, then the comment with the marker: a sweep cut short
+        // before the marker is written does all of it again.
         const role = authorRole(paths);
         await setRole(gh, n, labels, role);
+        await wake(role, n);
         await gh.must('POST', `/issues/${n}/comments`, {
           body: `承認済みですが、${main} と競合していてマージできません。\`${role}\` の担当は、${main} を取り込んでください（そのあと、もう一度レビューが要ります）。\n\n${SIGN}\n${marker('conflict', sha)}`,
         });
-        await wake(role, n);
         log(`#${n}: conflict -> ${role}`);
         continue;
       }
 
-      // CI must have passed on the approved commit.
+      // CI must have passed on the approved commit. It is looked at on every
+      // sweep: a run that failed and passed when it was run again lets the
+      // merge go on. The marker only keeps the notice from being repeated.
       const ci = ciState(
         (await gh.list(`/actions/workflows/${ciWorkflow}/runs?head_sha=${sha}`)).filter((r) => r.event !== 'schedule'),
       );
       if (ci.state === 'pending') { log(`#${n}: approved; CI has not finished on ${sha.slice(0, 7)}: next run`); continue; }
       if (ci.state === 'failure') {
+        if (noted('ci-failed')) { log(`#${n}: CI failed on ${sha.slice(0, 7)} (already reported)`); continue; }
         const role = authorRole(paths);
         await setRole(gh, n, labels, role);
-        await gh.must('POST', `/issues/${n}/comments`, {
-          body: `承認済みですが、最新のコミット \`${sha.slice(0, 7)}\` の CI が通っていません: ${ci.run.html_url}\n\n\`${role}\` の担当は、直してください（直したあと、もう一度レビューが要ります）。手元では \`bash .github/scripts/verify.sh\` で同じ検査ができます。\n\n${SIGN}\n${marker('ci-failed', sha)}`,
-        });
         await wake(role, n);
+        await gh.must('POST', `/issues/${n}/comments`, {
+          body: `承認済みですが、最新のコミット \`${sha.slice(0, 7)}\` の CI が通っていません: ${ci.run.html_url}\n\n\`${role}\` の担当は、直してください（直したあと、もう一度レビューが要ります。同じコミットで CI をやり直して通った場合は、そのままマージされます）。手元では \`bash .github/scripts/verify.sh\` で同じ検査ができます。\n\n${SIGN}\n${marker('ci-failed', sha)}`,
+        });
         log(`#${n}: CI failed -> ${role}`);
         continue;
       }
@@ -338,6 +421,8 @@ export async function run({
       }
       if (transient(result)) { log(`#${n}: ${result.message.slice(0, 120)}: next run`); continue; }
       if (result instanceof Error) {
+        // Tried again on every sweep (the reason may be gone); reported once.
+        if (noted('merge-failed')) { log(`#${n}: merge failed again for ${sha.slice(0, 7)} (already reported)`); continue; }
         await setRole(gh, n, labels, 'role:pm');
         await gh.must('POST', `/issues/${n}/comments`, {
           body: `承認済みで CI も通りましたが、仕組みからはマージできませんでした（理由は下のとおり。ワークフローのファイルを変える PR は、仕組みの権限ではマージできません）。PM がマージしてください。\n\n\`${result.message.slice(0, 300)}\`\n\n${SIGN}\n${marker('merge-failed', sha)}`,
@@ -412,8 +497,12 @@ export async function run({
     if (issue.user?.login !== owner) { log(`#${n}: backlog Issue by ${issue.user?.login}: left for the PM`); continue; }
     const spec = parseBacklog(issue.body);
     if (!spec) { log(`#${n}: backlog header is not machine-checkable: left for the PM`); continue; }
-    if ((released[spec.role] ?? 0) >= MAX_RELEASES_PER_ROLE) continue;
-    if (spec.role === 'role:impl' && openImplPrs >= MAX_OPEN_IMPL_PRS) { log(`#${n}: ${openImplPrs} implementation PRs open: wait`); continue; }
+    const labels = issue.labels.map((l) => l.name);
+    // Both labels at once: an earlier sweep gave the role its label and was cut
+    // short before the wake went out. It is finished now, whatever the caps say.
+    const resumed = labels.includes(spec.role);
+    if (!resumed && (released[spec.role] ?? 0) >= MAX_RELEASES_PER_ROLE) continue;
+    if (!resumed && spec.role === 'role:impl' && openImplPrs >= MAX_OPEN_IMPL_PRS) { log(`#${n}: ${openImplPrs} implementation PRs open: wait`); continue; }
     let ready = true;
     for (const c of spec.conditions) {
       if (c.kind === 'merged') {
@@ -431,13 +520,16 @@ export async function run({
       if (!ready) break;
     }
     if (!ready) continue;
-    await setRole(gh, n, issue.labels.map((l) => l.name), spec.role);
+    // The role's label first, then the wake, and `backlog` comes off last: until
+    // then the Issue is still found here, so a wake that failed is sent again.
+    if (!resumed) await gh.must('POST', `/issues/${n}/labels`, { labels: [spec.role] });
+    await wake(spec.role, n);
+    await setRole(gh, n, [...labels, spec.role], spec.role);
     await gh.must('POST', `/issues/${n}/comments`, {
       body: `着手の条件がそろったので、\`${spec.role}\` の担当に渡しました。\n\n${SIGN}`,
     });
-    await wake(spec.role, n);
     released[spec.role] = (released[spec.role] ?? 0) + 1;
-    log(`#${n}: released -> ${spec.role}`);
+    log(`#${n}: released -> ${spec.role}${resumed ? ' (taken up again)' : ''}`);
   }
 }
 
