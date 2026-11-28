@@ -213,6 +213,10 @@ export function createClient({ repo, token, wakeToken, fetchImpl = fetch }) {
     get: (path) => call('GET', path),
     must,
     list,
+    // The wake PR is kept locked, so that nobody outside can start the roles
+    // (the repository is public), and it is never opened from here. The job's
+    // own account cannot comment on a locked conversation; the owner's token
+    // (WAKE_TOKEN) can.
     wake: (wakePr, line) => must('POST', `/issues/${wakePr}/comments`, { body: line }, wakeToken || token),
   };
 }
@@ -252,8 +256,23 @@ export async function run({
   const main = (await gh.must('GET', '')).default_branch;
 
   // The PM has no event trigger (one run a day), so no wake comment for role:pm.
+  // A wake that cannot be posted (the wake PR is locked and there is no
+  // WAKE_TOKEN, or the API failed) does not stop the sweep. The hand-off it
+  // belongs to is left unfinished, so the next sweep takes it up again, and
+  // the run ends as failed after telling the owner and the PM (see the end).
+  const blocked = [];
   const wake = async (role, n) => {
-    if (role !== 'role:pm') await gh.wake(wakePr, `WAKE ${role} #${n}`);
+    if (role === 'role:pm') return true;
+    // Refused once in this run: not tried again (a PR is looked at on every pass).
+    if (blocked.some((w) => w.role === role && w.n === n)) return false;
+    try {
+      await gh.wake(wakePr, `WAKE ${role} #${n}`);
+      return true;
+    } catch (e) {
+      blocked.push({ role, n, message: e.message });
+      log(`#${n}: the wake for ${role} could not be posted: ${e.message.slice(0, 160)}`);
+      return false;
+    }
   };
 
   // Written by this hand-off (the job's token) or on the owner's account.
@@ -301,8 +320,7 @@ export async function run({
         (await gh.list(`/issues/${raised.number}/comments`)).some(
           (c) => trusted(c.user) && (c.body ?? '').includes(marker('woke', raised.number)),
         );
-      if (!woken) {
-        await wake('role:impl', raised.number);
+      if (!woken && (await wake('role:impl', raised.number))) {
         await gh.must('POST', `/issues/${raised.number}/comments`, {
           body: `実装担当に、起動の合図を送りました。\n\n${SIGN}\n${marker('woke', raised.number)}`,
         });
@@ -374,7 +392,7 @@ export async function run({
         const since = latestReview(comments, owner)?.created_at;
         const given = givenByHandoff(await gh.list(`/issues/${n}/events`), role, since);
         if (!given) await setRole(gh, n, labels, role);
-        if (!given || labels.includes(role)) await wake(role, n);
+        if ((!given || labels.includes(role)) && !(await wake(role, n))) return;
         await gh.must('POST', `/issues/${n}/comments`, { body });
       };
 
@@ -520,7 +538,7 @@ export async function run({
     const events = await gh.list(`/issues/${n}/events`);
     const queued = events.findLastIndex((e) => e.event === 'labeled' && e.label?.name === 'backlog');
     if (givenByHandoff(events.slice(queued + 1), spec.role)) {
-      if (labels.includes(spec.role)) await wake(spec.role, n);
+      if (labels.includes(spec.role) && !(await wake(spec.role, n))) continue;
       await finish(' (taken up again)');
       continue;
     }
@@ -548,9 +566,43 @@ export async function run({
     // again (see above).
     for (const l of labels.filter((x) => x.startsWith('role:') && x !== spec.role)) await dropLabel(n, l);
     if (!labels.includes(spec.role)) await gh.must('POST', `/issues/${n}/labels`, { labels: [spec.role] });
-    await wake(spec.role, n);
     released[spec.role] = (released[spec.role] ?? 0) + 1;
+    if (!(await wake(spec.role, n))) continue;
     await finish('');
+  }
+
+  // Wakes that could not be posted: one open Issue tells the owner and the PM
+  // what is waiting (new lines are added to it as comments, so the list they
+  // work from stays complete), and the run fails so that it shows in the list
+  // of runs. A locked wake PR needs the owner's token; anything else (an
+  // error of the API) is tried again by the next sweep without any setting.
+  if (blocked.length > 0) {
+    const line = (w) => `WAKE ${w.role} #${w.n}`;
+    const byLock = blocked.filter((w) => /\b403\b.*locked/i.test(w.message));
+    const cause =
+      byLock.length > 0
+        ? `起動用の PR は、外から担当を起こされないようにロックしてあります。仕組み（GitHub Actions）のアカウントは、ロックした会話に書けません。**オーナーのトークンを \`WAKE_TOKEN\` という名前で Actions の Secrets に入れると、ロックしたまま書けるようになります**（fine-grained のトークン。このレポジトリだけ、Issues と Pull requests の書き込みだけ。値は、Issue にもチャットにも書かないでください）。仕組みが PR のロックを外すことはありません。`
+        : `ロックが理由ではありません（上のエラー）。一時的な失敗なら、次の回に仕組みがやり直します。設定を変える必要はありません。何回も続くときは、PM が Actions の記録を見てください。`;
+    const list = (ws) => ws.map((w) => `- \`${line(w)}\``).join('\n');
+    const open = (await gh.list('/issues?state=open&labels=needs-human')).find(
+      (i) => trusted(i.user) && (i.body ?? '').includes('<!-- handoff:wake-blocked '),
+    );
+    if (!open) {
+      await gh.must('POST', '/issues', {
+        title: '受け渡しの仕組みが、起動の合図を書けません',
+        labels: ['needs-human'],
+        body: `返事の行き先: role:pm\n\n受け渡しの仕組みが、起動用の PR（#${wakePr}）に合図を書けませんでした。\n\n\`${blocked[0].message.slice(0, 300)}\`\n\n${cause}\n\n書けなかった合図:\n\n${list(blocked)}\n\nラベルの付け替えは済んでいます。合図が書けるようになった次の回に、仕組みが続きを行います。それまでは、PM か担当が、起動用の PR に上の行を書いてください。合図が増えたときは、この Issue のコメントに足します。合図が書けるようになったら、PM がこの Issue を閉じます。\n\n${SIGN}\n${marker('wake-blocked', wakePr)}`,
+      });
+    } else {
+      const known = [open.body ?? '', ...(await gh.list(`/issues/${open.number}/comments`)).filter((c) => trusted(c.user)).map((c) => c.body ?? '')].join('\n');
+      const fresh = blocked.filter((w) => !known.includes(`\`${line(w)}\``));
+      if (fresh.length > 0) {
+        await gh.must('POST', `/issues/${open.number}/comments`, {
+          body: `書けなかった合図が増えました:\n\n${list(fresh)}\n\n\`${fresh[0].message.slice(0, 300)}\`\n\n${cause}\n\n${SIGN}`,
+        });
+      }
+    }
+    throw new Error(`${blocked.length} wake comment(s) could not be posted: ${blocked[0].message.slice(0, 200)}`);
   }
 }
 
