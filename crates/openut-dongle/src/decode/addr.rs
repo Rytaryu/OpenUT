@@ -10,14 +10,20 @@ const ADDRESSES: [(u8, Range<usize>); 2] = [(TRACKER_DATA, 3..9), (PAIRING, 6..1
 #[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
 pub(super) struct TrackerId([u8; 5]);
 
-pub(super) fn report_address(report: &[u8]) -> Option<&[u8; 6]> {
-    let report_type = *report.first()?;
+pub(crate) fn report_address_range(report_type: u8) -> Option<Range<usize>> {
     let (_, positions) = ADDRESSES.iter().find(|(kind, _)| *kind == report_type)?;
-    report.get(positions.clone())?.try_into().ok()
+    Some(positions.clone())
+}
+
+pub(crate) fn report_address(report: &[u8]) -> Option<&[u8; 6]> {
+    report
+        .get(report_address_range(*report.first()?)?)?
+        .try_into()
+        .ok()
 }
 
 /// The export encodes its assigned label in the final byte of a synthetic address.
-pub(super) fn anonymized_label(address: &[u8; 6]) -> Option<TrackerLabel> {
+pub(crate) fn anonymized_label(address: &[u8; 6]) -> Option<TrackerLabel> {
     let &[0, 0xa0..=0xaf, 0, 0, 0, index @ 1..=26] = address else {
         return None;
     };

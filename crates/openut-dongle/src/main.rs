@@ -6,10 +6,15 @@ use std::process::ExitCode;
 use openut_core::time::UtcOffset;
 use openut_dongle::{replay::Replay, summary, view};
 
-const USAGE: &str =
-    "使い方\n  openut-dongle decode RECORD\n  openut-dongle summary RECORD [--utc-offset +9]";
+mod export_cli;
+
+const USAGE: &str = "使い方\n  openut-dongle decode RECORD\n  openut-dongle summary RECORD [--utc-offset +9]\n  openut-dongle export --anonymize RECORD OUT [--map TSV]";
 
 fn main() -> ExitCode {
+    let mut args = std::env::args_os().skip(1);
+    if args.next().as_deref() == Some(OsStr::new("export")) {
+        return export_cli::run(args);
+    }
     if let Err(error) = run() {
         eprintln!("{error}");
         ExitCode::FAILURE

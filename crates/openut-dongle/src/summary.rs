@@ -148,7 +148,7 @@ impl Summary {
                 self.tracker_data(*tracker, now);
             }
             _ => {
-                if let Some(tracker) = step.omitted_tracker {
+                if let Some(tracker) = step.omitted_tracker.or(step.malformed_tracker) {
                     self.tracker_data(tracker, now);
                 }
             }
